@@ -74,8 +74,11 @@ class Middleware(ABC, Generic[Contenido]):
     Su construcción concreta configura identidad, topología y serialización; el
     negocio no conoce direcciones, réplicas, colas ni conexiones del broker.
 
-    Las operaciones se invocan secuencialmente desde el hilo propietario. No se
-    permite recepción reentrante. El procesador puede publicar y finalizar salidas.
+    Cada proceso crea y usa su propia instancia; las conexiones no se comparten
+    ni se heredan entre procesos. Las operaciones son secuenciales, sin requerir
+    threads ni permitir recepción reentrante. El escalado utiliza procesos
+    independientes, en una o varias computadoras. El procesador puede publicar
+    y finalizar salidas.
     Las implementaciones traducen errores de transporte a ErrorMiddleware y
     conservan su causa mediante ``raise ... from ...``.
     """
@@ -138,6 +141,6 @@ class Middleware(ABC, Generic[Contenido]):
         cierre, publicar, recibir y finalizar_entrada elevan MiddlewareCerrado.
         Si un recurso falla, intenta liberar los restantes y eleva ErrorCierre.
         No se invoca concurrentemente con otras operaciones; la interrupción de
-        una espera y su integración con SIGTERM se resuelven en otra parte, sin llamar 
+        una espera y su integración con SIGTERM se resuelven en otra parte, sin llamar
         directamente a Pika desde un manejador de señales.
         """

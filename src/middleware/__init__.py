@@ -1,5 +1,15 @@
 """API pública del middleware de comunicación por grupos."""
 
+from .cargador_configuracion import cargar_configuracion
+from .configuracion import (
+    ConfiguracionBroker,
+    ConfiguracionComunicacion,
+    ConfiguracionGrupo,
+    ErrorConfiguracion,
+    IdentidadProceso,
+    LimitesComunicacion,
+    Ruta,
+)
 from .interfaz import (
     Datos,
     Entrada,
@@ -13,17 +23,3 @@ from .interfaz import (
     Middleware,
     MiddlewareCerrado,
 )
-
-__all__ = [
-    "Datos",
-    "Entrada",
-    "EntradaFinalizada",
-    "ErrorCierre",
-    "ErrorConexion",
-    "ErrorMensaje",
-    "ErrorMiddleware",
-    "Evento",
-    "FinEntrada",
-    "Middleware",
-    "MiddlewareCerrado",
-]
