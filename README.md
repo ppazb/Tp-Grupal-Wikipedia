@@ -64,3 +64,44 @@ Los bytes se representan mediante un objeto exclusivo
 en todos los diccionarios del protocolo. El límite configurado incluye el sobre,
 la codificación UTF-8 y la expansión base64; se verifica antes de publicar y antes
 de interpretar cuerpos recibidos. Se codifica un registro o lote acotado por vez.
+
+El ciclo de vida del transporte está en `src/middleware/broker_connection.py`.
+Requiere Pika, cuya versión está fijada en `requirements.txt`. Para instalar las
+dependencias en un entorno virtual:
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+```
+
+`ConexionBroker` es un componente interno del middleware: administra una conexión
+y un canal por instancia. El negocio seguirá usando la interfaz `Middleware`.
+Su constructor guarda la configuración; `abrir()` crea los recursos y `cerrar()`
+los libera. También admite `with`, que cierra los recursos al salir del bloque:
+
+```python
+from src.middleware.broker_connection import ConexionBroker
+
+with ConexionBroker(configuracion.broker) as conexion:
+    canal = conexion.canal  # Para los futuros manejadores de colas y exchanges.
+```
+
+La apertura usa host, puerto, credenciales, virtual host, latido y tiempos del INI.
+`timeout_conexion_segundos` se aplica tanto a la conexión TCP como al establecimiento
+del protocolo; `timeout_bloqueo_segundos` se aplica al bloqueo informado por el
+broker. Se hace un solo intento, sin reconexión automática. El broker, el usuario
+y el virtual host deben existir; esta clase no los crea.
+
+Si falla la apertura del canal, se intenta cerrar la conexión ya adquirida y se
+informa `ErrorConexion` conservando su causa. El cierre intenta liberar canal y
+conexión aunque uno falle. Repetir un cierre exitoso no tiene efecto; si falla,
+se informa `ErrorCierre` y se conservan los recursos pendientes para volver a
+intentar cerrarlos. Si ya había otro error en curso, se conserva ese error y se
+registran los fallos de limpieza. Una instancia cerrada o con apertura fallida
+no se puede volver a abrir.
+
+La instancia debe crearse dentro del proceso que la utiliza; se rechaza su uso
+desde un proceso hijo que la haya heredado. Este componente todavía no declara
+colas, configura confirmaciones, publica mensajes ni integra SIGTERM. Se verificó
+con conexiones simuladas y con un rechazo real de conexión local usando Pika;
+queda pendiente comprobar la apertura exitosa contra un broker RabbitMQ.
