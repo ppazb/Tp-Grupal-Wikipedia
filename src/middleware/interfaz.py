@@ -14,6 +14,10 @@ class ErrorConexion(ErrorMiddleware):
     """No se pudo establecer o mantener la conexión."""
 
 
+class ErrorTopologia(ErrorMiddleware):
+    """No se pudieron declarar los recursos de comunicación y sus enlaces."""
+
+
 class ErrorMensaje(ErrorMiddleware):
     """No se pudo codificar, publicar o interpretar un mensaje."""
 

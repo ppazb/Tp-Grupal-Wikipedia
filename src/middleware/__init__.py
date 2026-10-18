@@ -19,6 +19,7 @@ from .interfaz import (
     ErrorConexion,
     ErrorMensaje,
     ErrorMiddleware,
+    ErrorTopologia,
     Evento,
     FinEntrada,
     Middleware,
