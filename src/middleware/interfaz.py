@@ -1,11 +1,9 @@
 """Contrato de comunicación por grupos, independiente del transporte."""
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
-from typing import Callable, Generic, Optional, TypeVar, Union
+from typing import Callable, Generic, Optional
 
-
-Contenido = TypeVar("Contenido")
+from ..common.protocol.dto import Contenido, Datos, Entrada, Evento, FinEntrada
 
 
 class ErrorMiddleware(Exception):
@@ -30,41 +28,6 @@ class MiddlewareCerrado(ErrorMiddleware):
 
 class EntradaFinalizada(ErrorMiddleware):
     """Se intentó publicar datos después de finalizar esa entrada."""
-
-
-@dataclass(frozen=True)
-class Entrada:
-    """Flujo lógico de una ejecución, independiente de sus productores físicos.
-
-    ``id_ejecucion`` identifica una conexión de cliente de forma única, incluso
-    cuando el mismo cliente vuelve a conectarse. ``nombre`` distingue dependencias
-    dentro de un grupo.
-    """
-
-    id_ejecucion: str
-    nombre: str
-
-
-@dataclass(frozen=True)
-class Datos(Generic[Contenido]):
-    """Registro, tupla, DTO o lote acotado ya decodificado para el negocio."""
-
-    entrada: Entrada
-    contenido: Contenido
-
-
-@dataclass(frozen=True)
-class FinEntrada:
-    """Todos los aportes de una entrada para esta instancia fueron procesados.
-
-    Es un cierre lógico consolidado, no un EOF individual de un productor ni
-    una indicación de que deba terminar el proceso.
-    """
-
-    entrada: Entrada
-
-
-Evento = Union[Datos[Contenido], FinEntrada]
 
 
 class Middleware(ABC, Generic[Contenido]):

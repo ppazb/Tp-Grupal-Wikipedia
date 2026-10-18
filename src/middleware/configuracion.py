@@ -3,6 +3,7 @@
 from dataclasses import dataclass, field
 from typing import Tuple
 
+from ..common.protocol.dto import IdentidadProceso
 from .interfaz import ErrorMiddleware
 
 
@@ -22,14 +23,6 @@ class ConfiguracionBroker:
     latido_segundos: int
     timeout_conexion_segundos: int
     timeout_bloqueo_segundos: int
-
-
-@dataclass(frozen=True)
-class IdentidadProceso:
-    """Réplica local; instancia es un índice desde cero dentro del grupo."""
-
-    grupo: str
-    instancia: int
 
 
 @dataclass(frozen=True)

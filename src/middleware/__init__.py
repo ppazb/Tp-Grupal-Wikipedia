@@ -1,6 +1,7 @@
 """API pública del middleware de comunicación por grupos."""
 
 from .cargador_configuracion import cargar_configuracion
+from .codificacion import CodificadorMensajes
 from .configuracion import (
     ConfiguracionBroker,
     ConfiguracionComunicacion,
