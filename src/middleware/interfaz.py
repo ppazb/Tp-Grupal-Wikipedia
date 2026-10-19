@@ -22,6 +22,20 @@ class ErrorMensaje(ErrorMiddleware):
     """No se pudo codificar, publicar o interpretar un mensaje."""
 
 
+class ErrorPublicacionParcial(ErrorMensaje):
+    """Algunas salidas fueron confirmadas antes de fallar otra publicación.
+
+    confirmadas contiene pares (grupo, Entrada), sin conservar los contenidos.
+    fallida identifica la salida cuyo envío falló; ante una desconexión no se
+    puede asegurar si el broker llegó a aceptarla. La causa conserva ese error.
+    """
+
+    def __init__(self, confirmadas, fallida):
+        super().__init__("La publicación a varias ramas quedó incompleta")
+        self.confirmadas = tuple(confirmadas)
+        self.fallida = fallida
+
+
 class ErrorCierre(ErrorMiddleware):
     """No se pudieron liberar todos los recursos del middleware."""
 

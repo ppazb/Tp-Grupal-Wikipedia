@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Generic, TypeVar, Union
+from typing import Generic, Optional, TypeVar, Union
 
 
 Contenido = TypeVar("Contenido")
@@ -26,6 +26,20 @@ class Datos(Generic[Contenido]):
 
     entrada: Entrada
     contenido: Contenido
+
+
+@dataclass(frozen=True)
+class EnvioDatos(Generic[Contenido]):
+    """Salida lógica de una rama, sin nombres de colas ni índices de instancia.
+
+    Varias ramas pueden compartir Datos o recibir proyecciones diferentes. La
+    clave de afinidad, cuando existe, se aplica a todo el registro o lote.
+    Esta estructura describe una publicación local; no forma parte del sobre.
+    """
+
+    grupo: str
+    datos: Datos[Contenido]
+    clave_afinidad: Optional[str] = None
 
 
 @dataclass(frozen=True)

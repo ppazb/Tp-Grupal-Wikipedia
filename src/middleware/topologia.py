@@ -18,7 +18,7 @@ MAX_BYTES_NOMBRE_AMQP = 255
 
 @dataclass(frozen=True)
 class DestinoPublicacion:
-    """Dirección física que usará el publicador interno del middleware."""
+    """Dirección física usada por el publicador interno del middleware."""
 
     exchange: str
     clave: str
@@ -85,7 +85,7 @@ class TopologiaGrupos:
     def destino_datos(
         self, grupo: str, entrada: str, instancia: Optional[int] = None,
     ) -> DestinoPublicacion:
-        """Resuelve una salida del productor local para el futuro publicador.
+        """Resuelve una salida del productor local para el publicador.
 
         Sin instancia apunta a reparto; con instancia apunta a afinidad. La
         elección mediante hash queda a cargo del middleware, no de los workers.
