@@ -22,6 +22,10 @@ class ErrorMensaje(ErrorMiddleware):
     """No se pudo codificar, publicar o interpretar un mensaje."""
 
 
+class ErrorRecepcion(ErrorMiddleware):
+    """No se pudo recibir, confirmar o cancelar la recepción."""
+
+
 class ErrorPublicacionParcial(ErrorMensaje):
     """Algunas salidas fueron confirmadas antes de fallar otra publicación.
 
@@ -99,7 +103,17 @@ class Middleware(ABC, Generic[Contenido]):
         Oculta los mensajes internos de coordinación. Solo entrega FinEntrada
         después de procesar todos los datos y cierres requeridos de esa entrada,
         incluso si no hubo datos. Las otras entradas y ejecuciones siguen activas.
-        Puede elevar ErrorConexion, ErrorMensaje o MiddlewareCerrado.
+        Puede elevar ErrorConexion, ErrorMensaje, ErrorRecepcion o MiddlewareCerrado.
+        Si se solicita detener la recepción, retorna sin entregar otro evento.
+        """
+
+    @abstractmethod
+    def detener_recepcion(self) -> None:
+        """Solicita terminar la espera, sin cerrar la conexión ni publicar EOF.
+
+        Es idempotente. Deja terminar y confirmar el procesamiento en curso.
+        Las llamadas posteriores a recibir retornan sin entregar eventos.
+        La integración con señales debe realizarse fuera del manejador de señal.
         """
 
     @abstractmethod
@@ -121,7 +135,7 @@ class Middleware(ABC, Generic[Contenido]):
         No publica EOF ni declara completadas las entradas pendientes. Tras el
         cierre, publicar, recibir y finalizar_entrada elevan MiddlewareCerrado.
         Si un recurso falla, intenta liberar los restantes y eleva ErrorCierre.
-        No se invoca concurrentemente con otras operaciones; la interrupción de
-        una espera y su integración con SIGTERM se resuelven en otra parte, sin llamar
-        directamente a Pika desde un manejador de señales.
+        No se invoca concurrentemente con otras operaciones. Para terminar una
+        espera se solicita detener_recepcion antes del cierre. La integración
+        con SIGTERM no debe llamar a Pika desde un manejador de señales.
         """

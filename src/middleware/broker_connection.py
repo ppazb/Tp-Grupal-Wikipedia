@@ -90,6 +90,20 @@ class ConexionBroker:
         if errores:
             raise ErrorCierre("Falló el cierre de recursos de RabbitMQ; ver registro") from errores[0]
 
+    def programar(self, operacion) -> None:
+        """Notifica al bucle de E/S para ejecutar una operación al despachar eventos.
+
+        No crea threads ni sondea: Pika despierta su espera mediante su mecanismo
+        interno de notificación. No usar directamente desde un manejador de
+        señales, pues la biblioteca adquiere locks internos.
+        """
+        self._validar_proceso()
+        self._validar_abierta()
+        try:
+            self._conexion.add_callback_threadsafe(operacion)
+        except (pika.exceptions.AMQPError, OSError) as error:
+            raise ErrorConexion("No se pudo notificar al bucle de recepción") from error
+
     def _crear_parametros(self):
         configuracion = self._configuracion
         try:

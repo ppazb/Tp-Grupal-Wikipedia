@@ -21,6 +21,7 @@ from .interfaz import (
     ErrorMensaje,
     ErrorMiddleware,
     ErrorPublicacionParcial,
+    ErrorRecepcion,
     ErrorTopologia,
     Evento,
     FinEntrada,
