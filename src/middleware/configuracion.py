@@ -27,11 +27,17 @@ class ConfiguracionBroker:
 
 @dataclass(frozen=True)
 class LimitesComunicacion:
-    """Límites para el consumidor, cada cola y cada mensaje serializado."""
+    """Límites para recepción, colas y preparación local de publicaciones.
+
+    Los cuerpos preparados ocupan como máximo max_envios_por_publicacion por
+    max_bytes_por_mensaje, sin contar objetos del llamador ni temporales de JSON.
+    mensajes_sin_confirmar limita entregas por canal receptor, no por grupo.
+    """
 
     mensajes_sin_confirmar: int
     max_mensajes_por_cola: int
     max_bytes_por_mensaje: int
+    max_envios_por_publicacion: int
 
 
 @dataclass(frozen=True)

@@ -27,4 +27,5 @@ from .interfaz import (
     FinEntrada,
     Middleware,
     MiddlewareCerrado,
+    PublicacionRechazada,
 )

@@ -26,6 +26,15 @@ class ErrorRecepcion(ErrorMiddleware):
     """No se pudo recibir, confirmar o cancelar la recepción."""
 
 
+class PublicacionRechazada(ErrorMiddleware):
+    """La publicación excede la capacidad local o fue rechazada por el broker.
+
+    Permite al proceso productor detener la admisión de trabajo sin conocer Pika.
+    Un rechazo remoto no identifica su motivo: puede deberse a una cola llena,
+    pero no garantiza que esa sea la causa. No implica un reintento automático.
+    """
+
+
 class ErrorPublicacionParcial(ErrorMensaje):
     """Algunas salidas fueron confirmadas antes de fallar otra publicación.
 
@@ -76,7 +85,7 @@ class Middleware(ABC, Generic[Contenido]):
         *,
         clave_afinidad: Optional[str] = None,
     ) -> None:
-        """Publica datos hacia un grupo lógico, con contrapresión si es necesario.
+        """Publica datos hacia un grupo lógico e informa rechazos de admisión.
 
         Sin clave, el middleware distribuye el trabajo entre consumidores. Una
         clave solicita un destinatario estable dentro de ese grupo durante la
@@ -85,6 +94,9 @@ class Middleware(ABC, Generic[Contenido]):
         configurado y contener solo los campos necesarios para el destinatario.
 
         El retorno indica aceptación del transporte, no procesamiento remoto.
+        PublicacionRechazada indica que no se admitió la publicación; el productor
+        debe frenar la admisión de nuevos datos, sin acumularlos en memoria ni
+        reintentar en un bucle. La espera por capacidad se integra en cada proceso.
         Puede elevar ErrorConexion, ErrorMensaje, MiddlewareCerrado o
         EntradaFinalizada para la combinación de grupo y entrada ya finalizada.
         """

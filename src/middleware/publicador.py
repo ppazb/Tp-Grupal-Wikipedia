@@ -10,7 +10,8 @@ Este componente implementa la salida de datos; no implementa recepción ni EOF.
 """
 
 import hashlib
-from typing import Optional, Sequence
+from collections.abc import Sequence
+from typing import Optional
 
 import pika
 
@@ -19,7 +20,10 @@ from ..common.protocol.serializer import ErrorSerializacion, serializar_json
 from .broker_connection import ConexionBroker
 from .codificacion import CodificadorMensajes
 from .configuracion import ConfiguracionComunicacion
-from .interfaz import ErrorConexion, ErrorMensaje, ErrorMiddleware, ErrorPublicacionParcial
+from .interfaz import (
+    ErrorConexion, ErrorMensaje, ErrorMiddleware, ErrorPublicacionParcial,
+    PublicacionRechazada,
+)
 from .topologia import TopologiaGrupos
 
 
@@ -32,8 +36,8 @@ class PublicadorDatos:
 
     La confirmación significa aceptación del broker, no procesamiento remoto.
     Espera esa confirmación antes del siguiente envío: hay como máximo una
-    publicación pendiente por instancia. Un rechazo por cola llena se informa
-    como error; no implementa todavía una espera por capacidad disponible.
+    publicación pendiente por instancia. Un NACK se informa mediante
+    PublicacionRechazada; no implementa una espera por capacidad disponible.
     No hace reconexiones ni reintentos automáticos. La conexión debe permanecer
     en su contexto with también si falla la inicialización de este componente.
     """
@@ -72,7 +76,15 @@ class PublicadorDatos:
         lista vacía no publica nada. No hay atomicidad entre las publicaciones:
         si falla una, detiene el envío y comunica las salidas ya confirmadas.
         No se debe reintentar el conjunto completo, pues duplicaría esas salidas.
+        Si supera max_envios_por_publicacion, rechaza sin codificar ni enviar.
+        No acepta iteradores: el llamador debe construir una secuencia acotada.
+        Un rechazo remoto posterior a un éxito queda como causa de
+        ErrorPublicacionParcial. No se deben olvidar las salidas confirmadas.
         """
+        if not isinstance(envios, Sequence):
+            raise ErrorMensaje("Las salidas deben ser una secuencia acotada")
+        if len(envios) > self._configuracion.limites.max_envios_por_publicacion:
+            raise PublicacionRechazada("La llamada supera max_envios_por_publicacion")
         preparados = [self._preparar(envio) for envio in envios]
         confirmadas = []
         for identidad, destino, cuerpo in preparados:
@@ -136,7 +148,7 @@ class PublicadorDatos:
         except pika.exceptions.NackError as error:
             # reject-publish puede producir un NACK al llenarse una cola. No se
             # oculta el rechazo ni se reintenta mediante sondeo activo o sleeps.
-            raise ErrorMensaje("El broker rechazó la publicación") from error
+            raise PublicacionRechazada("El broker no admitió la publicación") from error
         except (pika.exceptions.AMQPConnectionError, OSError) as error:
             raise ErrorConexion("No se pudo confirmar la publicación") from error
         except pika.exceptions.AMQPError as error:
