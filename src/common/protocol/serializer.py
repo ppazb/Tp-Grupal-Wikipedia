@@ -1,98 +1,188 @@
-"""Serialización JSON UTF-8 con representación explícita de contenido binario."""
+"""Codificación de los esquemas explícitos de registros y lotes binarios."""
 
-import base64
-import binascii
-import json
-import math
-
-
-MARCA_BYTES = "__bytes_base64__"
+from . import registros as dto
+from .primitivas import (
+    BYTES_U8, BYTES_U16, BYTES_U32, BYTES_U64,
+    ErrorSerializacion, LectorBinario,
+)
 
 
-class ErrorSerializacion(ValueError):
-    """El valor no se puede representar o el cuerpo recibido es inválido."""
+MAX_BYTES_DETALLE_ERROR = 512
+MAX_BYTES_REFERENCIA_ERROR = 1024
+
+# Cada tupla fija el DTO y el orden y tipo de sus campos en el protocolo.
+ESQUEMAS = {
+    dto.Esquema.ARTICULO: (dto.Articulo, (
+        ("url", "texto_requerido"), ("nombre", "texto_requerido"),
+        ("fecha", "texto_requerido"), ("idioma", "idioma"),
+        ("abstract", "texto"), ("secciones", "textos"), ("url_imagen", "texto"),
+    )),
+    dto.Esquema.TEXTO_ARTICULO: (dto.TextoArticulo, (
+        ("url", "texto_requerido"), ("idioma", "idioma"), ("abstract", "texto"),
+    )),
+    dto.Esquema.REFERENCIA_HISTORICA: (dto.ReferenciaHistorica, (
+        ("url", "texto_requerido"), ("fecha", "texto_requerido"), ("idioma", "idioma"),
+    )),
+    dto.Esquema.REFERENCIA_BIOGRAFICA: (dto.ReferenciaBiografica, (
+        ("nombre", "texto_requerido"), ("url", "texto_requerido"),
+        ("secciones", "textos"), ("url_imagen", "texto"),
+    )),
+    dto.Esquema.SOLICITUD_IMAGEN: (dto.SolicitudImagen, (
+        ("nombre", "texto_requerido"), ("url", "texto_requerido"), ("url_imagen", "texto"),
+    )),
+    dto.Esquema.PALABRA_IDIOMA: (dto.PalabraIdioma, (
+        ("palabra", "texto_requerido"), ("idioma", "idioma"),
+    )),
+    dto.Esquema.PALABRA: (dto.Palabra, (("palabra", "texto_requerido"),)),
+    dto.Esquema.CONTEO_PALABRA: (dto.ConteoPalabra, (
+        ("palabra", "texto_requerido"), ("cantidad", "u64"),
+    )),
+    dto.Esquema.CANTIDAD_PALABRAS: (dto.CantidadPalabras, (("cantidad", "u64"),)),
+    dto.Esquema.CANDIDATO: (dto.Candidato, (
+        ("url", "texto_requerido"), ("cantidad", "u64"),
+    )),
+    dto.Esquema.RESUMEN_HISTORICO: (dto.ResumenHistorico, (
+        ("suma", "u64"), ("articulos", "u64"),
+    )),
+    dto.Esquema.RESULTADO_Q1: (dto.ResultadoQ1, (
+        ("url", "texto_requerido"), ("fecha", "texto_requerido"),
+    )),
+    dto.Esquema.FRAGMENTO_IMAGEN: (dto.FragmentoImagen, (
+        ("id_transferencia", "texto_requerido"), ("nombre", "texto_requerido"),
+        ("url", "texto_requerido"), ("total_bytes", "u64"),
+        ("desplazamiento", "u64"), ("fragmento", "binario"),
+    )),
+    dto.Esquema.ERROR_REGISTRO: (dto.ErrorRegistro, (
+        ("entrada_afectada", "texto_requerido"), ("esquema_afectado", "opcional_u16"),
+        ("codigo", "codigo_error"), ("indice_registro", "opcional_u32"),
+        ("referencia", "opcional_texto"), ("detalle", "texto"),
+    )),
+}
+ANCHOS = {"u16": BYTES_U16, "u32": BYTES_U32, "u64": BYTES_U64}
+ENUMERACIONES = {
+    "idioma": (dto.Idioma, BYTES_U8),
+    "codigo_error": (dto.CodigoError, BYTES_U16),
+}
 
 
-def serializar_json(valor: object) -> bytes:
-    """Codifica valores JSON, tuplas y bytes; las tuplas se reciben como listas.
+def escribir_lote(escritor, lote):
+    """Codifica registros homogéneos y valida sus tipos, campos y tamaños."""
+    if type(lote) is not dto.Lote or type(lote.esquema) is not dto.Esquema:
+        raise ErrorSerializacion("Se esperaba un Lote con esquema explícito")
+    if type(lote.registros) is not tuple or not lote.registros:
+        raise ErrorSerializacion("El lote debe contener una tupla no vacía de registros")
+    clase, campos = ESQUEMAS[lote.esquema]
+    escritor.entero(lote.esquema.value, BYTES_U16)
+    escritor.entero(len(lote.registros), BYTES_U32)
+    for registro in lote.registros:
+        if type(registro) is not clase:
+            raise ErrorSerializacion("El registro no corresponde al esquema del lote")
+        inicio = escritor.iniciar_bloque()
+        for nombre, tipo in campos:
+            _escribir_campo(escritor, tipo, getattr(registro, nombre))
+        _validar_registro(registro)
+        escritor.terminar_bloque(inicio)
 
-    No convierte objetos arbitrarios ni DTO de negocio implícitamente. Los
-    diccionarios deben tener claves de texto y no usar la marca binaria reservada.
-    """
-    try:
-        _validar_valor(valor)
-        return json.dumps(
-            valor, default=_codificar_bytes, ensure_ascii=False,
-            allow_nan=False, separators=(",", ":"),
-        ).encode("utf-8")
-    except (TypeError, ValueError, RecursionError) as error:
-        raise ErrorSerializacion("El contenido no se puede serializar como JSON UTF-8") from error
+
+def leer_lote(lector, esquema):
+    """Valida todas las fronteras y separa registros válidos de errores individuales."""
+    clase, campos = ESQUEMAS[esquema]
+    cantidad = lector.entero(BYTES_U32)
+    if cantidad == 0 or cantidad > lector.restantes // BYTES_U32:
+        raise ErrorSerializacion("Cantidad de registros inválida")
+    # El primer recorrido no crea DTO: una frontera rota invalida todo el lote.
+    fronteras = LectorBinario(lector.vista_restante())
+    for _ in range(cantidad):
+        fronteras.bloque()
+    fronteras.finalizar()
+    registros, errores = [], []
+    for indice in range(cantidad):
+        registro = LectorBinario(lector.bloque())
+        try:
+            valores = {nombre: _leer_campo(registro, tipo) for nombre, tipo in campos}
+            registro.finalizar()
+            valor = clase(**valores)
+            _validar_registro(valor)
+            registros.append(valor)
+        except ErrorSerializacion as error:
+            errores.append(dto.ErrorDecodificacionRegistro(
+                indice, dto.CodigoError.REGISTRO_INVALIDO, str(error),
+            ))
+    lector.finalizar()
+    return dto.Lote(esquema, tuple(registros)), tuple(errores)
 
 
-def deserializar_json(cuerpo: bytes) -> object:
-    """Decodifica JSON estricto y recupera los bytes marcados como base64."""
-    if not isinstance(cuerpo, bytes):
-        raise ErrorSerializacion("El cuerpo debe ser bytes")
-    try:
-        valor = json.loads(
-            cuerpo.decode("utf-8"), object_pairs_hook=_decodificar_objeto,
-            parse_constant=_rechazar_constante,
-        )
-        _validar_valor(valor)
+def _escribir_campo(escritor, tipo, valor):
+    if tipo.startswith("opcional_"):
+        escritor.entero(int(valor is not None), BYTES_U8)
+        if valor is not None:
+            _escribir_campo(escritor, tipo.removeprefix("opcional_"), valor)
+    elif tipo in ANCHOS:
+        escritor.entero(valor, ANCHOS[tipo])
+    elif tipo in ENUMERACIONES:
+        clase, ancho = ENUMERACIONES[tipo]
+        if type(valor) is not clase:
+            raise ErrorSerializacion("Código enumerado inválido")
+        escritor.entero(valor.value, ancho)
+    elif tipo in ("texto", "texto_requerido"):
+        escritor.texto(valor)
+        if tipo == "texto_requerido" and not valor.strip():
+            raise ErrorSerializacion("Texto obligatorio vacío")
+    elif tipo == "binario":
+        escritor.binario(valor)
+    elif tipo == "textos":
+        if type(valor) is not tuple:
+            raise ErrorSerializacion("La lista de textos debe ser una tupla")
+        escritor.entero(len(valor), BYTES_U32)
+        for texto in valor:
+            escritor.texto(texto)
+    else:
+        raise ErrorSerializacion("Tipo de campo no reconocido")
+
+
+def _leer_campo(lector, tipo):
+    if tipo.startswith("opcional_"):
+        presencia = lector.entero(BYTES_U8)
+        if presencia not in (0, 1):
+            raise ErrorSerializacion("Marca de presencia inválida")
+        return _leer_campo(lector, tipo.removeprefix("opcional_")) if presencia else None
+    if tipo in ANCHOS:
+        return lector.entero(ANCHOS[tipo])
+    if tipo in ENUMERACIONES:
+        clase, ancho = ENUMERACIONES[tipo]
+        try:
+            return clase(lector.entero(ancho))
+        except ValueError as error:
+            raise ErrorSerializacion("Código enumerado inválido") from error
+    if tipo in ("texto", "texto_requerido"):
+        valor = lector.texto()
+        if tipo == "texto_requerido" and not valor.strip():
+            raise ErrorSerializacion("Texto obligatorio vacío")
         return valor
-    except (TypeError, ValueError, RecursionError) as error:
-        raise ErrorSerializacion("El cuerpo no contiene JSON UTF-8 válido") from error
+    if tipo == "binario":
+        return bytes(lector.bloque())
+    if tipo == "textos":
+        cantidad = lector.entero(BYTES_U32)
+        if cantidad > lector.restantes // BYTES_U32:
+            raise ErrorSerializacion("Cantidad de textos inválida")
+        return tuple(lector.texto() for _ in range(cantidad))
+    raise ErrorSerializacion("Tipo de campo no reconocido")
 
 
-def _validar_valor(valor):
-    """Valida tipos admitidos, claves de texto, UTF-8 y números finitos."""
-    if valor is None or type(valor) in (bool, int, bytes):
-        return
-    if type(valor) is str:
-        valor.encode("utf-8")
-        return
-    if type(valor) is float:
-        if not math.isfinite(valor):
-            raise ValueError("No se admiten números no finitos")
-        return
-    if type(valor) in (list, tuple):
-        for elemento in valor:
-            _validar_valor(elemento)
-        return
-    if type(valor) is dict:
-        if MARCA_BYTES in valor:
-            raise ValueError("El contenido usa una clave reservada para bytes")
-        for clave, elemento in valor.items():
-            if type(clave) is not str:
-                raise ValueError("Las claves de los objetos deben ser texto")
-            clave.encode("utf-8")
-            _validar_valor(elemento)
-        return
-    raise TypeError("Tipo de contenido no admitido por el serializador")
-
-
-def _codificar_bytes(valor):
-    if type(valor) is not bytes:
-        raise TypeError("Tipo de contenido no admitido por el serializador")
-    return {MARCA_BYTES: base64.b64encode(valor).decode("ascii")}
-
-
-def _decodificar_objeto(pares):
-    objeto = {}
-    for clave, valor in pares:
-        if clave in objeto:
-            raise ValueError("El mensaje contiene campos repetidos")
-        objeto[clave] = valor
-    if MARCA_BYTES not in objeto:
-        return objeto
-    # La marca ocupa un objeto exclusivo, para no confundirlo con un registro.
-    if len(objeto) != 1 or type(objeto[MARCA_BYTES]) is not str:
-        raise ValueError("Representación binaria inválida")
-    try:
-        return base64.b64decode(objeto[MARCA_BYTES], validate=True)
-    except (ValueError, binascii.Error) as error:
-        raise ValueError("Contenido base64 inválido") from error
-
-
-def _rechazar_constante(valor):
-    raise ValueError("No se admiten constantes numéricas fuera de JSON")
+def _validar_registro(registro):
+    if type(registro) is dto.ConteoPalabra and registro.cantidad == 0:
+        raise ErrorSerializacion("El conteo de una palabra debe ser positivo")
+    if type(registro) is dto.ResumenHistorico and registro.articulos == 0 and registro.suma != 0:
+        raise ErrorSerializacion("Una suma sin artículos debe ser cero")
+    if type(registro) is dto.FragmentoImagen:
+        fin = registro.desplazamiento + len(registro.fragmento)
+        if fin > registro.total_bytes or (registro.total_bytes > 0 and not registro.fragmento):
+            raise ErrorSerializacion("Fragmento fuera de los límites de la imagen")
+    if type(registro) is dto.ErrorRegistro:
+        if (len(registro.detalle) > MAX_BYTES_DETALLE_ERROR
+                or len(registro.detalle.encode("utf-8")) > MAX_BYTES_DETALLE_ERROR):
+            raise ErrorSerializacion("El detalle del error supera su límite")
+        if registro.referencia is not None:
+            if (len(registro.referencia) > MAX_BYTES_REFERENCIA_ERROR
+                    or len(registro.referencia.encode("utf-8")) > MAX_BYTES_REFERENCIA_ERROR):
+                raise ErrorSerializacion("La referencia del error supera su límite")

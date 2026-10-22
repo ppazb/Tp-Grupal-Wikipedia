@@ -6,6 +6,8 @@ from pathlib import Path
 import re
 from typing import Union
 
+from ..common.protocol.registros import Esquema
+
 from .configuracion import (
     ConfiguracionBroker,
     ConfiguracionComunicacion,
@@ -32,7 +34,7 @@ CAMPOS_POR_SECCION = {
         "max_envios_por_publicacion",
     ),
 }
-CAMPOS_RUTA = ("origen", "destino", "entrada")
+CAMPOS_RUTA = ("origen", "destino", "entrada", "esquemas")
 
 
 def cargar_configuracion(ruta: Union[str, Path]) -> ConfiguracionComunicacion:
@@ -196,7 +198,19 @@ def _leer_ruta(seccion):
         origen=_identificador(seccion, "origen"),
         destino=_identificador(seccion, "destino"),
         entrada=_identificador(seccion, "entrada"),
+        esquemas=_leer_esquemas(seccion),
     )
+
+
+def _leer_esquemas(seccion):
+    """Lee nombres de esquemas separados por comas, sin vacíos ni duplicados."""
+    nombres = tuple(nombre.strip() for nombre in _texto(seccion, "esquemas").split(","))
+    if len(set(nombres)) != len(nombres):
+        raise ErrorConfiguracion("La ruta contiene esquemas repetidos")
+    try:
+        return tuple(Esquema[nombre] for nombre in nombres)
+    except KeyError as error:
+        raise ErrorConfiguracion("La ruta contiene un esquema desconocido") from error
 
 
 def _validar_topologia(configuracion):

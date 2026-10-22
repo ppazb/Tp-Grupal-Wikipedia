@@ -22,6 +22,16 @@ class ErrorMensaje(ErrorMiddleware):
     """No se pudo codificar, publicar o interpretar un mensaje."""
 
 
+class ErrorMensajeInvalido(ErrorMensaje):
+    """Mensaje estructuralmente inválido, con el contexto que pudo decodificarse."""
+
+    def __init__(self, detalle, *, entrada=None, origen=None, esquema=None):
+        super().__init__(detalle)
+        self.entrada = entrada
+        self.origen = origen
+        self.esquema = esquema
+
+
 class ErrorRecepcion(ErrorMiddleware):
     """No se pudo recibir, confirmar o cancelar la recepción."""
 

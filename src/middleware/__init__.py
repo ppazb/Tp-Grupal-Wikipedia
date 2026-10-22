@@ -19,6 +19,7 @@ from .interfaz import (
     ErrorCierre,
     ErrorConexion,
     ErrorMensaje,
+    ErrorMensajeInvalido,
     ErrorMiddleware,
     ErrorPublicacionParcial,
     ErrorRecepcion,

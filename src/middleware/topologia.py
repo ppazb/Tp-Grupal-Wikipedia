@@ -102,11 +102,9 @@ class TopologiaGrupos:
         return _colas_instancia(proceso.grupo, proceso.instancia)
 
     def _buscar_ruta(self, grupo, entrada):
-        origen = self._configuracion.proceso.grupo
-        for ruta in self._configuracion.rutas:
-            if (ruta.origen, ruta.destino, ruta.entrada) == (origen, grupo, entrada):
-                return ruta
-        raise ErrorConfiguracion("No existe esa ruta de salida para el grupo local")
+        return self._configuracion.obtener_ruta(
+            self._configuracion.proceso.grupo, grupo, entrada,
+        )
 
     def _agregar_ruta(self, ruta):
         """Acumula los recursos de la ruta, reutilizando los comunes a su grupo."""

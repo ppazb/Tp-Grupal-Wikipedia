@@ -1,8 +1,10 @@
 """Estructuras compartidas por los procesos y el protocolo de comunicación."""
 
 from dataclasses import dataclass
-from enum import Enum
+from enum import IntEnum
 from typing import Generic, Optional, TypeVar, Union
+
+from .registros import ErrorDecodificacionRegistro, Lote
 
 
 Contenido = TypeVar("Contenido")
@@ -61,22 +63,35 @@ class IdentidadProceso:
     instancia: int
 
 
-class TipoMensaje(str, Enum):
+class TipoMensaje(IntEnum):
     """Tipos admitidos en el protocolo interno entre procesos."""
 
-    DATOS = "datos"
-    EOF = "eof"
+    DATOS = 0x01
+    EOF = 0x02
 
 
 @dataclass(frozen=True)
 class SobreMensaje:
     """Identifica la ejecución, entrada, tipo, origen y contenido de un mensaje.
 
-    DATOS transporta contenido no nulo. EOF transporta contenido nulo e indica
+    DATOS transporta un Lote. EOF transporta contenido nulo e indica
     que el productor terminó sus aportes para esa entrada.
     """
 
     entrada: Entrada
     tipo: TipoMensaje
     origen: IdentidadProceso
-    contenido: object
+    contenido: Optional[Lote]
+
+
+@dataclass(frozen=True)
+class ResultadoDecodificacion:
+    """Sobre decodificado y rechazos individuales con los índices originales."""
+
+    sobre: SobreMensaje
+    errores_por_registro: tuple[ErrorDecodificacionRegistro, ...]
+
+    @property
+    def registros_validos(self):
+        """Devuelve los registros aceptados; un EOF no contiene registros."""
+        return self.sobre.contenido.registros if self.sobre.contenido is not None else ()

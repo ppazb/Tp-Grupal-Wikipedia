@@ -7,7 +7,6 @@ from typing import Optional
 import pika
 
 from ..common.protocol.dto import Datos, EnvioDatos, SobreMensaje, TipoMensaje
-from ..common.protocol.serializer import ErrorSerializacion, serializar_json
 from .broker_connection import ConexionBroker
 from .codificacion import CodificadorMensajes
 from .configuracion import ConfiguracionComunicacion
@@ -88,6 +87,11 @@ class PublicadorDatos:
             contenido=envio.datos.contenido,
         )
         cuerpo = self._codificador.codificar(sobre)
+        ruta = self._configuracion.obtener_ruta(
+            sobre.origen.grupo, envio.grupo, sobre.entrada.nombre,
+        )
+        if sobre.contenido.esquema not in ruta.esquemas:
+            raise ErrorMensaje("El esquema no está admitido en la ruta de salida")
         instancia = self._instancia_destinataria(envio)
         destino = self._topologia.destino_datos(
             envio.grupo, sobre.entrada.nombre, instancia,
@@ -100,10 +104,9 @@ class PublicadorDatos:
             return None
         if type(clave) is not str or not clave:
             raise ErrorMensaje("La clave de afinidad debe ser texto no vacío")
-        try:
-            identificador = serializar_json((envio.datos.entrada.id_ejecucion, clave))
-        except ErrorSerializacion as error:
-            raise ErrorMensaje("La clave de afinidad no se puede codificar") from error
+        identificador = self._codificador.codificar_afinidad(
+            envio.datos.entrada.id_ejecucion, clave,
+        )
         # hash() de Python cambia entre procesos. SHA-256 fija la asignación para
         # todos los productores mientras la cantidad de instancias permanezca fija.
         huella = hashlib.sha256(identificador).digest()
@@ -118,8 +121,7 @@ class PublicadorDatos:
                 body=cuerpo,
                 mandatory=True,
                 properties=pika.BasicProperties(
-                    content_type="application/json",
-                    content_encoding="utf-8",
+                    content_type="application/octet-stream",
                     delivery_mode=pika.spec.PERSISTENT_DELIVERY_MODE,
                 ),
             )

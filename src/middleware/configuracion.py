@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Tuple
 
 from ..common.protocol.dto import IdentidadProceso
+from ..common.protocol.registros import Esquema
 from .interfaz import ErrorMiddleware
 
 
@@ -30,7 +31,7 @@ class LimitesComunicacion:
     """Límites para recepción, colas y preparación local de publicaciones.
 
     Los cuerpos preparados ocupan como máximo max_envios_por_publicacion por
-    max_bytes_por_mensaje, sin contar objetos del llamador ni temporales de JSON.
+    max_bytes_por_mensaje, sin contar objetos del llamador ni temporales de codificación.
     mensajes_sin_confirmar limita entregas por canal receptor, no por grupo.
     """
 
@@ -56,6 +57,7 @@ class Ruta:
     origen: str
     destino: str
     entrada: str
+    esquemas: Tuple[Esquema, ...]
 
 
 @dataclass(frozen=True)
@@ -74,6 +76,13 @@ class ConfiguracionComunicacion:
             if grupo.nombre == nombre:
                 return grupo
         raise ErrorConfiguracion("No existe el grupo solicitado en la configuración")
+
+    def obtener_ruta(self, origen: str, destino: str, entrada: str) -> Ruta:
+        """Busca la ruta exacta entre dos grupos y una entrada lógica."""
+        for ruta in self.rutas:
+            if (ruta.origen, ruta.destino, ruta.entrada) == (origen, destino, entrada):
+                return ruta
+        raise ErrorConfiguracion("No existe la ruta solicitada en la configuración")
 
     def participantes_entrada(self, grupo: str, entrada: str) -> int:
         """Suma las instancias de los grupos productores de una entrada.

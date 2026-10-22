@@ -6,10 +6,12 @@ from typing import Callable
 import pika
 
 from ..common.protocol.dto import Datos, TipoMensaje
+from ..common.protocol.registros import Esquema
 from .broker_connection import ConexionBroker
 from .codificacion import CodificadorMensajes
 from .configuracion import ConfiguracionComunicacion, ErrorConfiguracion
-from .interfaz import ErrorConexion, ErrorMensaje, ErrorRecepcion
+from .interfaz import ErrorConexion, ErrorMensajeInvalido, ErrorRecepcion
+from .rechazos import ENTRADA_ERRORES, notificacion_rechazo
 from .topologia import TopologiaGrupos
 
 
@@ -21,15 +23,21 @@ class ReceptorDatos:
 
     Usa el canal exclusivamente para sus consumidores y puede compartirlo con
     PublicadorDatos. El llamador administra el cierre de la conexión.
-    Ante un error intenta devolver la entrega sin confirmar y propaga el fallo.
+    Los rechazos de datos se notifican antes de procesar los registros válidos.
+    informar_error recibe Datos y retorna cuando la notificación fue aceptada.
+    Si falla una notificación, retiene la entrega sin ACK hasta cerrar la conexión.
     Si falla el ACK, el procesamiento puede haber concluido igualmente.
     """
 
     def __init__(
         self, configuracion: ConfiguracionComunicacion, conexion: ConexionBroker,
+        *, informar_error: Callable[[Datos], None],
     ):
+        if not callable(informar_error):
+            raise ErrorConfiguracion("Se requiere un manejador de notificaciones de error")
         self._configuracion = configuracion
         self._conexion = conexion
+        self._informar_error = informar_error
         self._codificador = CodificadorMensajes(configuracion.limites.max_bytes_por_mensaje)
         topologia = TopologiaGrupos(configuracion)
         self._colas = topologia.colas_recepcion()
@@ -42,12 +50,13 @@ class ReceptorDatos:
         self._pendiente = None
         self._entregado = False
         self._error_procesamiento = None
+        self._retener_pendiente = False
 
     def recibir(self, procesar: Callable[[Datos], None]) -> None:
-        """Bloquea en E/S hasta procesar un lote o atender una detención.
+        """Espera una entrega y procesa sus registros válidos o resuelve su rechazo.
 
-        Confirma el lote solo después de retornar procesar. Las excepciones del
-        consumidor se propagan sin traducirlas, incluso si son errores de Pika.
+        Confirma tras notificar los rechazos y procesar los registros válidos.
+        Las excepciones de ambos manejadores se propagan sin traducirlas.
         No admite recepción reentrante ni compartir consumidores en este canal.
         """
         canal = self._conexion.canal
@@ -120,12 +129,31 @@ class ReceptorDatos:
         if self._detenido:
             self._liberar_consumidores(canal)
             return
-        sobre = self._codificador.decodificar(cuerpo)
-        self._validar_origen(sobre)
-        if sobre.tipo != TipoMensaje.DATOS:
-            raise ErrorMensaje("Se recibió un control en una cola de datos")
         try:
-            procesar(Datos(sobre.entrada, sobre.contenido))
+            resultado = self._codificador.decodificar(cuerpo)
+            sobre = resultado.sobre
+            ruta = self._validar_origen(sobre)
+            if sobre.tipo != TipoMensaje.DATOS:
+                raise ErrorMensajeInvalido(
+                    "Se recibió un control en una cola de datos",
+                    entrada=sobre.entrada, origen=sobre.origen,
+                )
+            if sobre.contenido.esquema not in ruta.esquemas:
+                raise ErrorMensajeInvalido(
+                    "El esquema no está admitido en la entrada",
+                    entrada=sobre.entrada, origen=sobre.origen,
+                    esquema=sobre.contenido.esquema.value,
+                )
+        except ErrorMensajeInvalido as error:
+            self._rechazar_mensaje(canal, error)
+            return
+        for error in resultado.errores_por_registro:
+            self._notificar(
+                sobre.entrada, sobre.contenido.esquema.value, error.detalle, error.indice,
+            )
+        try:
+            if resultado.registros_validos:
+                procesar(Datos(sobre.entrada, sobre.contenido))
         except BaseException as error:
             self._error_procesamiento = error
             raise
@@ -137,17 +165,48 @@ class ReceptorDatos:
         self._liberar_consumidores(canal)
 
     def _validar_origen(self, sobre):
-        rutas = self._configuracion.rutas
-        if not any(
-            ruta.origen == sobre.origen.grupo
-            and ruta.destino == self._configuracion.proceso.grupo
-            and ruta.entrada == sobre.entrada.nombre
-            for ruta in rutas
-        ):
-            raise ErrorMensaje("El mensaje no corresponde a una ruta de entrada local")
-        grupo = self._configuracion.obtener_grupo(sobre.origen.grupo)
-        if sobre.origen.instancia >= grupo.instancias:
-            raise ErrorMensaje("La instancia productora no pertenece al grupo de origen")
+        try:
+            ruta = self._configuracion.obtener_ruta(
+                sobre.origen.grupo, self._configuracion.proceso.grupo, sobre.entrada.nombre,
+            )
+            grupo = self._configuracion.obtener_grupo(sobre.origen.grupo)
+            if sobre.origen.instancia >= grupo.instancias:
+                raise ErrorConfiguracion("La instancia productora no pertenece al grupo")
+            return ruta
+        except ErrorConfiguracion as error:
+            raise ErrorMensajeInvalido("El origen no corresponde a una ruta local") from error
+
+    def _notificar(self, entrada, esquema, detalle, indice=None):
+        REGISTRO.warning(
+            "Rechazo en ejecución %r, entrada %r: %s",
+            entrada.id_ejecucion, entrada.nombre, detalle,
+        )
+        if esquema == Esquema.ERROR_REGISTRO or entrada.nombre == ENTRADA_ERRORES:
+            return
+        datos = notificacion_rechazo(entrada, esquema, detalle, indice=indice)
+        try:
+            self._informar_error(datos)
+        except BaseException as error:
+            # Evita reentregar en un bucle un lote cuyo aviso no pudo publicarse.
+            self._retener_pendiente = True
+            self._error_procesamiento = error
+            raise
+
+    def _rechazar_mensaje(self, canal, error):
+        """Informa un mensaje inválido identificable y lo rechaza sin reencolar."""
+        if error.entrada is not None and error.origen is not None:
+            try:
+                self._validar_origen(error)
+            except ErrorMensajeInvalido:
+                REGISTRO.warning("Mensaje inválido sin origen local válido: %s", error)
+            else:
+                self._notificar(error.entrada, error.esquema, str(error))
+        else:
+            REGISTRO.warning("Mensaje inválido sin ejecución identificable: %s", error)
+        canal.basic_reject(delivery_tag=self._pendiente, requeue=False)
+        self._pendiente = None
+        self._entregado = True
+        self._liberar_consumidores(canal)
 
     def _liberar_consumidores(self, canal):
         """Intenta todas las cancelaciones aun si una falla; conserva referencias."""
@@ -157,7 +216,7 @@ class ReceptorDatos:
             self._pendiente = None
             self._consumidores.clear()
             return
-        if self._pendiente is not None:
+        if self._pendiente is not None and not self._retener_pendiente:
             try:
                 canal.basic_nack(delivery_tag=self._pendiente, requeue=True)
                 self._pendiente = None
