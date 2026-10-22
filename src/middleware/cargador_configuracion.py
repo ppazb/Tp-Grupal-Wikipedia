@@ -36,10 +36,10 @@ CAMPOS_RUTA = ("origen", "destino", "entrada")
 
 
 def cargar_configuracion(ruta: Union[str, Path]) -> ConfiguracionComunicacion:
-    """Carga un INI UTF-8 y aplica variables de entorno antes de validar valores.
+    """Carga y valida la configuración de comunicación desde un INI UTF-8.
 
-    Utiliza el entorno del proceso. No abre conexiones ni consulta la red.
-    No hay valores operativos por defecto ocultos en este módulo.
+    Las variables WIKI_MW_ del proceso sobrescriben los campos admitidos.
+    Eleva ErrorConfiguracion ante errores de lectura, valores o topología.
     """
     lector = _leer_archivo(ruta)
     _validar_secciones(lector)

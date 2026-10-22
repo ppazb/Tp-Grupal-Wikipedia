@@ -27,11 +27,9 @@ class ErrorRecepcion(ErrorMiddleware):
 
 
 class PublicacionRechazada(ErrorMiddleware):
-    """La publicación excede la capacidad local o fue rechazada por el broker.
+    """La publicación excede el límite local o fue rechazada por el broker.
 
-    Permite al proceso productor detener la admisión de trabajo sin conocer Pika.
-    Un rechazo remoto no identifica su motivo: puede deberse a una cola llena,
-    pero no garantiza que esa sea la causa. No implica un reintento automático.
+    Un rechazo remoto no identifica necesariamente su causa.
     """
 
 
@@ -66,19 +64,12 @@ class EntradaFinalizada(ErrorMiddleware):
 
 
 class Middleware(ABC, Generic[Contenido]):
-    """Interfaz que utilizan gateway y workers mediante inyección de dependencia.
+    """Define la comunicación por grupos para gateway y workers.
 
-    Cada instancia pertenece a un proceso productor y a un grupo receptor lógico.
-    Su construcción concreta configura identidad, topología y serialización; el
-    negocio no conoce direcciones, réplicas, colas ni conexiones del broker.
-
-    Cada proceso crea y usa su propia instancia; las conexiones no se comparten
-    ni se heredan entre procesos. Las operaciones son secuenciales, sin requerir
-    threads ni permitir recepción reentrante. El escalado utiliza procesos
-    independientes, en una o varias computadoras. El procesador puede publicar
-    y finalizar salidas.
-    Las implementaciones traducen errores de transporte a ErrorMiddleware y
-    conservan su causa mediante ``raise ... from ...``.
+    Cada instancia se usa secuencialmente desde su proceso propietario.
+    La recepción no es reentrante; el procesador puede publicar y finalizar
+    salidas. Los errores de transporte se expresan como ErrorMiddleware,
+    conservando su causa.
     """
 
     @abstractmethod
@@ -91,36 +82,24 @@ class Middleware(ABC, Generic[Contenido]):
     ) -> None:
         """Publica datos hacia un grupo lógico e informa rechazos de admisión.
 
-        Sin clave, el middleware distribuye el trabajo entre consumidores. Una
-        clave solicita un destinatario estable dentro de ese grupo durante la
-        ejecución; el negocio no calcula índices de réplicas. El algoritmo y la
-        topología quedan encapsulados. El contenido debe admitir el serializador
-        configurado y contener solo los campos necesarios para el destinatario.
-
-        El retorno indica aceptación del transporte, no procesamiento remoto.
-        PublicacionRechazada indica que no se admitió la publicación; el productor
-        debe frenar la admisión de nuevos datos, sin acumularlos en memoria ni
-        reintentar en un bucle. La espera por capacidad se integra en cada proceso.
-        Puede elevar ErrorConexion, ErrorMensaje, MiddlewareCerrado o
-        EntradaFinalizada para la combinación de grupo y entrada ya finalizada.
+        Sin clave de afinidad reparte entre consumidores; con clave selecciona un
+        destinatario estable durante la ejecución. El retorno indica aceptación
+        del transporte, no procesamiento remoto.
+        Puede elevar PublicacionRechazada, ErrorConexion, ErrorMensaje,
+        MiddlewareCerrado o EntradaFinalizada.
         """
 
     @abstractmethod
     def recibir(self, procesar: Callable[[Evento[Contenido]], None]) -> None:
-        """Espera y procesa un único evento lógico del grupo receptor configurado.
+        """Espera y procesa un evento lógico del grupo receptor.
 
-        Bloquea sin sondeo activo hasta disponer de un evento. Ejecuta el
-        procesador sincrónicamente y confirma su entrega solo si este retorna
-        correctamente. Si el procesador falla, propaga su excepción original y
-        no confirma el evento como procesado; la política de recuperación queda
-        a cargo de la implementación. No garantiza procesamiento exactamente una
-        vez ni orden global entre productores.
-
-        Oculta los mensajes internos de coordinación. Solo entrega FinEntrada
-        después de procesar todos los datos y cierres requeridos de esa entrada,
-        incluso si no hubo datos. Las otras entradas y ejecuciones siguen activas.
-        Puede elevar ErrorConexion, ErrorMensaje, ErrorRecepcion o MiddlewareCerrado.
-        Si se solicita detener la recepción, retorna sin entregar otro evento.
+        Invoca procesar sincrónicamente y confirma solo si retorna correctamente;
+        si falla, propaga su excepción original. Una detención permite retornar
+        sin entregar otro evento. No garantiza procesamiento exactamente una vez
+        ni orden global entre productores.
+        FinEntrada representa el cierre consolidado de los datos y productores
+        de una entrada. Puede elevar ErrorConexion, ErrorMensaje, ErrorRecepcion
+        o MiddlewareCerrado.
         """
 
     @abstractmethod
@@ -134,39 +113,29 @@ class Middleware(ABC, Generic[Contenido]):
 
     @abstractmethod
     def finalizar_entrada(self, grupo: str, entrada: Entrada) -> None:
-        """Declara que este productor no enviará más datos a ese grupo y entrada.
+        """Declara el fin de los aportes de este productor a un grupo y entrada.
 
-        Se llama después de publicar todos sus aportes, aun cuando no haya ninguno.
-        Es idempotente para el mismo productor, grupo y entrada. Su retorno no
-        significa que los demás productores hayan terminado. La implementación
-        propaga y consolida los cierres según la topología, incluyendo todas las
-        réplicas destinatarias; no requiere una clave de afinidad del negocio.
+        Se invoca después del último aporte, incluso si no hubo datos. Es
+        idempotente por productor, grupo y entrada, y alcanza a todas las
+        instancias destinatarias. No implica que los demás productores terminaron.
         Puede elevar ErrorConexion, ErrorMensaje o MiddlewareCerrado.
         """
 
     @abstractmethod
     def liberar_ejecucion(self, id_ejecucion: str) -> None:
-        """Libera el estado y los recursos locales exclusivos de una ejecución.
+        """Libera el estado y los recursos locales exclusivos de una ejecución terminada.
 
-        El llamador debe haber establecido que terminó su procesamiento, incluidas
-        las confirmaciones y salidas pendientes. No equivale a EOF ni cancela una
-        ejecución activa. No purga mensajes ni elimina colas, exchanges, canales
-        o conexiones compartidos con otras ejecuciones.
-
-        Repetir una liberación exitosa no tiene efecto. Ante fallos, intenta las
-        demás limpiezas y conserva los recursos pendientes para otro intento;
-        eleva ErrorRecursosEjecucion. No guarda un historial de ejecuciones
-        terminadas ni impide por sí sola la llegada de mensajes tardíos.
+        Requiere haber completado el procesamiento, las confirmaciones y las salidas.
+        Conserva los recursos compartidos. Repetir una liberación exitosa no tiene
+        efecto; ante fallos intenta las demás limpiezas, conserva las pendientes y
+        eleva ErrorRecursosEjecucion. No conserva un historial de ejecuciones.
         """
 
     @abstractmethod
     def cerrar(self) -> None:
-        """Libera los recursos locales; repetir un cierre exitoso no tiene efecto.
+        """Libera los recursos locales e impide nuevas operaciones de comunicación.
 
-        No publica EOF ni declara completadas las entradas pendientes. Tras el
-        cierre, publicar, recibir y finalizar_entrada elevan MiddlewareCerrado.
-        Si un recurso falla, intenta liberar los restantes y eleva ErrorCierre.
-        No se invoca concurrentemente con otras operaciones. Para terminar una
-        espera se solicita detener_recepcion antes del cierre. La integración
-        con SIGTERM no debe llamar a Pika desde un manejador de señales.
+        Repetir un cierre exitoso no tiene efecto. Si una limpieza falla, intenta
+        las restantes y eleva ErrorCierre. Se invoca secuencialmente, después de
+        detener la recepción; no publica EOF.
         """

@@ -60,12 +60,7 @@ class Ruta:
 
 @dataclass(frozen=True)
 class ConfiguracionComunicacion:
-    """Instantánea inmutable que el cargador entrega después de validarla.
-
-    Puede transferirse a procesos hijos: solo contiene datos, no conexiones.
-    Las tuplas evitan compartir colecciones mutables y admiten serialización
-    para iniciar procesos mediante multiprocessing.
-    """
+    """Agrupa parámetros inmutables de conexión, identidad, límites, grupos y rutas."""
 
     broker: ConfiguracionBroker
     proceso: IdentidadProceso
@@ -81,10 +76,9 @@ class ConfiguracionComunicacion:
         raise ErrorConfiguracion("No existe el grupo solicitado en la configuración")
 
     def participantes_entrada(self, grupo: str, entrada: str) -> int:
-        """Cuenta productores físicos, sin confundirlos con réplicas receptoras.
+        """Suma las instancias de los grupos productores de una entrada.
 
-        No implica que un EOF de cada productor baste para cerrar una entrada:
-        el coordinador deberá garantizar además el procesamiento de los datos.
+        Cuenta cada grupo una sola vez y rechaza entradas sin rutas productoras.
         """
         self.obtener_grupo(grupo)
         productores = {

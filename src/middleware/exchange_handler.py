@@ -2,7 +2,7 @@
 
 
 def declarar_exchange(canal, nombre: str) -> None:
-    """Las claves exactas permiten separar destino, entrada y modo de envío."""
+    """Declara un exchange directo y durable para enrutar por claves exactas."""
     canal.exchange_declare(
         exchange=nombre,
         exchange_type="direct",

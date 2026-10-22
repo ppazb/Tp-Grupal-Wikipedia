@@ -10,21 +10,11 @@ REGISTRO = logging.getLogger(__name__)
 
 
 class RecursosPorEjecucion:
-    """Agrupa recursos cuya vida útil termina con una ejecución local.
+    """Registra y libera recursos exclusivos por ejecución.
 
-    Cada componente registra una operación que libera su recurso y elimina su
-    estado asociado. Debe ser idempotente: si falla después de liberar una parte,
-    puede volver a invocarse. Los nombres son únicos dentro de cada ejecución.
-
-    Uso secuencial en el proceso propietario, igual que el resto del middleware.
-    Las limpiezas no pueden modificar este registro ni iniciar otra liberación.
-    No registrar conexiones, canales, colas ni otros recursos compartidos.
-
-    Actualmente el transporte no crea recursos exclusivos por ejecución. Este
-    registro permite incorporar su limpieza al agregar el estado de EOF, sin
-    introducir registros ficticios por cada mensaje ni conservar IDs terminados.
-    El armado del middleware deberá compartir este registro entre sus componentes
-    y delegar aquí liberar_ejecucion una vez completado el procesamiento local.
+    Las limpiezas deben ser idempotentes y sus nombres únicos por ejecución.
+    El registro se usa secuencialmente; las limpiezas no pueden modificarlo.
+    Los recursos compartidos quedan fuera de este registro.
     """
 
     def __init__(self):
@@ -50,12 +40,11 @@ class RecursosPorEjecucion:
         self._recursos.setdefault(id_ejecucion, {})[nombre] = liberar
 
     def liberar_ejecucion(self, id_ejecucion: str) -> None:
-        """Intenta todas las limpiezas y elimina solo los registros exitosos.
+        """Ejecuta las limpiezas de una ejecución y elimina los registros exitosos.
 
-        Una ejecución desconocida no requiere trabajo. Si falla una limpieza,
-        registra su causa y continúa con las restantes; informa el primer error
-        al finalizar. Una interrupción del proceso se propaga, conservando las
-        limpiezas que todavía no terminaron para que no se pierdan referencias.
+        Registra los fallos, intenta las demás limpiezas y eleva
+        ErrorRecursosEjecucion con la primera causa. Conserva los registros fallidos
+        o interrumpidos. Una ejecución sin registros no requiere trabajo.
         """
         self._validar_identificador(id_ejecucion)
         self._validar_disponible()

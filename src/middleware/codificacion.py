@@ -15,11 +15,7 @@ CAMPOS_ORIGEN = {"grupo", "instancia"}
 
 
 class CodificadorMensajes:
-    """Convierte entre SobreMensaje y bytes respetando el límite configurado.
-
-    No valida pertenencia a rutas ni cuenta EOF: esas responsabilidades requieren
-    la topología y el estado del middleware. Tampoco convierte EOF en FinEntrada.
-    """
+    """Codifica y decodifica sobres JSON UTF-8, validando campos y tamaño."""
 
     def __init__(self, max_bytes_por_mensaje: int):
         if type(max_bytes_por_mensaje) is not int or max_bytes_por_mensaje <= 0:
@@ -47,7 +43,7 @@ class CodificadorMensajes:
         return cuerpo
 
     def decodificar(self, cuerpo: bytes) -> SobreMensaje:
-        """Rechaza cuerpos incompletos, tipos desconocidos o contenido inválido."""
+        """Convierte bytes JSON UTF-8 en un SobreMensaje con campos y tamaño válidos."""
         if not isinstance(cuerpo, bytes):
             raise ErrorMensaje("El cuerpo del mensaje debe ser bytes")
         self._validar_tamano(cuerpo)

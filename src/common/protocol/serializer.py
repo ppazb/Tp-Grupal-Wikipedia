@@ -45,7 +45,7 @@ def deserializar_json(cuerpo: bytes) -> object:
 
 
 def _validar_valor(valor):
-    """Evita conversiones silenciosas de claves, objetos o números no finitos."""
+    """Valida tipos admitidos, claves de texto, UTF-8 y números finitos."""
     if valor is None or type(valor) in (bool, int, bytes):
         return
     if type(valor) is str:

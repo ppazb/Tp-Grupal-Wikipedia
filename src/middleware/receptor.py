@@ -1,4 +1,4 @@
-"""Recepción de datos con confirmación manual; la coordinación EOF es separada."""
+"""Recepción de lotes de datos con confirmación manual."""
 
 import logging
 from typing import Callable
@@ -17,17 +17,12 @@ REGISTRO = logging.getLogger(__name__)
 
 
 class ReceptorDatos:
-    """Entrega un lote por llamada, desde reparto o afinidad de la instancia.
+    """Recibe un lote por llamada desde las colas de reparto y afinidad.
 
-    Usa el canal exclusivamente para sus consumidores; puede compartirlo con
-    PublicadorDatos. Se utiliza dentro del contexto de ConexionBroker, que debe
-    cerrarse también ante errores. No consume controles ni genera FinEntrada:
-    esa coordinación se incorporará con EOF.
-
-    Los errores detienen la llamada y devuelven el mensaje a la cola cuando el
-    canal sigue abierto. No descarta mensajes inválidos ni reintenta: el llamador
-    debe resolver el error antes de volver a recibir. No garantiza exactamente
-    una vez: si falla el ACK, el procesamiento puede haber concluido igualmente.
+    Usa el canal exclusivamente para sus consumidores y puede compartirlo con
+    PublicadorDatos. El llamador administra el cierre de la conexión.
+    Ante un error intenta devolver la entrega sin confirmar y propaga el fallo.
+    Si falla el ACK, el procesamiento puede haber concluido igualmente.
     """
 
     def __init__(
@@ -86,12 +81,11 @@ class ReceptorDatos:
             self._error_procesamiento = None
 
     def detener_recepcion(self) -> None:
-        """Solicita una detención permanente, atendida por el bucle de Pika.
+        """Solicita cancelar los consumidores y detener la recepción permanentemente.
 
-        No interrumpe el procesador en curso ni cierra recursos. Puede solicitarse
-        desde el procesador o desde una notificación del bucle de eventos. No
-        llamar directamente desde un manejador de señal: su adaptación queda
-        para la integración de SIGTERM. No requiere crear threads.
+        Deja terminar el procesamiento en curso y mantiene abierta la conexión.
+        Se invoca desde el procesador o una notificación del bucle de eventos;
+        no debe llamarse directamente desde un manejador de señales.
         """
         if not self._detenido:
             self._conexion.programar(self._detener)

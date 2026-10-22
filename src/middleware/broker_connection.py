@@ -54,7 +54,7 @@ class ConexionBroker:
 
     @property
     def canal(self):
-        """Canal de Pika para los módulos internos de colas y exchanges."""
+        """Devuelve el canal abierto tras validar el proceso propietario y la conexión."""
         self._validar_proceso()
         self._validar_abierta()
         return self._canal
@@ -93,9 +93,7 @@ class ConexionBroker:
     def programar(self, operacion) -> None:
         """Notifica al bucle de E/S para ejecutar una operación al despachar eventos.
 
-        No crea threads ni sondea: Pika despierta su espera mediante su mecanismo
-        interno de notificación. No usar directamente desde un manejador de
-        señales, pues la biblioteca adquiere locks internos.
+        No debe llamarse desde un manejador de señales: Pika adquiere locks internos.
         """
         self._validar_proceso()
         self._validar_abierta()

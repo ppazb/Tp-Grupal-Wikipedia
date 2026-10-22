@@ -1,13 +1,4 @@
-"""Publicación confirmada de datos usando los destinos lógicos del middleware.
-
-Uso interno, con una conexión cuyo cierre administra el llamador:
-
-    with ConexionBroker(configuracion.broker) as conexion:
-        publicador = PublicadorDatos(configuracion, conexion)
-        publicador.publicar("top_n", datos)
-
-Este componente implementa la salida de datos; no implementa recepción ni EOF.
-"""
+"""Publicación confirmada de datos hacia grupos lógicos."""
 
 import hashlib
 from collections.abc import Sequence
@@ -28,18 +19,11 @@ from .topologia import TopologiaGrupos
 
 
 class PublicadorDatos:
-    """Publica secuencialmente desde el proceso dueño de la conexión.
+    """Publica lotes secuencialmente y espera la confirmación de cada envío.
 
-    Cada Datos es una unidad de publicación: una lista de registros viaja como
-    un único lote. No acumula registros, divide lotes ni introduce temporizadores.
-    Si el lote supera max_bytes_por_mensaje se rechaza antes de enviarlo.
-
-    La confirmación significa aceptación del broker, no procesamiento remoto.
-    Espera esa confirmación antes del siguiente envío: hay como máximo una
-    publicación pendiente por instancia. Un NACK se informa mediante
-    PublicacionRechazada; no implementa una espera por capacidad disponible.
-    No hace reconexiones ni reintentos automáticos. La conexión debe permanecer
-    en su contexto with también si falla la inicialización de este componente.
+    Cada Datos viaja como un mensaje sujeto al límite de tamaño configurado.
+    Un NACK eleva PublicacionRechazada, sin reintentos automáticos.
+    El llamador administra el cierre de la conexión, incluso ante errores.
     """
 
     def __init__(
@@ -69,17 +53,13 @@ class PublicadorDatos:
         self.publicar_en_ramas((EnvioDatos(grupo, datos, clave_afinidad),))
 
     def publicar_en_ramas(self, envios: Sequence[EnvioDatos]) -> None:
-        """Publica una lista acotada de salidas, en el orden recibido.
+        """Valida y publica una secuencia acotada de salidas, en el orden recibido.
 
-        Permite copiar Datos a varias ramas o enviar una proyección por rama.
-        Valida y codifica todas las salidas antes de publicar la primera. Una
-        lista vacía no publica nada. No hay atomicidad entre las publicaciones:
-        si falla una, detiene el envío y comunica las salidas ya confirmadas.
-        No se debe reintentar el conjunto completo, pues duplicaría esas salidas.
-        Si supera max_envios_por_publicacion, rechaza sin codificar ni enviar.
-        No acepta iteradores: el llamador debe construir una secuencia acotada.
-        Un rechazo remoto posterior a un éxito queda como causa de
-        ErrorPublicacionParcial. No se deben olvidar las salidas confirmadas.
+        Rechaza iteradores y secuencias que superen max_envios_por_publicacion.
+        Codifica todas las salidas antes de enviar la primera; una secuencia vacía
+        no publica nada. Si un envío falla después de otros confirmados, eleva
+        ErrorPublicacionParcial con esas salidas y la causa del fallo.
+        Repetir el conjunto puede duplicar las salidas confirmadas.
         """
         if not isinstance(envios, Sequence):
             raise ErrorMensaje("Las salidas deben ser una secuencia acotada")
@@ -146,8 +126,7 @@ class PublicadorDatos:
         except pika.exceptions.UnroutableError as error:
             raise ErrorMensaje("El mensaje no llegó a una cola destinataria") from error
         except pika.exceptions.NackError as error:
-            # reject-publish puede producir un NACK al llenarse una cola. No se
-            # oculta el rechazo ni se reintenta mediante sondeo activo o sleeps.
+            # Un NACK puede indicar una cola llena, pero no identifica la causa.
             raise PublicacionRechazada("El broker no admitió la publicación") from error
         except (pika.exceptions.AMQPConnectionError, OSError) as error:
             raise ErrorConexion("No se pudo confirmar la publicación") from error

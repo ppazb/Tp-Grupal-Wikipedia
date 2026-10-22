@@ -26,7 +26,7 @@ class DestinoPublicacion:
 
 @dataclass(frozen=True)
 class ColasRecepcion:
-    """Colas que consumirá una instancia, con datos y control separados."""
+    """Nombres de las colas de reparto, afinidad y control de una instancia."""
 
     reparto: str
     afinidad: str
@@ -34,14 +34,10 @@ class ColasRecepcion:
 
 
 class TopologiaGrupos:
-    """Planifica y declara la topología completa antes de empezar a publicar.
+    """Calcula y declara exchanges, colas y enlaces a partir de la configuración.
 
-    Recibe configuración validada por cargar_configuracion. Los nombres físicos
-    y claves solo se consultan desde los módulos de transporte, nunca del negocio.
-    Los recursos pertenecen al despliegue y se comparten entre ejecuciones.
-
-    Las colas de control pueden recibir EOF mientras aún se procesan datos en
-    otras colas. Distribuir esos controles no implementa la barrera de fin.
+    Los recursos se comparten entre ejecuciones. Las colas de datos y control
+    son independientes y no establecen un orden de recepción entre ellas.
     """
 
     def __init__(self, configuracion: ConfiguracionComunicacion):
@@ -54,14 +50,11 @@ class TopologiaGrupos:
             self._agregar_ruta(ruta)
 
     def declarar(self, conexion: ConexionBroker) -> None:
-        """Declara exchanges, luego colas y por último enlaces, sin purgar datos.
+        """Declara exchanges, colas y enlaces, conservando los recursos existentes.
 
-        Puede repetirse con los mismos parámetros desde distintos procesos. Una
-        incompatibilidad con recursos existentes se informa como ErrorTopologia.
-        El dueño de la conexión debe cerrarla, por ejemplo mediante with, también
-        si falla una declaración. No se borran recursos compartidos como rollback.
-        Cambiar la topología requiere gestionar los recursos anteriores con el
-        sistema detenido: este método no elimina colas ni enlaces de otro diseño.
+        Es repetible con los mismos parámetros. Las incompatibilidades elevan
+        ErrorTopologia; las desconexiones, ErrorConexion. El llamador administra
+        el cierre de la conexión, también si la declaración falla.
         """
         canal = conexion.canal
         recurso = "topología"

@@ -30,11 +30,9 @@ class Datos(Generic[Contenido]):
 
 @dataclass(frozen=True)
 class EnvioDatos(Generic[Contenido]):
-    """Salida lógica de una rama, sin nombres de colas ni índices de instancia.
+    """Describe una salida hacia un grupo y su clave opcional de afinidad.
 
-    Varias ramas pueden compartir Datos o recibir proyecciones diferentes. La
-    clave de afinidad, cuando existe, se aplica a todo el registro o lote.
-    Esta estructura describe una publicación local; no forma parte del sobre.
+    La clave se aplica al lote completo. Es una estructura local de publicación.
     """
 
     grupo: str
@@ -72,11 +70,10 @@ class TipoMensaje(str, Enum):
 
 @dataclass(frozen=True)
 class SobreMensaje:
-    """Metadatos y contenido de un mensaje interno, independiente del broker.
+    """Identifica la ejecución, entrada, tipo, origen y contenido de un mensaje.
 
-    DATOS transporta un valor no nulo; EOF exige contenido nulo y expresa que
-    el productor indicado en origen terminó sus aportes para esta entrada.
-    El serializador valida los campos antes de emitir o aceptar el mensaje.
+    DATOS transporta contenido no nulo. EOF transporta contenido nulo e indica
+    que el productor terminó sus aportes para esa entrada.
     """
 
     entrada: Entrada

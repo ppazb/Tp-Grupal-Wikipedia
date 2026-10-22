@@ -2,10 +2,9 @@
 
 
 def declarar_cola(canal, nombre: str, max_mensajes: int) -> None:
-    """Declara una cola compartible, acotada y sin descarte de mensajes antiguos.
+    """Declara una cola durable con límite de mensajes y rechazo de nuevos envíos.
 
-    Los recursos son estables durante el despliegue; durable no significa que
-    existan réplicas de respaldo. El límite cuenta mensajes pendientes de entrega.
+    El límite cuenta mensajes listos para entregar, excluyendo entregas sin ACK.
     """
     canal.queue_declare(
         queue=nombre,
