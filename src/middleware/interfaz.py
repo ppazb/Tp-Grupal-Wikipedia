@@ -36,6 +36,14 @@ class ErrorRecepcion(ErrorMiddleware):
     """No se pudo recibir, confirmar o cancelar la recepción."""
 
 
+class ErrorCapacidad(ErrorMiddleware):
+    """Falló el intercambio de permisos de capacidad."""
+
+
+class OperacionInterrumpida(ErrorMiddleware):
+    """Se interrumpió explícitamente una espera de comunicación."""
+
+
 class PublicacionRechazada(ErrorMiddleware):
     """La publicación excede el límite local o fue rechazada por el broker.
 
@@ -73,12 +81,12 @@ class EntradaFinalizada(ErrorMiddleware):
     """Se intentó publicar datos después de finalizar esa entrada."""
 
 
-class Middleware(ABC, Generic[Contenido]):
+class ComunicacionGrupos(ABC, Generic[Contenido]):
     """Define la comunicación por grupos para gateway y workers.
 
     Cada instancia se usa secuencialmente desde su proceso propietario.
-    La recepción no es reentrante; el procesador puede publicar y finalizar
-    salidas. Los errores de transporte se expresan como ErrorMiddleware,
+    La recepción no es reentrante; el procesador puede publicar salidas.
+    Los errores de transporte se expresan como ErrorMiddleware,
     conservando su causa.
     """
 
@@ -90,26 +98,25 @@ class Middleware(ABC, Generic[Contenido]):
         *,
         clave_afinidad: Optional[str] = None,
     ) -> None:
-        """Publica datos hacia un grupo lógico e informa rechazos de admisión.
+        """Publica datos hacia un grupo lógico, esperando capacidad disponible.
 
         Sin clave de afinidad reparte entre consumidores; con clave selecciona un
         destinatario estable durante la ejecución. El retorno indica aceptación
         del transporte, no procesamiento remoto.
-        Puede elevar PublicacionRechazada, ErrorConexion, ErrorMensaje,
-        MiddlewareCerrado o EntradaFinalizada.
+        Puede elevar PublicacionRechazada, ErrorCapacidad, ErrorConexion,
+        ErrorMensaje, MiddlewareCerrado u OperacionInterrumpida.
         """
 
     @abstractmethod
-    def recibir(self, procesar: Callable[[Evento[Contenido]], None]) -> None:
+    def recibir(self, procesar: Callable[[Datos[Contenido]], None]) -> None:
         """Espera y procesa un evento lógico del grupo receptor.
 
         Invoca procesar sincrónicamente y confirma solo si retorna correctamente;
         si falla, propaga su excepción original. Una detención permite retornar
         sin entregar otro evento. No garantiza procesamiento exactamente una vez
         ni orden global entre productores.
-        FinEntrada representa el cierre consolidado de los datos y productores
-        de una entrada. Puede elevar ErrorConexion, ErrorMensaje, ErrorRecepcion
-        o MiddlewareCerrado.
+        Los registros inválidos se notifican y los válidos se procesan. Puede
+        elevar ErrorConexion, ErrorMensaje, ErrorRecepcion o MiddlewareCerrado.
         """
 
     @abstractmethod
@@ -119,16 +126,6 @@ class Middleware(ABC, Generic[Contenido]):
         Es idempotente. Deja terminar y confirmar el procesamiento en curso.
         Las llamadas posteriores a recibir retornan sin entregar eventos.
         La integración con señales debe realizarse fuera del manejador de señal.
-        """
-
-    @abstractmethod
-    def finalizar_entrada(self, grupo: str, entrada: Entrada) -> None:
-        """Declara el fin de los aportes de este productor a un grupo y entrada.
-
-        Se invoca después del último aporte, incluso si no hubo datos. Es
-        idempotente por productor, grupo y entrada, y alcanza a todas las
-        instancias destinatarias. No implica que los demás productores terminaron.
-        Puede elevar ErrorConexion, ErrorMensaje o MiddlewareCerrado.
         """
 
     @abstractmethod
@@ -142,10 +139,44 @@ class Middleware(ABC, Generic[Contenido]):
         """
 
     @abstractmethod
+    def publicar_en_ramas(self, envios) -> None:
+        """Publica salidas acotadas en orden, esperando capacidad por cada destino.
+
+        Una espera conserva la salida actual y no repite las confirmadas. Un
+        error posterior a un envío confirmado eleva ErrorPublicacionParcial.
+        """
+
+    @abstractmethod
+    def registrar_recurso(self, id_ejecucion: str, nombre: str, liberar: Callable[[], None]) -> None:
+        """Registra una limpieza idempotente para un recurso exclusivo de la ejecución."""
+
+    @abstractmethod
+    def interrumpir(self) -> None:
+        """Interrumpe esperas de recepción y publicación sin confirmar trabajo pendiente."""
+
+    @abstractmethod
     def cerrar(self) -> None:
         """Libera los recursos locales e impide nuevas operaciones de comunicación.
 
         Repetir un cierre exitoso no tiene efecto. Si una limpieza falla, intenta
         las restantes y eleva ErrorCierre. Se invoca secuencialmente, después de
         detener la recepción; no publica EOF.
+        """
+
+
+class Middleware(ComunicacionGrupos[Contenido]):
+    """Extiende la comunicación por grupos con cierres lógicos de entradas."""
+
+    @abstractmethod
+    def recibir(self, procesar: Callable[[Evento[Contenido]], None]) -> None:
+        """Entrega datos o FinEntrada una vez consolidados los aportes y cierres."""
+
+    @abstractmethod
+    def finalizar_entrada(self, grupo: str, entrada: Entrada) -> None:
+        """Declara el fin de los aportes de este productor a un grupo y entrada.
+
+        Se invoca después del último aporte, incluso si no hubo datos. Es
+        idempotente por productor, grupo y entrada, y alcanza a todas las
+        instancias destinatarias. No implica que los demás productores terminaron.
+        Puede elevar ErrorConexion, ErrorMensaje o MiddlewareCerrado.
         """

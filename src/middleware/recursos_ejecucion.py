@@ -79,6 +79,18 @@ class RecursosPorEjecucion:
         if self._liberando:
             raise ErrorRecursosEjecucion("No se puede modificar el registro durante una limpieza")
 
+    def cerrar(self):
+        """Intenta liberar todas las ejecuciones y conserva las limpiezas fallidas."""
+        self._validar_disponible()
+        errores = []
+        for id_ejecucion in tuple(self._recursos):
+            try:
+                self.liberar_ejecucion(id_ejecucion)
+            except Exception as error:
+                errores.append(error)
+        if errores:
+            raise ErrorRecursosEjecucion("No se pudieron liberar todas las ejecuciones") from errores[0]
+
     @staticmethod
     def _validar_identificador(valor):
         if type(valor) is not str or not valor.strip():

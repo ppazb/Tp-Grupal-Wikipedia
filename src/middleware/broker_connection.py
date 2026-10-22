@@ -26,6 +26,7 @@ class ConexionBroker:
         self._proceso_propietario = os.getpid()
         self._conexion = None
         self._canal = None
+        self._canales_adicionales = []
         self._cerrada = False
 
     def abrir(self) -> None:
@@ -59,6 +60,17 @@ class ConexionBroker:
         self._validar_abierta()
         return self._canal
 
+    def crear_canal(self):
+        """Abre un canal de uso interno cuyo cierre pertenece a esta conexión."""
+        self._validar_proceso()
+        self._validar_abierta()
+        try:
+            canal = self._conexion.channel()
+            self._canales_adicionales.append(canal)
+            return canal
+        except (pika.exceptions.AMQPError, OSError) as error:
+            raise ErrorConexion("No se pudo abrir un canal adicional") from error
+
     def cerrar(self) -> None:
         """Cierra primero el canal y luego la conexión, incluso si el primero falla.
 
@@ -69,7 +81,9 @@ class ConexionBroker:
         self._validar_proceso()
         self._cerrada = True
         errores = []
-        for nombre, recurso in (("canal", self._canal), ("conexión", self._conexion)):
+        recursos = [("canal adicional", canal) for canal in self._canales_adicionales]
+        recursos.extend((("canal", self._canal), ("conexión", self._conexion)))
+        for nombre, recurso in recursos:
             if recurso is None:
                 continue
             try:
@@ -85,8 +99,12 @@ class ConexionBroker:
         if self._conexion is not None and self._conexion.is_closed:
             self._conexion = None
             self._canal = None
+            self._canales_adicionales.clear()
         elif self._canal is not None and self._canal.is_closed:
             self._canal = None
+        self._canales_adicionales = [
+            canal for canal in self._canales_adicionales if not canal.is_closed
+        ]
         if errores:
             raise ErrorCierre("Falló el cierre de recursos de RabbitMQ; ver registro") from errores[0]
 

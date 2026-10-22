@@ -1,5 +1,6 @@
-"""Recepción de lotes de datos con confirmación manual."""
+"""Recepción de lotes y devolución de capacidad al resolver cada entrega."""
 
+from functools import partial
 import logging
 from typing import Callable
 
@@ -8,6 +9,7 @@ import pika
 from ..common.protocol.dto import Datos, TipoMensaje
 from ..common.protocol.registros import Esquema
 from .broker_connection import ConexionBroker
+from .capacidad import CapacidadDatos
 from .codificacion import CodificadorMensajes
 from .configuracion import ConfiguracionComunicacion, ErrorConfiguracion
 from .interfaz import ErrorConexion, ErrorMensajeInvalido, ErrorRecepcion
@@ -19,19 +21,16 @@ REGISTRO = logging.getLogger(__name__)
 
 
 class ReceptorDatos:
-    """Recibe un lote por llamada desde las colas de reparto y afinidad.
+    """Entrega un lote por llamada y confirma tras procesar datos y notificaciones.
 
-    Usa el canal exclusivamente para sus consumidores y puede compartirlo con
-    PublicadorDatos. El llamador administra el cierre de la conexión.
-    Los rechazos de datos se notifican antes de procesar los registros válidos.
-    informar_error recibe Datos y retorna cuando la notificación fue aceptada.
-    Si falla una notificación, retiene la entrega sin ACK hasta cerrar la conexión.
-    Si falla el ACK, el procesamiento puede haber concluido igualmente.
+    El negocio se ejecuta fuera de los callbacks de Pika para poder esperar
+    capacidad de salida. informar_error retorna cuando el aviso fue aceptado.
+    Los consumidores del canal pertenecen exclusivamente a esta instancia.
     """
 
     def __init__(
         self, configuracion: ConfiguracionComunicacion, conexion: ConexionBroker,
-        *, informar_error: Callable[[Datos], None],
+        *, informar_error: Callable[[Datos], None], capacidad=None, topologia=None,
     ):
         if not callable(informar_error):
             raise ErrorConfiguracion("Se requiere un manejador de notificaciones de error")
@@ -39,40 +38,41 @@ class ReceptorDatos:
         self._conexion = conexion
         self._informar_error = informar_error
         self._codificador = CodificadorMensajes(configuracion.limites.max_bytes_por_mensaje)
-        topologia = TopologiaGrupos(configuracion)
+        if topologia is None:
+            topologia = TopologiaGrupos(configuracion)
+            topologia.declarar(conexion)
         self._colas = topologia.colas_recepcion()
         if self._colas is None:
             raise ErrorConfiguracion("El grupo local no tiene rutas de recepción")
-        topologia.declarar(conexion)
+        self._capacidad = capacidad or CapacidadDatos(conexion, topologia)
         self._recibiendo = False
         self._detenido = False
         self._consumidores = []
         self._pendiente = None
-        self._entregado = False
+        self._cola_pendiente = None
+        self._reservada = False
+        self._entrega = None
         self._error_procesamiento = None
         self._retener_pendiente = False
 
     def recibir(self, procesar: Callable[[Datos], None]) -> None:
-        """Espera una entrega y procesa sus registros válidos o resuelve su rechazo.
-
-        Confirma tras notificar los rechazos y procesar los registros válidos.
-        Las excepciones de ambos manejadores se propagan sin traducirlas.
-        No admite recepción reentrante ni compartir consumidores en este canal.
-        """
+        """Espera una entrega, procesa fuera del bucle de Pika y resuelve su ACK."""
         canal = self._conexion.canal
         if self._recibiendo:
             raise ErrorRecepcion("La recepción no admite llamadas reentrantes")
-        if self._consumidores or self._pendiente is not None:
+        if self._consumidores or self._pendiente is not None or self._cola_pendiente is not None:
             raise ErrorRecepcion("Quedaron recursos pendientes de limpieza; cerrar la conexión")
         if not callable(procesar):
             raise ErrorRecepcion("El procesador debe ser invocable")
         if self._detenido:
             return
         self._recibiendo = True
-        self._entregado = False
         self._error_procesamiento = None
         try:
-            self._consumir(canal, procesar)
+            self._esperar(canal)
+            if self._entrega is not None and not self._detenido:
+                self._procesar(canal, self._entrega, procesar)
+            self._liberar_consumidores(canal)
         except BaseException as error:
             try:
                 self._liberar_consumidores(canal)
@@ -87,49 +87,45 @@ class ReceptorDatos:
             raise
         finally:
             self._recibiendo = False
+            self._entrega = None
             self._error_procesamiento = None
 
     def detener_recepcion(self) -> None:
-        """Solicita cancelar los consumidores y detener la recepción permanentemente.
-
-        Deja terminar el procesamiento en curso y mantiene abierta la conexión.
-        Se invoca desde el procesador o una notificación del bucle de eventos;
-        no debe llamarse directamente desde un manejador de señales.
-        """
+        """Detiene nuevas entregas y deja completar el procesamiento en curso."""
         if not self._detenido:
             self._conexion.programar(self._detener)
             self._detenido = True
 
     def _detener(self):
         self._detenido = True
-        if self._recibiendo:
-            self._liberar_consumidores(self._conexion.canal)
+        self._cancelar_consumidores(self._conexion.canal)
 
-    def _consumir(self, canal, procesar):
-        # El límite global abarca reparto y afinidad en conjunto, no por cola.
+    def _esperar(self, canal):
         canal.basic_qos(
             prefetch_count=self._configuracion.limites.mensajes_sin_confirmar,
             global_qos=True,
         )
         for cola in (self._colas.reparto, self._colas.afinidad):
             consumidor = canal.basic_consume(
-                queue=cola,
-                on_message_callback=lambda canal, entrega, propiedades, cuerpo:
-                    self._procesar(canal, entrega, cuerpo, procesar),
-                auto_ack=False,
+                queue=cola, on_message_callback=partial(self._capturar, cola), auto_ack=False,
             )
             self._consumidores.append(consumidor)
         canal.start_consuming()
-        if not self._entregado and not self._detenido:
+        if self._entrega is None and not self._detenido:
             raise ErrorRecepcion("El broker canceló la recepción sin entregar datos")
-        self._liberar_consumidores(canal)
 
-    def _procesar(self, canal, entrega, cuerpo, procesar):
+    def _capturar(self, cola, canal, entrega, propiedades, cuerpo):
         self._pendiente = entrega.delivery_tag
-        if self._detenido:
-            self._liberar_consumidores(canal)
-            return
+        self._cola_pendiente = cola
+        self._reservada = self._capacidad.tiene_reserva(propiedades)
+        self._entrega = cuerpo
+        # Conserva esta entrega sin ACK y devuelve las prefetched sin procesar.
+        self._cancelar_consumidores(canal)
+
+    def _procesar(self, canal, cuerpo, procesar):
         try:
+            if not self._reservada:
+                raise ErrorMensajeInvalido("La entrega no tiene una reserva de capacidad")
             resultado = self._codificador.decodificar(cuerpo)
             sobre = resultado.sobre
             ruta = self._validar_origen(sobre)
@@ -157,12 +153,18 @@ class ReceptorDatos:
         except BaseException as error:
             self._error_procesamiento = error
             raise
-        canal.basic_ack(delivery_tag=self._pendiente)
+        self._resolver(canal, rechazar=False)
+
+    def _resolver(self, canal, *, rechazar):
+        if rechazar:
+            canal.basic_reject(delivery_tag=self._pendiente, requeue=False)
+        else:
+            canal.basic_ack(delivery_tag=self._pendiente)
         self._pendiente = None
-        self._entregado = True
-        # Cancelar devuelve también las entregas prefetched que Pika aún no
-        # despachó. Nunca se confirman mensajes que el negocio no procesó.
-        self._liberar_consumidores(canal)
+        if self._reservada:
+            self._capacidad.devolver(self._cola_pendiente)
+        self._cola_pendiente = None
+        self._reservada = False
 
     def _validar_origen(self, sobre):
         try:
@@ -183,17 +185,14 @@ class ReceptorDatos:
         )
         if esquema == Esquema.ERROR_REGISTRO or entrada.nombre == ENTRADA_ERRORES:
             return
-        datos = notificacion_rechazo(entrada, esquema, detalle, indice=indice)
         try:
-            self._informar_error(datos)
+            self._informar_error(notificacion_rechazo(entrada, esquema, detalle, indice=indice))
         except BaseException as error:
-            # Evita reentregar en un bucle un lote cuyo aviso no pudo publicarse.
             self._retener_pendiente = True
             self._error_procesamiento = error
             raise
 
     def _rechazar_mensaje(self, canal, error):
-        """Informa un mensaje inválido identificable y lo rechaza sin reencolar."""
         if error.entrada is not None and error.origen is not None:
             try:
                 self._validar_origen(error)
@@ -203,32 +202,27 @@ class ReceptorDatos:
                 self._notificar(error.entrada, error.esquema, str(error))
         else:
             REGISTRO.warning("Mensaje inválido sin ejecución identificable: %s", error)
-        canal.basic_reject(delivery_tag=self._pendiente, requeue=False)
-        self._pendiente = None
-        self._entregado = True
-        self._liberar_consumidores(canal)
+        self._resolver(canal, rechazar=True)
 
-    def _liberar_consumidores(self, canal):
-        """Intenta todas las cancelaciones aun si una falla; conserva referencias."""
+    def _cancelar_consumidores(self, canal):
         errores = []
-        if not canal.is_open:
-            # Al cerrarse el canal, RabbitMQ recupera las entregas sin ACK.
-            self._pendiente = None
-            self._consumidores.clear()
-            return
-        if self._pendiente is not None and not self._retener_pendiente:
-            try:
-                canal.basic_nack(delivery_tag=self._pendiente, requeue=True)
-                self._pendiente = None
-            except Exception as error:
-                REGISTRO.exception("No se pudo devolver el mensaje sin confirmar")
-                errores.append(error)
         for consumidor in tuple(self._consumidores):
             try:
-                canal.basic_cancel(consumer_tag=consumidor)
+                if canal.is_open:
+                    canal.basic_cancel(consumer_tag=consumidor)
                 self._consumidores.remove(consumidor)
             except Exception as error:
                 REGISTRO.exception("No se pudo cancelar el consumidor")
                 errores.append(error)
         if errores:
-            raise ErrorRecepcion("Falló la liberación de consumidores; ver registro") from errores[0]
+            raise ErrorRecepcion("Falló la cancelación de consumidores") from errores[0]
+
+    def _liberar_consumidores(self, canal):
+        """Reencola una entrega interrumpida sin devolver su permiso asociado."""
+        try:
+            if self._pendiente is not None and not self._retener_pendiente and canal.is_open:
+                canal.basic_nack(delivery_tag=self._pendiente, requeue=True)
+                self._pendiente = None
+                self._cola_pendiente = None
+        finally:
+            self._cancelar_consumidores(canal)

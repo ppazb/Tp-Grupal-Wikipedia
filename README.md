@@ -14,3 +14,13 @@ sobrescribir sus valores; por ejemplo, `WIKI_MW_BROKER_HOST`,
 `WIKI_MW_PROCESO_GRUPO` y `WIKI_MW_PROCESO_INSTANCIA`.
 El archivo actual contiene un ejemplo del tramo Q4, no la topología completa.
 El broker debe tener creados el usuario y el virtual host indicados en el archivo.
+
+Antes de iniciar los procesos, inicializar una sola vez la capacidad del despliegue,
+con las colas de datos vacías y sin consumidores:
+
+```bash
+.venv/bin/python -m src.middleware.inicializar config/config.ini
+```
+
+La inicialización rechaza repeticiones para evitar duplicar permisos. Una preparación
+incompleta requiere un despliegue limpio; no se purgan colas automáticamente.

@@ -8,6 +8,7 @@ import pika
 
 from ..common.protocol.dto import Datos, EnvioDatos, SobreMensaje, TipoMensaje
 from .broker_connection import ConexionBroker
+from .capacidad import CABECERA_CAPACIDAD, VERSION_CAPACIDAD, CapacidadDatos
 from .codificacion import CodificadorMensajes
 from .configuracion import ConfiguracionComunicacion
 from .interfaz import (
@@ -18,7 +19,7 @@ from .topologia import TopologiaGrupos
 
 
 class PublicadorDatos:
-    """Publica lotes secuencialmente y espera la confirmación de cada envío.
+    """Reserva capacidad y publica lotes secuencialmente con confirmación.
 
     Cada Datos viaja como un mensaje sujeto al límite de tamaño configurado.
     Un NACK eleva PublicacionRechazada, sin reintentos automáticos.
@@ -27,12 +28,16 @@ class PublicadorDatos:
 
     def __init__(
         self, configuracion: ConfiguracionComunicacion, conexion: ConexionBroker,
+        *, capacidad=None, topologia=None,
     ):
         self._configuracion = configuracion
         self._conexion = conexion
-        self._topologia = TopologiaGrupos(configuracion)
+        self._topologia = topologia or TopologiaGrupos(configuracion)
         self._codificador = CodificadorMensajes(configuracion.limites.max_bytes_por_mensaje)
-        self._topologia.declarar(conexion)
+        if topologia is None:
+            self._topologia.declarar(conexion)
+        self._capacidad = capacidad or CapacidadDatos(conexion, self._topologia)
+        self._publicando = False
         try:
             conexion.canal.confirm_delivery()
         except (pika.exceptions.AMQPConnectionError, OSError) as error:
@@ -60,11 +65,20 @@ class PublicadorDatos:
         ErrorPublicacionParcial con esas salidas y la causa del fallo.
         Repetir el conjunto puede duplicar las salidas confirmadas.
         """
+        if self._publicando:
+            raise ErrorMiddleware("La publicación no admite llamadas reentrantes")
         if not isinstance(envios, Sequence):
             raise ErrorMensaje("Las salidas deben ser una secuencia acotada")
         if len(envios) > self._configuracion.limites.max_envios_por_publicacion:
             raise PublicacionRechazada("La llamada supera max_envios_por_publicacion")
-        preparados = [self._preparar(envio) for envio in envios]
+        self._publicando = True
+        try:
+            preparados = [self._preparar(envio) for envio in envios]
+            self._enviar_preparados(preparados)
+        finally:
+            self._publicando = False
+
+    def _enviar_preparados(self, preparados):
         confirmadas = []
         for identidad, destino, cuerpo in preparados:
             try:
@@ -114,6 +128,7 @@ class PublicadorDatos:
         return int.from_bytes(huella, byteorder="big") % cantidad
 
     def _publicar_cuerpo(self, destino, cuerpo):
+        self._capacidad.adquirir(destino.cola)
         try:
             self._conexion.canal.basic_publish(
                 exchange=destino.exchange,
@@ -121,13 +136,16 @@ class PublicadorDatos:
                 body=cuerpo,
                 mandatory=True,
                 properties=pika.BasicProperties(
+                    headers={CABECERA_CAPACIDAD: VERSION_CAPACIDAD},
                     content_type="application/octet-stream",
                     delivery_mode=pika.spec.PERSISTENT_DELIVERY_MODE,
                 ),
             )
         except pika.exceptions.UnroutableError as error:
+            self._capacidad.devolver(destino.cola)
             raise ErrorMensaje("El mensaje no llegó a una cola destinataria") from error
         except pika.exceptions.NackError as error:
+            self._capacidad.devolver(destino.cola)
             # Un NACK puede indicar una cola llena, pero no identifica la causa.
             raise PublicacionRechazada("El broker no admitió la publicación") from error
         except (pika.exceptions.AMQPConnectionError, OSError) as error:

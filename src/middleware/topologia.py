@@ -1,6 +1,7 @@
 """Recursos y convenciones de RabbitMQ derivados de los grupos y sus rutas."""
 
 from dataclasses import dataclass
+import hashlib
 from typing import Optional
 
 import pika
@@ -22,6 +23,7 @@ class DestinoPublicacion:
 
     exchange: str
     clave: str
+    cola: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -45,6 +47,7 @@ class TopologiaGrupos:
         self._exchanges = set()
         self._colas = set()
         self._enlaces = set()
+        self._colas_datos = set()
         # Se validan todos los nombres antes de efectuar operaciones de red.
         for ruta in configuracion.rutas:
             self._agregar_ruta(ruta)
@@ -101,6 +104,24 @@ class TopologiaGrupos:
             return None
         return _colas_instancia(proceso.grupo, proceso.instancia)
 
+    def colas_datos(self):
+        """Devuelve las colas de datos del despliegue, sin duplicar las compartidas."""
+        return tuple(sorted(self._colas_datos))
+
+    def cola_capacidad(self, cola_datos):
+        """Resuelve la cola de permisos asociada a una cola de datos declarada."""
+        if cola_datos not in self._colas_datos:
+            raise ErrorConfiguracion("La cola no pertenece a la topología de datos")
+        return _nombre("capacidad", cola_datos)
+
+    def marca_capacidad(self):
+        """Identifica una topología y su límite de capacidad para validar el arranque."""
+        partes = sorted(self._colas)
+        partes.extend("|".join(enlace) for enlace in sorted(self._enlaces))
+        partes.append(str(self._configuracion.limites.max_mensajes_por_cola))
+        huella = hashlib.sha256("\n".join(partes).encode("utf-8")).hexdigest()
+        return _nombre("capacidad", "lista", huella)
+
     def _buscar_ruta(self, grupo, entrada):
         return self._configuracion.obtener_ruta(
             self._configuracion.proceso.grupo, grupo, entrada,
@@ -116,6 +137,9 @@ class TopologiaGrupos:
             colas = _colas_instancia(grupo.nombre, instancia)
             afinidad = _destino_datos(ruta, instancia)
             self._colas.update((colas.reparto, colas.afinidad, colas.control))
+            self._colas_datos.update((colas.reparto, colas.afinidad))
+            self.cola_capacidad(colas.reparto)
+            self.cola_capacidad(colas.afinidad)
             # La cola de reparto es única por grupo. Cada control, en cambio,
             # alcanza a todas las instancias, incluso si no recibieron datos.
             self._enlaces.update((
@@ -146,6 +170,10 @@ def _destino_datos(ruta, instancia=None):
     return DestinoPublicacion(
         exchange=_nombre("exchange", ruta.origen, "datos"),
         clave=_nombre(ruta.destino, ruta.entrada, *modo),
+        cola=(
+            _nombre("cola", ruta.destino, "reparto") if instancia is None
+            else _nombre("cola", ruta.destino, "afinidad", instancia)
+        ),
     )
 
 

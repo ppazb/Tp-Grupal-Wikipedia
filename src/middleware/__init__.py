@@ -13,10 +13,12 @@ from .configuracion import (
     Ruta,
 )
 from .interfaz import (
+    ComunicacionGrupos,
     Datos,
     Entrada,
     EntradaFinalizada,
     ErrorCierre,
+    ErrorCapacidad,
     ErrorConexion,
     ErrorMensaje,
     ErrorMensajeInvalido,
@@ -30,5 +32,6 @@ from .interfaz import (
     Middleware,
     MiddlewareCerrado,
     PublicacionRechazada,
+    OperacionInterrumpida,
 )
 from .recursos_ejecucion import RecursosPorEjecucion
