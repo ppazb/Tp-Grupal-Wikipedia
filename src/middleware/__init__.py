@@ -22,6 +22,7 @@ from .interfaz import (
     ErrorMiddleware,
     ErrorPublicacionParcial,
     ErrorRecepcion,
+    ErrorRecursosEjecucion,
     ErrorTopologia,
     Evento,
     FinEntrada,
@@ -29,3 +30,4 @@ from .interfaz import (
     MiddlewareCerrado,
     PublicacionRechazada,
 )
+from .recursos_ejecucion import RecursosPorEjecucion

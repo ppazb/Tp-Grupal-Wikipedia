@@ -53,6 +53,10 @@ class ErrorCierre(ErrorMiddleware):
     """No se pudieron liberar todos los recursos del middleware."""
 
 
+class ErrorRecursosEjecucion(ErrorMiddleware):
+    """No se pudo registrar o liberar un recurso exclusivo de una ejecución."""
+
+
 class MiddlewareCerrado(ErrorMiddleware):
     """Se intentó operar sobre una instancia cerrada."""
 
@@ -138,6 +142,21 @@ class Middleware(ABC, Generic[Contenido]):
         propaga y consolida los cierres según la topología, incluyendo todas las
         réplicas destinatarias; no requiere una clave de afinidad del negocio.
         Puede elevar ErrorConexion, ErrorMensaje o MiddlewareCerrado.
+        """
+
+    @abstractmethod
+    def liberar_ejecucion(self, id_ejecucion: str) -> None:
+        """Libera el estado y los recursos locales exclusivos de una ejecución.
+
+        El llamador debe haber establecido que terminó su procesamiento, incluidas
+        las confirmaciones y salidas pendientes. No equivale a EOF ni cancela una
+        ejecución activa. No purga mensajes ni elimina colas, exchanges, canales
+        o conexiones compartidos con otras ejecuciones.
+
+        Repetir una liberación exitosa no tiene efecto. Ante fallos, intenta las
+        demás limpiezas y conserva los recursos pendientes para otro intento;
+        eleva ErrorRecursosEjecucion. No guarda un historial de ejecuciones
+        terminadas ni impide por sí sola la llegada de mensajes tardíos.
         """
 
     @abstractmethod
