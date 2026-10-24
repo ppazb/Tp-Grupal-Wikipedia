@@ -9,7 +9,7 @@ python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
 ```
 
-La configuración está en `config/config.ini`. Las variables `WIKI_MW_` permiten
+La configuración está en `config/config.json`. Las variables `WIKI_MW_` permiten
 sobrescribir sus valores; por ejemplo, `WIKI_MW_BROKER_HOST`,
 `WIKI_MW_PROCESO_GRUPO` y `WIKI_MW_PROCESO_INSTANCIA`.
 El archivo actual contiene un ejemplo del tramo Q4, no la topología completa.
@@ -19,7 +19,7 @@ Antes de iniciar los procesos, inicializar una sola vez la capacidad del desplie
 con las colas de datos vacías y sin consumidores:
 
 ```bash
-.venv/bin/python -m src.middleware.inicializar config/config.ini
+.venv/bin/python -m src.middleware.inicializar config/config.json
 ```
 
 La inicialización rechaza repeticiones para evitar duplicar permisos. Una preparación

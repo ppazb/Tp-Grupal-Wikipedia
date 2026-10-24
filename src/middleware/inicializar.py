@@ -67,7 +67,7 @@ def _comprobar_sin_inicializar(conexion):
 def main():
     """Carga la configuración indicada y prepara el despliegue antes de los workers."""
     argumentos = argparse.ArgumentParser(description="Inicializar permisos de comunicación")
-    argumentos.add_argument("configuracion", help="Ruta al archivo INI del despliegue")
+    argumentos.add_argument("configuracion", help="Ruta al archivo JSON del despliegue")
     opciones = argumentos.parse_args()
     inicializar_capacidad(cargar_configuracion(opciones.configuracion))
 

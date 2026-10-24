@@ -5,4 +5,4 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY src ./src
 COPY tests ./tests
-CMD ["python", "-m", "unittest", "-v", "tests.middleware.test_escenarios"]
+CMD ["python", "-m", "unittest", "-v", "tests.middleware.test_configuracion", "tests.middleware.test_escenarios"]

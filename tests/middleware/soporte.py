@@ -16,7 +16,7 @@ from src.middleware.rabbitmq import MiddlewareRabbitMQ
 PLAZO_ESCENARIO = 45
 PLAZO_PROCESO = 10
 PLAZO_BLOQUEO = 0.2
-CONFIGURACION = Path(__file__).with_name('config.ini')
+CONFIGURACION = Path(__file__).with_name('config.json')
 
 
 def configurar(virtual_host, grupo='ocurrencias', instancia=0):

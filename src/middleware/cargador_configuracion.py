@@ -1,6 +1,6 @@
-"""Lectura y validación de comunicación desde INI y variables de entorno."""
+"""Lectura y validación de comunicación desde JSON y variables de entorno."""
 
-import configparser
+import json
 import os
 from pathlib import Path
 import re
@@ -34,19 +34,19 @@ CAMPOS_POR_SECCION = {
         "max_envios_por_publicacion",
     ),
 }
-CAMPOS_RUTA = ("origen", "destino", "entrada", "esquemas")
+CAMPOS_RUTA = ("nombre", "origen", "destino", "entrada", "esquemas")
 
 
 def cargar_configuracion(ruta: Union[str, Path]) -> ConfiguracionComunicacion:
-    """Carga y valida la configuración de comunicación desde un INI UTF-8.
+    """Carga y valida la configuración de comunicación desde un JSON UTF-8.
 
     Las variables WIKI_MW_ del proceso sobrescriben los campos admitidos.
     Eleva ErrorConfiguracion ante errores de lectura, valores o topología.
     """
     lector = _leer_archivo(ruta)
     _validar_secciones(lector)
-    _aplicar_entorno(lector, dict(os.environ))
     _validar_campos(lector)
+    _aplicar_entorno(lector, dict(os.environ))
     configuracion = ConfiguracionComunicacion(
         broker=_leer_broker(lector["broker"]),
         proceso=IdentidadProceso(
@@ -62,49 +62,62 @@ def cargar_configuracion(ruta: Union[str, Path]) -> ConfiguracionComunicacion:
             for nombre in lector["grupos"]
         ),
         rutas=tuple(
-            _leer_ruta(lector[seccion])
-            for seccion in lector.sections() if seccion.startswith("ruta:")
+            _leer_ruta(ruta) for ruta in lector["rutas"]
         ),
     )
     _validar_topologia(configuracion)
     return configuracion
 
 
+def _objeto_sin_duplicados(pares):
+    objeto = {}
+    for clave, valor in pares:
+        if clave in objeto:
+            raise ErrorConfiguracion("El JSON contiene claves duplicadas")
+        objeto[clave] = valor
+    return objeto
+
+
+def _rechazar_constante(valor):
+    raise ErrorConfiguracion("El JSON no admite NaN ni infinitos")
+
+
 def _leer_archivo(ruta):
-    lector = configparser.ConfigParser(interpolation=None, empty_lines_in_values=False)
-    lector.optionxform = str
     try:
         with open(ruta, encoding="utf-8") as archivo:
-            lector.read_file(archivo)
+            return json.load(
+                archivo, object_pairs_hook=_objeto_sin_duplicados,
+                parse_constant=_rechazar_constante,
+            )
     except (OSError, UnicodeError) as error:
         raise ErrorConfiguracion("No se pudo leer el archivo de configuración UTF-8") from error
-    except configparser.Error:
-        # ConfigParser incluye líneas originales en sus errores. Se omite esa
-        # causa para que una configuración mal escrita no exponga credenciales.
-        raise ErrorConfiguracion(
-            "Sintaxis INI inválida o secciones/opciones duplicadas"
-        ) from None
-    return lector
+    except json.JSONDecodeError:
+        # No se incluye el contenido del archivo para evitar exponer credenciales.
+        raise ErrorConfiguracion("Sintaxis JSON inválida") from None
+
+
+def _comprobar_campos(objeto, esperados, contexto):
+    if type(objeto) is not dict:
+        raise ErrorConfiguracion(f"{contexto} debe ser un objeto JSON")
+    faltantes = set(esperados) - objeto.keys()
+    if faltantes:
+        raise ErrorConfiguracion(f"Faltan campos en {contexto}: {', '.join(sorted(faltantes))}")
+    if objeto.keys() - set(esperados):
+        raise ErrorConfiguracion(f"Hay campos desconocidos en {contexto}")
 
 
 def _validar_secciones(lector):
-    if lector.defaults():
-        raise ErrorConfiguracion("No se admiten opciones en DEFAULT")
-    obligatorias = set(CAMPOS_POR_SECCION) | {"grupos"}
-    faltantes = obligatorias - set(lector.sections())
-    if faltantes:
-        raise ErrorConfiguracion(f"Faltan secciones: {', '.join(sorted(faltantes))}")
-    for seccion in lector.sections():
-        if seccion not in obligatorias and not seccion.startswith("ruta:"):
-            raise ErrorConfiguracion("Se encontró una sección desconocida")
-    if not lector["grupos"]:
-        raise ErrorConfiguracion("Debe declararse al menos un grupo")
-    if not any(seccion.startswith("ruta:") for seccion in lector.sections()):
-        raise ErrorConfiguracion("Debe declararse al menos una ruta")
+    _comprobar_campos(lector, (*CAMPOS_POR_SECCION, "grupos", "rutas"), "configuración")
+    if type(lector["grupos"]) is not dict or not lector["grupos"]:
+        raise ErrorConfiguracion("grupos debe ser un objeto no vacío")
+    if type(lector["rutas"]) is not list or not lector["rutas"]:
+        raise ErrorConfiguracion("rutas debe ser una lista no vacía")
+    for nombre in lector["grupos"]:
+        _validar_identificador(nombre, "grupos")
 
 
 def _aplicar_entorno(lector, entorno):
-    # Cada variable permitida apunta a una sección y un campo del INI.
+    # Cada variable permitida apunta a una sección y un campo de la configuración.
     destinos = {
         f"{PREFIJO_ENTORNO}{seccion.upper()}_{campo.upper()}": (seccion, campo)
         for seccion, campos in CAMPOS_POR_SECCION.items() for campo in campos
@@ -119,43 +132,45 @@ def _aplicar_entorno(lector, entorno):
         if variable not in destinos:
             raise ErrorConfiguracion(f"Variable de entorno desconocida: {variable}")
         seccion, campo = destinos[variable]
+        campos_texto = {"host", "usuario", "contrasena", "virtual_host", "grupo"}
+        if seccion == "grupos" or campo not in campos_texto:
+            try:
+                valor = int(valor)
+            except ValueError:
+                raise ErrorConfiguracion(f"{variable} debe ser un entero") from None
         lector[seccion][campo] = valor
 
 
 def _validar_campos(lector):
-    for seccion in lector.sections():
-        if seccion == "grupos":
-            continue
-        esperados = set(CAMPOS_POR_SECCION.get(seccion, CAMPOS_RUTA))
-        presentes = set(lector[seccion])
-        faltantes = esperados - presentes
-        if faltantes:
-            raise ErrorConfiguracion(
-                f"Faltan campos en [{seccion}]: {', '.join(sorted(faltantes))}"
-            )
-        if presentes - esperados:
-            raise ErrorConfiguracion(f"Hay campos desconocidos en [{seccion}]")
+    for seccion, campos in CAMPOS_POR_SECCION.items():
+        _comprobar_campos(lector[seccion], campos, seccion)
+    nombres = set()
+    for ruta in lector["rutas"]:
+        _comprobar_campos(ruta, CAMPOS_RUTA, "ruta")
+        nombre = _identificador(ruta, "nombre")
+        if nombre in nombres:
+            raise ErrorConfiguracion("Hay nombres de ruta repetidos")
+        nombres.add(nombre)
 
 
 def _texto(seccion, campo):
     valor = seccion[campo]
-    if not valor.strip() or any(caracter in valor for caracter in ("\n", "\r", "\x00")):
-        raise ErrorConfiguracion(f"[{seccion.name}] {campo} debe contener texto no vacío de una línea")
+    if type(valor) is not str or not valor.strip() or any(caracter in valor for caracter in ("\n", "\r", "\x00")):
+        raise ErrorConfiguracion(f"{campo} debe contener texto no vacío de una línea")
     return valor
 
 
 def _entero(seccion, campo, minimo=1, maximo=None):
-    try:
-        valor = int(seccion[campo])
-    except ValueError:
-        raise ErrorConfiguracion(f"[{seccion.name}] {campo} debe ser un entero") from None
+    valor = seccion[campo]
+    if type(valor) is not int:
+        raise ErrorConfiguracion(f"{campo} debe ser un entero JSON")
     if valor < minimo or (maximo is not None and valor > maximo):
-        raise ErrorConfiguracion(f"[{seccion.name}] {campo} está fuera del rango permitido")
+        raise ErrorConfiguracion(f"{campo} está fuera del rango permitido")
     return valor
 
 
 def _validar_identificador(valor, campo):
-    if not PATRON_IDENTIFICADOR.fullmatch(valor):
+    if type(valor) is not str or not PATRON_IDENTIFICADOR.fullmatch(valor):
         raise ErrorConfiguracion(
             f"{campo} debe comenzar con una letra minúscula y usar letras ASCII, números o guion bajo"
         )
@@ -163,7 +178,7 @@ def _validar_identificador(valor, campo):
 
 
 def _identificador(seccion, campo):
-    return _validar_identificador(_texto(seccion, campo), f"[{seccion.name}] {campo}")
+    return _validar_identificador(_texto(seccion, campo), campo)
 
 
 def _leer_broker(seccion):
@@ -194,7 +209,7 @@ def _leer_limites(seccion):
 
 def _leer_ruta(seccion):
     return Ruta(
-        nombre=_validar_identificador(seccion.name.partition(":")[2], "nombre de ruta"),
+        nombre=_identificador(seccion, "nombre"),
         origen=_identificador(seccion, "origen"),
         destino=_identificador(seccion, "destino"),
         entrada=_identificador(seccion, "entrada"),
@@ -203,8 +218,10 @@ def _leer_ruta(seccion):
 
 
 def _leer_esquemas(seccion):
-    """Lee nombres de esquemas separados por comas, sin vacíos ni duplicados."""
-    nombres = tuple(nombre.strip() for nombre in _texto(seccion, "esquemas").split(","))
+    """Lee una lista no vacía de nombres de esquemas sin duplicados."""
+    nombres = seccion["esquemas"]
+    if type(nombres) is not list or not nombres or any(type(nombre) is not str for nombre in nombres):
+        raise ErrorConfiguracion("esquemas debe ser una lista no vacía de textos")
     if len(set(nombres)) != len(nombres):
         raise ErrorConfiguracion("La ruta contiene esquemas repetidos")
     try:
