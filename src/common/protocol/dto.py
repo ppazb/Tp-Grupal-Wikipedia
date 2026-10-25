@@ -37,9 +37,9 @@ class EnvioDatos(Generic[Contenido]):
     La clave se aplica al lote completo. Es una estructura local de publicación.
     """
 
-    grupo: str
+    grupo: str #topic
     datos: Datos[Contenido]
-    clave_afinidad: Optional[str] = None
+    clave_afinidad: Optional[str] = None #routing key
 
 
 @dataclass(frozen=True)
@@ -60,7 +60,7 @@ class IdentidadProceso:
     """Instancia de un grupo de trabajo, numerada desde cero; no es un PID."""
 
     grupo: str
-    instancia: int
+    instancia: int #client_id
 
 
 class TipoMensaje(IntEnum):
