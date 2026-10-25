@@ -1,18 +1,15 @@
 """Codificación del sobre binario y separación de rechazos por registro."""
 
 from ..common.protocol.dto import (
-    Entrada, IdentidadProceso, ResultadoDecodificacion, SobreMensaje, TipoMensaje,
+    CierreProductor, Entrada, IdentidadProceso, ResultadoDecodificacion, SobreMensaje, TipoMensaje,
 )
 from ..common.protocol.primitivas import (
-    BYTES_U8, BYTES_U16, BYTES_U32, ErrorSerializacion, EscritorBinario, LectorBinario,
+    BYTES_U8, BYTES_U16, BYTES_U32, BYTES_U64, ErrorSerializacion, EscritorBinario, LectorBinario,
 )
 from ..common.protocol.registros import Esquema, Lote
 from ..common.protocol.serializer import escribir_lote, leer_lote
 from .configuracion import ErrorConfiguracion
 from .interfaz import ErrorMensaje, ErrorMensajeInvalido
-
-
-VERSION_PROTOCOLO = 1
 
 
 class CodificadorMensajes:
@@ -35,7 +32,6 @@ class CodificadorMensajes:
             raise ErrorMensaje(str(error)) from error
 
     def _escribir(self, escritor, sobre):
-        escritor.entero(VERSION_PROTOCOLO, BYTES_U8)
         escritor.entero(sobre.tipo.value, BYTES_U8)
         escritor.texto(sobre.entrada.id_ejecucion)
         escritor.texto(sobre.entrada.nombre)
@@ -44,6 +40,8 @@ class CodificadorMensajes:
         inicio = escritor.iniciar_bloque()
         if sobre.tipo is TipoMensaje.DATOS:
             escribir_lote(escritor, sobre.contenido)
+        else:
+            escritor.entero(sobre.contenido.total_lotes, BYTES_U64)
         escritor.terminar_bloque(inicio)
 
     def decodificar(self, cuerpo: bytes) -> ResultadoDecodificacion:
@@ -53,8 +51,6 @@ class CodificadorMensajes:
         entrada = origen = esquema = None
         try:
             lector = LectorBinario(cuerpo)
-            if lector.entero(BYTES_U8) != VERSION_PROTOCOLO:
-                raise ErrorSerializacion("Versión de protocolo desconocida")
             tipo = TipoMensaje(lector.entero(BYTES_U8))
             id_ejecucion = lector.texto()
             nombre = lector.texto()
@@ -68,8 +64,9 @@ class CodificadorMensajes:
             contenido = LectorBinario(lector.bloque())
             lector.finalizar()
             if tipo is TipoMensaje.EOF:
+                lote = CierreProductor(contenido.entero(BYTES_U64))
                 contenido.finalizar()
-                lote, errores = None, ()
+                errores = ()
             else:
                 esquema = contenido.entero(BYTES_U16)
                 lote, errores = leer_lote(contenido, Esquema(esquema))
@@ -106,7 +103,7 @@ def _validar_sobre(sobre):
         raise ErrorMensaje("El sobre debe identificar origen y tipo de mensaje")
     for texto in (sobre.entrada.id_ejecucion, sobre.entrada.nombre, sobre.origen.grupo):
         _validar_texto(texto)
-    if sobre.tipo is TipoMensaje.EOF and sobre.contenido is not None:
-        raise ErrorMensaje("Un EOF debe tener contenido nulo")
+    if sobre.tipo is TipoMensaje.EOF and type(sobre.contenido) is not CierreProductor:
+        raise ErrorMensaje("Un EOF debe contener un CierreProductor")
     if sobre.tipo is TipoMensaje.DATOS and type(sobre.contenido) is not Lote:
         raise ErrorMensaje("Un mensaje de datos debe contener un Lote")

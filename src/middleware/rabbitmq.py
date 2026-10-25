@@ -42,6 +42,7 @@ class MiddlewareRabbitMQ(ComunicacionGrupos[Lote]):
         self._interrumpida = False
         self._receptor = None
         self._capacidad = None
+        self._publicador = None
         topologia = TopologiaGrupos(configuracion)
         notificador = self._resolver_notificador(configuracion, informar_error, topologia)
         try:
@@ -95,6 +96,19 @@ class MiddlewareRabbitMQ(ComunicacionGrupos[Lote]):
         finally:
             self._publicando = False
 
+    def finalizar_entrada(self, grupo, entrada):
+        """Publica el cierre del productor después de sus lotes confirmados."""
+        self._validar_abierta()
+        if self._interrumpida:
+            raise OperacionInterrumpida("La comunicación fue interrumpida")
+        if self._publicando:
+            raise ErrorMiddleware("No se puede cerrar una entrada durante una publicación")
+        self._publicando = True
+        try:
+            self._publicador.finalizar_entrada(grupo, entrada)
+        finally:
+            self._publicando = False
+
     def recibir(self, procesar):
         """Procesa una entrega y confirma después de completar sus salidas."""
         self._validar_abierta()
@@ -136,6 +150,7 @@ class MiddlewareRabbitMQ(ComunicacionGrupos[Lote]):
         if self._recibiendo or self._publicando:
             raise ErrorRecursosEjecucion("No se puede liberar una ejecución durante una operación")
         self._recursos.liberar_ejecucion(id_ejecucion)
+        self._publicador.liberar_ejecucion(id_ejecucion)
 
     def cerrar(self):
         """Intenta todas las limpiezas y el cierre de canales y conexión."""
@@ -147,6 +162,8 @@ class MiddlewareRabbitMQ(ComunicacionGrupos[Lote]):
         self._cerrando = True
         errores = []
         try:
+            if self._publicador is not None:
+                self._publicador.descartar_seguimiento()
             for liberar in (self._recursos.cerrar, self._conexion.cerrar):
                 try:
                     liberar()

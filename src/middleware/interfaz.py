@@ -180,7 +180,9 @@ class Middleware(ComunicacionGrupos[Contenido]):
         """Declara el fin de los aportes de este productor a un grupo y entrada.
 
         Se invoca después del último aporte, incluso si no hubo datos. Es
-        idempotente por productor, grupo y entrada, y alcanza a todas las
-        instancias destinatarias. No implica que los demás productores terminaron.
+        idempotente tras confirmación por productor, grupo y entrada. Anuncia el
+        total de lotes a la coordinadora del destino y bloquea nuevos aportes.
+        No implica que los demás productores terminaron ni que los datos ya
+        fueron procesados.
         Puede elevar ErrorConexion, ErrorMensaje o MiddlewareCerrado.
         """

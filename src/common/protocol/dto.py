@@ -71,17 +71,24 @@ class TipoMensaje(IntEnum):
 
 
 @dataclass(frozen=True)
+class CierreProductor:
+    """Cantidad final de lotes publicados por un productor hacia una entrada."""
+
+    total_lotes: int
+
+
+@dataclass(frozen=True)
 class SobreMensaje:
     """Identifica la ejecución, entrada, tipo, origen y contenido de un mensaje.
 
-    DATOS transporta un Lote. EOF transporta contenido nulo e indica
+    DATOS transporta un Lote. EOF transporta un CierreProductor e indica
     que el productor terminó sus aportes para esa entrada.
     """
 
     entrada: Entrada
     tipo: TipoMensaje
     origen: IdentidadProceso
-    contenido: Optional[Lote]
+    contenido: Union[Lote, CierreProductor]
 
 
 @dataclass(frozen=True)
@@ -94,4 +101,4 @@ class ResultadoDecodificacion:
     @property
     def registros_validos(self):
         """Devuelve los registros aceptados; un EOF no contiene registros."""
-        return self.sobre.contenido.registros if self.sobre.contenido is not None else ()
+        return self.sobre.contenido.registros if self.sobre.tipo is TipoMensaje.DATOS else ()

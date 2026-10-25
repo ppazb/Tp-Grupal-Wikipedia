@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import patch
 from uuid import uuid4
 
-from src.common.protocol.dto import EnvioDatos, SobreMensaje, TipoMensaje
+from src.common.protocol.dto import CierreProductor, EnvioDatos, SobreMensaje, TipoMensaje
 from src.common.protocol.registros import CodigoError
 from src.middleware.broker_connection import ConexionBroker
 from src.middleware.capacidad import CABECERA_CAPACIDAD, VERSION_CAPACIDAD, CapacidadDatos
@@ -246,14 +246,14 @@ class EscenariosMiddleware(unittest.TestCase):
         frecuencia = self.abrir('frecuencias')
         gateway = self.abrir('gateway_resultados')
         productor = self.abrir('ocurrencias')
-        self.inyectar(b'\x01')
+        self.inyectar(bytes([TipoMensaje.DATOS.value]))
         frecuencia.recibir(lambda datos: self.fail('Procesó un sobre truncado'))
-        self.inyectar(b'\x01', reservar=False)
+        self.inyectar(bytes([TipoMensaje.DATOS.value]), reservar=False)
         frecuencia.recibir(lambda datos: self.fail('Procesó un mensaje sin reserva'))
         entrada = palabras('cliente_A', 'control').entrada
         codificador = CodificadorMensajes(self.configuracion.limites.max_bytes_por_mensaje)
         self.inyectar(codificador.codificar(SobreMensaje(
-            entrada, TipoMensaje.EOF, self.configuracion.proceso, None,
+            entrada, TipoMensaje.EOF, self.configuracion.proceso, CierreProductor(0),
         )))
         frecuencia.recibir(lambda datos: self.fail('Procesó EOF como datos'))
         error = self.recibir(gateway).contenido.registros[0]
