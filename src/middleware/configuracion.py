@@ -89,6 +89,10 @@ class ConfiguracionComunicacion:
 
         Cuenta cada grupo una sola vez y rechaza entradas sin rutas productoras.
         """
+        return len(self.productores_entrada(grupo, entrada))
+
+    def productores_entrada(self, grupo: str, entrada: str) -> frozenset[IdentidadProceso]:
+        """Identifica las instancias productoras de una entrada sin duplicarlas."""
         self.obtener_grupo(grupo)
         productores = {
             ruta.origen for ruta in self.rutas
@@ -96,4 +100,8 @@ class ConfiguracionComunicacion:
         }
         if not productores:
             raise ErrorConfiguracion("La entrada solicitada no tiene rutas productoras")
-        return sum(self.obtener_grupo(origen).instancias for origen in productores)
+        return frozenset(
+            IdentidadProceso(origen, instancia)
+            for origen in productores
+            for instancia in range(self.obtener_grupo(origen).instancias)
+        )

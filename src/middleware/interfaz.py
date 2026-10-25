@@ -36,6 +36,10 @@ class ErrorRecepcion(ErrorMiddleware):
     """No se pudo recibir, confirmar o cancelar la recepción."""
 
 
+class ErrorSeguimientoEntrada(ErrorMiddleware):
+    """Una operación contradice los participantes, cierres o contadores de una entrada."""
+
+
 class ErrorCapacidad(ErrorMiddleware):
     """Falló el intercambio de permisos de capacidad."""
 
