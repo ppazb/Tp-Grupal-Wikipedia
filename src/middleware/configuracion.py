@@ -33,6 +33,8 @@ class LimitesComunicacion:
     Los cuerpos preparados ocupan como máximo max_envios_por_publicacion por
     max_bytes_por_mensaje, sin contar objetos del llamador ni temporales de codificación.
     mensajes_sin_confirmar limita entregas por canal receptor, no por grupo.
+    max_mensajes_por_cola limita las colas de datos y sus permisos; las colas de
+    control no tienen ese límite para permitir avanzar a las barreras de cierre.
     """
 
     mensajes_sin_confirmar: int

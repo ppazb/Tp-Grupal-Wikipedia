@@ -173,7 +173,11 @@ class Middleware(ComunicacionGrupos[Contenido]):
 
     @abstractmethod
     def recibir(self, procesar: Callable[[Evento[Contenido]], None]) -> None:
-        """Entrega datos o FinEntrada una vez consolidados los aportes y cierres."""
+        """Entrega datos; entrega FinEntrada al consolidar los aportes y cierres.
+
+        Todas las réplicas deben recibir, incluso sin datos propios, para atender
+        la coordinación. FinEntrada cierra una dependencia, no toda la ejecución.
+        """
 
     @abstractmethod
     def finalizar_entrada(self, grupo: str, entrada: Entrada) -> None:

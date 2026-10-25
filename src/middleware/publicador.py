@@ -125,6 +125,22 @@ class PublicadorDatos:
             if identidad[1].id_ejecucion != id_ejecucion
         }
 
+    def publicar_control(self, tipo, entrada, contenido, instancia=None):
+        """Publica coordinación del grupo local sin reservar capacidad de datos."""
+        if tipo not in (TipoMensaje.PREPARAR_CIERRE, TipoMensaje.AVANCE_REPLICA, TipoMensaje.FIN_ENTRADA):
+            raise ErrorMensaje("El tipo no corresponde a coordinación entre réplicas")
+        if self._publicando:
+            raise ErrorMiddleware("La publicación no admite llamadas reentrantes")
+        cuerpo = self._codificador.codificar(SobreMensaje(
+            entrada, tipo, self._configuracion.proceso, contenido,
+        ))
+        destino = self._topologia.destino_coordinacion(entrada.nombre, instancia)
+        self._publicando = True
+        try:
+            self._publicar_cuerpo(destino, cuerpo, reservar_capacidad=False)
+        finally:
+            self._publicando = False
+
     def descartar_seguimiento(self):
         """Libera todos los contadores locales al cerrar el middleware, sin emitir EOF."""
         self._salidas.clear()

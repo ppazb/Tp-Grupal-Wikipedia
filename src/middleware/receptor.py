@@ -1,4 +1,4 @@
-"""Recepción de lotes y devolución de capacidad al resolver cada entrega."""
+"""Recepción de datos y controles con confirmación y devolución de capacidad."""
 
 from functools import partial
 import logging
@@ -6,7 +6,7 @@ from typing import Callable
 
 import pika
 
-from ..common.protocol.dto import Datos, TipoMensaje
+from ..common.protocol.dto import Datos, Evento, TipoMensaje
 from ..common.protocol.registros import Esquema
 from .broker_connection import ConexionBroker
 from .capacidad import CapacidadDatos
@@ -21,22 +21,24 @@ REGISTRO = logging.getLogger(__name__)
 
 
 class ReceptorDatos:
-    """Entrega un lote por llamada y confirma tras procesar datos y notificaciones.
+    """Entrega datos o un cierre por llamada y confirma después de procesarlos.
 
     El negocio se ejecuta fuera de los callbacks de Pika para poder esperar
     capacidad de salida. informar_error retorna cuando el aviso fue aceptado.
+    Los controles de coordinación se atienden internamente entre entregas.
     Los consumidores del canal pertenecen exclusivamente a esta instancia.
     """
 
     def __init__(
         self, configuracion: ConfiguracionComunicacion, conexion: ConexionBroker,
-        *, informar_error: Callable[[Datos], None], capacidad=None, topologia=None,
+        *, informar_error: Callable[[Datos], None], capacidad=None, topologia=None, coordinacion=None,
     ):
         if not callable(informar_error):
             raise ErrorConfiguracion("Se requiere un manejador de notificaciones de error")
         self._configuracion = configuracion
         self._conexion = conexion
         self._informar_error = informar_error
+        self._coordinacion = coordinacion
         self._codificador = CodificadorMensajes(configuracion.limites.max_bytes_por_mensaje)
         if topologia is None:
             topologia = TopologiaGrupos(configuracion)
@@ -55,8 +57,8 @@ class ReceptorDatos:
         self._error_procesamiento = None
         self._retener_pendiente = False
 
-    def recibir(self, procesar: Callable[[Datos], None]) -> None:
-        """Espera una entrega, procesa fuera del bucle de Pika y resuelve su ACK."""
+    def recibir(self, procesar: Callable[[Evento], None]) -> None:
+        """Atiende controles internos hasta entregar datos, un cierre o detenerse."""
         canal = self._conexion.canal
         if self._recibiendo:
             raise ErrorRecepcion("La recepción no admite llamadas reentrantes")
@@ -69,10 +71,19 @@ class ReceptorDatos:
         self._recibiendo = True
         self._error_procesamiento = None
         try:
-            self._esperar(canal)
-            if self._entrega is not None and not self._detenido:
-                self._procesar(canal, self._entrega, procesar)
-            self._liberar_consumidores(canal)
+            while not self._detenido:
+                self._entrega = None
+                self._esperar(canal)
+                entregado = False
+                if self._entrega is not None and not self._detenido:
+                    if self._cola_pendiente == self._colas.control:
+                        entregado = self._procesar_control(canal, self._entrega, procesar)
+                    else:
+                        self._procesar(canal, self._entrega, procesar)
+                        entregado = True
+                self._liberar_consumidores(canal)
+                if entregado:
+                    break
         except BaseException as error:
             try:
                 self._liberar_consumidores(canal)
@@ -105,7 +116,10 @@ class ReceptorDatos:
             prefetch_count=self._configuracion.limites.mensajes_sin_confirmar,
             global_qos=True,
         )
-        for cola in (self._colas.reparto, self._colas.afinidad):
+        colas = (self._colas.reparto, self._colas.afinidad)
+        if self._coordinacion is not None:
+            colas = (self._colas.control,) + colas
+        for cola in colas:
             consumidor = canal.basic_consume(
                 queue=cola, on_message_callback=partial(self._capturar, cola), auto_ack=False,
             )
@@ -117,12 +131,13 @@ class ReceptorDatos:
     def _capturar(self, cola, canal, entrega, propiedades, cuerpo):
         self._pendiente = entrega.delivery_tag
         self._cola_pendiente = cola
-        self._reservada = self._capacidad.tiene_reserva(propiedades)
+        self._reservada = cola != self._colas.control and self._capacidad.tiene_reserva(propiedades)
         self._entrega = cuerpo
         # Conserva esta entrega sin ACK y devuelve las prefetched sin procesar.
         self._cancelar_consumidores(canal)
 
     def _procesar(self, canal, cuerpo, procesar):
+        contabilizable = False
         try:
             if not self._reservada:
                 raise ErrorMensajeInvalido("La entrega no tiene una reserva de capacidad")
@@ -134,6 +149,9 @@ class ReceptorDatos:
                     "Se recibió un control en una cola de datos",
                     entrada=sobre.entrada, origen=sobre.origen,
                 )
+            if self._coordinacion is not None:
+                self._coordinacion.validar_datos(sobre)
+            contabilizable = True
             if sobre.contenido.esquema not in ruta.esquemas:
                 raise ErrorMensajeInvalido(
                     "El esquema no está admitido en la entrada",
@@ -142,6 +160,8 @@ class ReceptorDatos:
                 )
         except ErrorMensajeInvalido as error:
             self._rechazar_mensaje(canal, error)
+            if contabilizable and self._coordinacion is not None:
+                self._coordinacion.resolver_lote(sobre)
             return
         for error in resultado.errores_por_registro:
             self._notificar(
@@ -154,6 +174,27 @@ class ReceptorDatos:
             self._error_procesamiento = error
             raise
         self._resolver(canal, rechazar=False)
+        if self._coordinacion is not None:
+            self._coordinacion.resolver_lote(sobre)
+
+    def _procesar_control(self, canal, cuerpo, procesar):
+        try:
+            sobre = self._codificador.decodificar(cuerpo).sobre
+            evento = self._coordinacion.recibir_control(sobre)
+        except ErrorMensajeInvalido as error:
+            REGISTRO.warning("Control inválido: %s", error)
+            self._resolver(canal, rechazar=True)
+            return False
+        if evento is not None:
+            try:
+                procesar(evento)
+            except BaseException as error:
+                self._error_procesamiento = error
+                raise
+        self._resolver(canal, rechazar=False)
+        if evento is not None:
+            self._coordinacion.confirmar_fin(sobre.entrada)
+        return evento is not None
 
     def _resolver(self, canal, *, rechazar):
         if rechazar:

@@ -1,7 +1,8 @@
 """Codificación del sobre binario y separación de rechazos por registro."""
 
 from ..common.protocol.dto import (
-    CierreProductor, Entrada, IdentidadProceso, ResultadoDecodificacion, SobreMensaje, TipoMensaje,
+    AvanceReplica, CierreProductor, Entrada, IdentidadProceso, PrepararCierre,
+    ResultadoDecodificacion, SobreMensaje, TipoMensaje,
 )
 from ..common.protocol.primitivas import (
     BYTES_U8, BYTES_U16, BYTES_U32, BYTES_U64, ErrorSerializacion, EscritorBinario, LectorBinario,
@@ -40,8 +41,10 @@ class CodificadorMensajes:
         inicio = escritor.iniciar_bloque()
         if sobre.tipo is TipoMensaje.DATOS:
             escribir_lote(escritor, sobre.contenido)
-        else:
+        elif sobre.tipo in (TipoMensaje.EOF, TipoMensaje.PREPARAR_CIERRE):
             escritor.entero(sobre.contenido.total_lotes, BYTES_U64)
+        elif sobre.tipo is TipoMensaje.AVANCE_REPLICA:
+            escritor.entero(sobre.contenido.lotes_resueltos, BYTES_U64)
         escritor.terminar_bloque(inicio)
 
     def decodificar(self, cuerpo: bytes) -> ResultadoDecodificacion:
@@ -63,13 +66,20 @@ class CodificadorMensajes:
             origen = IdentidadProceso(grupo, instancia)
             contenido = LectorBinario(lector.bloque())
             lector.finalizar()
-            if tipo is TipoMensaje.EOF:
-                lote = CierreProductor(contenido.entero(BYTES_U64))
-                contenido.finalizar()
-                errores = ()
-            else:
+            if tipo is TipoMensaje.DATOS:
                 esquema = contenido.entero(BYTES_U16)
                 lote, errores = leer_lote(contenido, Esquema(esquema))
+            else:
+                constructores = {
+                    TipoMensaje.EOF: CierreProductor,
+                    TipoMensaje.PREPARAR_CIERRE: PrepararCierre,
+                    TipoMensaje.AVANCE_REPLICA: AvanceReplica,
+                }
+                lote = None if tipo is TipoMensaje.FIN_ENTRADA else constructores[tipo](
+                    contenido.entero(BYTES_U64),
+                )
+                contenido.finalizar()
+                errores = ()
             sobre = SobreMensaje(entrada, tipo, origen, lote)
             return ResultadoDecodificacion(sobre, errores)
         except (ErrorSerializacion, ValueError) as error:
@@ -103,7 +113,12 @@ def _validar_sobre(sobre):
         raise ErrorMensaje("El sobre debe identificar origen y tipo de mensaje")
     for texto in (sobre.entrada.id_ejecucion, sobre.entrada.nombre, sobre.origen.grupo):
         _validar_texto(texto)
-    if sobre.tipo is TipoMensaje.EOF and type(sobre.contenido) is not CierreProductor:
-        raise ErrorMensaje("Un EOF debe contener un CierreProductor")
-    if sobre.tipo is TipoMensaje.DATOS and type(sobre.contenido) is not Lote:
-        raise ErrorMensaje("Un mensaje de datos debe contener un Lote")
+    contenidos = {
+        TipoMensaje.DATOS: Lote,
+        TipoMensaje.EOF: CierreProductor,
+        TipoMensaje.PREPARAR_CIERRE: PrepararCierre,
+        TipoMensaje.AVANCE_REPLICA: AvanceReplica,
+        TipoMensaje.FIN_ENTRADA: type(None),
+    }
+    if type(sobre.contenido) is not contenidos[sobre.tipo]:
+        raise ErrorMensaje("El contenido no corresponde al tipo de mensaje")
