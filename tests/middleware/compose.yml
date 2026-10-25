@@ -1,0 +1,26 @@
+services:
+  rabbitmq:
+    image: rabbitmq:4.1-management
+    environment:
+      RABBITMQ_DEFAULT_USER: prueba
+      RABBITMQ_DEFAULT_PASS: prueba
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
+      interval: 5s
+      timeout: 10s
+      retries: 12
+    volumes:
+      - datos_broker:/var/lib/rabbitmq
+
+  escenarios:
+    image: wikipedia-pruebas-middleware:local
+    build:
+      context: ../..
+      dockerfile: tests/middleware/Dockerfile
+    init: true
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
+volumes:
+  datos_broker:
