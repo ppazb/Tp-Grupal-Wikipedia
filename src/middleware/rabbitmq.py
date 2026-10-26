@@ -8,9 +8,10 @@ from ..common.protocol.registros import Esquema, Lote
 from .broker_connection import ConexionBroker
 from .capacidad import CapacidadDatos
 from .configuracion import ErrorConfiguracion
+from .coordinacion import CoordinacionCierre
 from .interfaz import (
-    ComunicacionGrupos, ErrorCierre, ErrorConexion, ErrorMiddleware, ErrorRecepcion,
-    ErrorRecursosEjecucion, MiddlewareCerrado,
+    Middleware, ErrorCierre, ErrorConexion, ErrorMiddleware, ErrorRecepcion,
+    ErrorRecursosEjecucion, ErrorSeguimientoEntrada, MiddlewareCerrado,
     OperacionInterrumpida,
 )
 from .publicador import PublicadorDatos
@@ -23,7 +24,7 @@ from .topologia import TopologiaGrupos
 REGISTRO = logging.getLogger(__name__)
 
 
-class MiddlewareRabbitMQ(ComunicacionGrupos[Lote]):
+class MiddlewareRabbitMQ(Middleware[Lote]):
     """Abre y administra la comunicación de un proceso desde su configuración.
 
     Espera capacidad antes de publicar. Los errores de registros se envían por la
@@ -42,6 +43,8 @@ class MiddlewareRabbitMQ(ComunicacionGrupos[Lote]):
         self._interrumpida = False
         self._receptor = None
         self._capacidad = None
+        self._publicador = None
+        self._coordinacion = None
         topologia = TopologiaGrupos(configuracion)
         notificador = self._resolver_notificador(configuracion, informar_error, topologia)
         try:
@@ -52,9 +55,12 @@ class MiddlewareRabbitMQ(ComunicacionGrupos[Lote]):
                 configuracion, self._conexion, capacidad=self._capacidad, topologia=topologia,
             )
             if topologia.colas_recepcion() is not None:
+                self._coordinacion = CoordinacionCierre(
+                    configuracion, topologia, self._publicador.publicar_control,
+                )
                 self._receptor = ReceptorDatos(
                     configuracion, self._conexion, informar_error=notificador,
-                    capacidad=self._capacidad, topologia=topologia,
+                    capacidad=self._capacidad, topologia=topologia, coordinacion=self._coordinacion,
                 )
         except BaseException:
             self._cerrar_tras_error()
@@ -95,8 +101,21 @@ class MiddlewareRabbitMQ(ComunicacionGrupos[Lote]):
         finally:
             self._publicando = False
 
-    def recibir(self, procesar):
-        """Procesa una entrega y confirma después de completar sus salidas."""
+    def finalizar_entrada(self, grupo, entrada):
+        """Publica el cierre del productor después de sus lotes confirmados."""
+        self._validar_abierta()
+        if self._interrumpida:
+            raise OperacionInterrumpida("La comunicación fue interrumpida")
+        if self._publicando:
+            raise ErrorMiddleware("No se puede cerrar una entrada durante una publicación")
+        self._publicando = True
+        try:
+            self._publicador.finalizar_entrada(grupo, entrada)
+        finally:
+            self._publicando = False
+
+    def recibir(self, procesar, *, al_finalizar=None):
+        """Entrega datos y ejecuta al_finalizar, o entrega FinEntrada si no se indicó."""
         self._validar_abierta()
         if self._interrumpida:
             raise OperacionInterrumpida("La comunicación fue interrumpida")
@@ -106,9 +125,18 @@ class MiddlewareRabbitMQ(ComunicacionGrupos[Lote]):
             raise ErrorRecepcion("No se puede iniciar una recepción durante otra operación")
         self._recibiendo = True
         try:
-            self._receptor.recibir(procesar)
+            self._receptor.recibir(procesar, al_finalizar=al_finalizar)
         finally:
             self._recibiendo = False
+
+    def entradas_pendientes(self, id_ejecucion):
+        """Consulta dependencias sin cierre local, sin consumir mensajes ni crear estado."""
+        self._validar_abierta()
+        if type(id_ejecucion) is not str or not id_ejecucion.strip():
+            raise ErrorSeguimientoEntrada("La ejecución debe tener un identificador no vacío")
+        if self._coordinacion is None:
+            return frozenset()
+        return self._coordinacion.entradas_pendientes(id_ejecucion)
 
     def detener_recepcion(self):
         """Detiene nuevas entregas sin interrumpir el procesamiento en curso."""
@@ -135,7 +163,12 @@ class MiddlewareRabbitMQ(ComunicacionGrupos[Lote]):
         self._validar_abierta()
         if self._recibiendo or self._publicando:
             raise ErrorRecursosEjecucion("No se puede liberar una ejecución durante una operación")
+        if self._coordinacion is not None:
+            self._coordinacion.validar_liberacion(id_ejecucion)
         self._recursos.liberar_ejecucion(id_ejecucion)
+        self._publicador.liberar_ejecucion(id_ejecucion)
+        if self._coordinacion is not None:
+            self._coordinacion.liberar_ejecucion(id_ejecucion)
 
     def cerrar(self):
         """Intenta todas las limpiezas y el cierre de canales y conexión."""
@@ -147,6 +180,8 @@ class MiddlewareRabbitMQ(ComunicacionGrupos[Lote]):
         self._cerrando = True
         errores = []
         try:
+            if self._publicador is not None:
+                self._publicador.descartar_seguimiento()
             for liberar in (self._recursos.cerrar, self._conexion.cerrar):
                 try:
                     liberar()
@@ -155,6 +190,8 @@ class MiddlewareRabbitMQ(ComunicacionGrupos[Lote]):
                     errores.append(error)
         finally:
             self._cerrando = False
+            self._receptor = None
+            self._coordinacion = None
         if errores:
             for error in errores:
                 if not isinstance(error, Exception):

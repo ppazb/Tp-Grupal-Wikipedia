@@ -25,14 +25,16 @@ con las colas de datos vacías y sin consumidores:
 La inicialización rechaza repeticiones para evitar duplicar permisos. Una preparación
 incompleta requiere un despliegue limpio; no se purgan colas automáticamente.
 
-Para ejecutar los escenarios del middleware con RabbitMQ real (requiere Docker
+Para ejecutar los escenarios con RabbitMQ real (requiere Docker
 con Compose y `make`):
 
 ```bash
-make probar-middleware
+make test             # Todos los paquetes
+make test-middleware  # Comunicación
+make test-eof         # Protocolo EOF
 ```
 
 El comando construye el contenedor de pruebas, levanta un broker aislado sin
 publicar puertos y elimina sus contenedores y volúmenes al terminar. Devuelve un
 código distinto de cero si falla una prueba. La primera ejecución descarga las
-imágenes y dependencias. Los escenarios están en `tests/middleware/test_escenarios.py`.
+imágenes y dependencias. Los escenarios están en `tests/middleware/` y `tests/eof/`.

@@ -6,6 +6,8 @@ from typing import Optional
 
 import pika
 
+from ..common.protocol.dto import Entrada
+from ..common.protocol.primitivas import ErrorSerializacion, EscritorBinario
 from .broker_connection import ConexionBroker
 from .configuracion import ConfiguracionComunicacion, ErrorConfiguracion
 from .exchange_handler import declarar_exchange
@@ -68,7 +70,9 @@ class TopologiaGrupos:
             for nombre in sorted(self._colas):
                 recurso = f"cola {nombre}"
                 declarar_cola(
-                    canal, nombre, self._configuracion.limites.max_mensajes_por_cola,
+                    canal, nombre,
+                    self._configuracion.limites.max_mensajes_por_cola
+                    if nombre in self._colas_datos else None,
                 )
             for cola, exchange, clave in sorted(self._enlaces):
                 recurso = f"enlace de {exchange} a {cola}"
@@ -93,9 +97,39 @@ class TopologiaGrupos:
                 raise ErrorConfiguracion("La instancia destinataria está fuera del grupo")
         return _destino_datos(ruta, instancia)
 
-    def destino_control(self, grupo: str, entrada: str) -> DestinoPublicacion:
-        """Resuelve una ruta enlazada a todas las colas de control del destino."""
-        return _destino_control(self._buscar_ruta(grupo, entrada))
+    def destino_control(self, grupo: str, entrada: str, instancia=None) -> DestinoPublicacion:
+        """Resuelve control hacia todo el grupo o hacia una única instancia."""
+        ruta = self._buscar_ruta(grupo, entrada)
+        if instancia is not None:
+            cantidad = self._configuracion.obtener_grupo(grupo).instancias
+            if type(instancia) is not int or not 0 <= instancia < cantidad:
+                raise ErrorConfiguracion("La instancia destinataria está fuera del grupo")
+        return _destino_control(ruta, instancia)
+
+    def instancia_coordinadora(self, grupo: str, entrada: Entrada) -> int:
+        """Asigna la barrera (ejecución, grupo, entrada) a una instancia estable."""
+        cantidad = self._configuracion.obtener_grupo(grupo).instancias
+        if type(entrada) is not Entrada:
+            raise ErrorConfiguracion("Se esperaba una Entrada")
+        escritor = EscritorBinario(self._configuracion.limites.max_bytes_por_mensaje)
+        try:
+            for texto in (entrada.id_ejecucion, grupo, entrada.nombre):
+                if type(texto) is not str or not texto.strip():
+                    raise ErrorConfiguracion("La barrera requiere identificadores no vacíos")
+                escritor.texto(texto)
+        except ErrorSerializacion as error:
+            raise ErrorConfiguracion(str(error)) from error
+        huella = hashlib.sha256(escritor.resultado()).digest()
+        return int.from_bytes(huella, byteorder="big") % cantidad
+
+    def destino_coordinacion(self, entrada: str, instancia=None) -> DestinoPublicacion:
+        """Resuelve un control entre réplicas del grupo local para una entrada configurada."""
+        grupo = self._configuracion.proceso.grupo
+        self._configuracion.productores_entrada(grupo, entrada)
+        cantidad = self._configuracion.obtener_grupo(grupo).instancias
+        if instancia is not None and (type(instancia) is not int or not 0 <= instancia < cantidad):
+            raise ErrorConfiguracion("La instancia destinataria está fuera del grupo")
+        return _destino_coordinacion(grupo, entrada, instancia)
 
     def colas_recepcion(self) -> Optional[ColasRecepcion]:
         """Devuelve las colas locales; una fuente sin rutas entrantes no tiene colas."""
@@ -131,21 +165,27 @@ class TopologiaGrupos:
         """Acumula los recursos de la ruta, reutilizando los comunes a su grupo."""
         reparto = _destino_datos(ruta)
         control = _destino_control(ruta)
-        self._exchanges.update((reparto.exchange, control.exchange))
+        coordinacion = _destino_coordinacion(ruta.destino, ruta.entrada)
+        self._exchanges.update((reparto.exchange, control.exchange, coordinacion.exchange))
         grupo = self._configuracion.obtener_grupo(ruta.destino)
         for instancia in range(grupo.instancias):
             colas = _colas_instancia(grupo.nombre, instancia)
             afinidad = _destino_datos(ruta, instancia)
+            control_individual = _destino_control(ruta, instancia)
+            coordinacion_individual = _destino_coordinacion(grupo.nombre, ruta.entrada, instancia)
             self._colas.update((colas.reparto, colas.afinidad, colas.control))
             self._colas_datos.update((colas.reparto, colas.afinidad))
             self.cola_capacidad(colas.reparto)
             self.cola_capacidad(colas.afinidad)
-            # La cola de reparto es única por grupo. Cada control, en cambio,
-            # alcanza a todas las instancias, incluso si no recibieron datos.
+            # Control admite difusión y direccionamiento individual sobre las
+            # mismas colas; cada clave individual tiene un único destinatario.
             self._enlaces.update((
                 (colas.reparto, reparto.exchange, reparto.clave),
                 (colas.afinidad, afinidad.exchange, afinidad.clave),
                 (colas.control, control.exchange, control.clave),
+                (colas.control, control_individual.exchange, control_individual.clave),
+                (colas.control, coordinacion.exchange, coordinacion.clave),
+                (colas.control, coordinacion_individual.exchange, coordinacion_individual.clave),
             ))
 
 
@@ -177,8 +217,17 @@ def _destino_datos(ruta, instancia=None):
     )
 
 
-def _destino_control(ruta):
+def _destino_control(ruta, instancia=None):
+    sufijo = () if instancia is None else ("instancia", instancia)
     return DestinoPublicacion(
         exchange=_nombre("exchange", ruta.origen, "control"),
-        clave=_nombre(ruta.destino, ruta.entrada),
+        clave=_nombre(ruta.destino, ruta.entrada, *sufijo),
+    )
+
+
+def _destino_coordinacion(grupo, entrada, instancia=None):
+    sufijo = () if instancia is None else ("instancia", instancia)
+    return DestinoPublicacion(
+        exchange=_nombre("exchange", grupo, "coordinacion"),
+        clave=_nombre(grupo, entrada, *sufijo),
     )

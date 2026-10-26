@@ -36,6 +36,10 @@ class ErrorRecepcion(ErrorMiddleware):
     """No se pudo recibir, confirmar o cancelar la recepción."""
 
 
+class ErrorSeguimientoEntrada(ErrorMiddleware):
+    """Una operación contradice los participantes, cierres o contadores de una entrada."""
+
+
 class ErrorCapacidad(ErrorMiddleware):
     """Falló el intercambio de permisos de capacidad."""
 
@@ -168,15 +172,45 @@ class Middleware(ComunicacionGrupos[Contenido]):
     """Extiende la comunicación por grupos con cierres lógicos de entradas."""
 
     @abstractmethod
-    def recibir(self, procesar: Callable[[Evento[Contenido]], None]) -> None:
-        """Entrega datos o FinEntrada una vez consolidados los aportes y cierres."""
+    def recibir(
+        self, procesar: Callable[[Evento[Contenido]], None], *,
+        al_finalizar: Optional[Callable[[Entrada], None]] = None,
+    ) -> None:
+        """Entrega datos y notifica el cierre consolidado de cada entrada.
+
+        Con al_finalizar, procesar recibe solo Datos y al_finalizar recibe Entrada.
+        Sin ese callback, procesar recibe también los eventos FinEntrada.
+        La finalización es síncrona: puede publicar acumulados y luego cerrar sus
+        salidas con finalizar_entrada. El cierre recibido se confirma después de
+        que el callback retorna correctamente; sus errores se propagan.
+        Las salidas a cerrar y sus dependencias las determina el negocio.
+        Todas las réplicas deben recibir, incluso sin datos propios, para atender
+        la coordinación. FinEntrada cierra una dependencia, no toda la ejecución.
+        entradas_pendientes permite consultar las demás dependencias desde el callback.
+        """
+
+    @abstractmethod
+    def entradas_pendientes(self, id_ejecucion: str) -> frozenset[str]:
+        """Devuelve nombres de entradas configuradas sin cierre consolidado recibido localmente.
+
+        Incluye entradas sin datos ni controles recibidos. Dentro del finalizador,
+        la entrada que lo activó ya no está pendiente, aunque el callback siga en
+        ejecución. Un conjunto vacío no significa que terminaron sus publicaciones
+        o las salidas del proceso. Es una consulta local sin espera ni mensajes.
+        Una ejecución desconocida o liberada tiene todas sus entradas pendientes;
+        un grupo sin entradas devuelve un conjunto vacío.
+        """
 
     @abstractmethod
     def finalizar_entrada(self, grupo: str, entrada: Entrada) -> None:
         """Declara el fin de los aportes de este productor a un grupo y entrada.
 
         Se invoca después del último aporte, incluso si no hubo datos. Es
-        idempotente por productor, grupo y entrada, y alcanza a todas las
-        instancias destinatarias. No implica que los demás productores terminaron.
+        idempotente tras confirmación por productor, grupo y entrada. Anuncia el
+        total de lotes a la coordinadora del destino y bloquea nuevos aportes.
+        No implica que los demás productores terminaron ni que los datos ya
+        fueron procesados.
+        Cada destino y nombre de entrada se cierra por separado, incluso cuando
+        otras ramas comparten el mismo identificador de ejecución o nombre.
         Puede elevar ErrorConexion, ErrorMensaje o MiddlewareCerrado.
         """

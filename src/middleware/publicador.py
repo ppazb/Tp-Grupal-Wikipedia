@@ -2,20 +2,32 @@
 
 import hashlib
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Optional
 
 import pika
 
-from ..common.protocol.dto import Datos, EnvioDatos, SobreMensaje, TipoMensaje
+from ..common.protocol.dto import CierreProductor, Datos, EnvioDatos, SobreMensaje, TipoMensaje
+from ..common.protocol.primitivas import BYTES_U64
 from .broker_connection import ConexionBroker
 from .capacidad import CABECERA_CAPACIDAD, VERSION_CAPACIDAD, CapacidadDatos
 from .codificacion import CodificadorMensajes
 from .configuracion import ConfiguracionComunicacion
 from .interfaz import (
-    ErrorConexion, ErrorMensaje, ErrorMiddleware, ErrorPublicacionParcial,
+    EntradaFinalizada, ErrorConexion, ErrorMensaje, ErrorMiddleware, ErrorPublicacionParcial,
     PublicacionRechazada,
 )
 from .topologia import TopologiaGrupos
+
+
+MAXIMO_LOTES = 18446744073709551615
+
+
+@dataclass
+class _EstadoSalida:
+    total: int = 0
+    cierre_iniciado: bool = False
+    cierre_confirmado: bool = False
 
 
 class PublicadorDatos:
@@ -38,6 +50,7 @@ class PublicadorDatos:
             self._topologia.declarar(conexion)
         self._capacidad = capacidad or CapacidadDatos(conexion, self._topologia)
         self._publicando = False
+        self._salidas = {}
         try:
             conexion.canal.confirm_delivery()
         except (pika.exceptions.AMQPConnectionError, OSError) as error:
@@ -78,15 +91,73 @@ class PublicadorDatos:
         finally:
             self._publicando = False
 
+    def finalizar_entrada(self, grupo, entrada):
+        """Confirma un EOF con el total publicado; admite cero e ignora cierres ya confirmados.
+
+        Desde el primer intento de cierre no admite nuevos datos. Un rechazo
+        explícito permite repetir el cierre.
+        """
+        if self._publicando:
+            raise ErrorMiddleware("No se puede cerrar una entrada durante una publicación")
+        # Codificar primero valida la identidad incluso cuando no hubo datos.
+        sobre = SobreMensaje(entrada, TipoMensaje.EOF, self._configuracion.proceso, CierreProductor(0))
+        self._codificador.codificar(sobre)
+        instancia = self._topologia.instancia_coordinadora(grupo, entrada)
+        destino = self._topologia.destino_control(grupo, entrada.nombre, instancia)
+        estado = self._salidas.setdefault((grupo, entrada), _EstadoSalida())
+        if estado.cierre_confirmado:
+            return
+        cuerpo = self._codificador.codificar(SobreMensaje(
+            entrada, TipoMensaje.EOF, self._configuracion.proceso, CierreProductor(estado.total),
+        ))
+        estado.cierre_iniciado = True
+        self._publicando = True
+        try:
+            self._publicar_cuerpo(destino, cuerpo, reservar_capacidad=False)
+            estado.cierre_confirmado = True
+        finally:
+            self._publicando = False
+
+    def liberar_ejecucion(self, id_ejecucion):
+        """Elimina contadores y cierres de una ejecución cuya limpieza autorizó el llamador."""
+        self._salidas = {
+            identidad: estado for identidad, estado in self._salidas.items()
+            if identidad[1].id_ejecucion != id_ejecucion
+        }
+
+    def publicar_control(self, tipo, entrada, contenido, instancia=None):
+        """Publica coordinación del grupo local sin reservar capacidad de datos."""
+        if tipo not in (TipoMensaje.PREPARAR_CIERRE, TipoMensaje.AVANCE_REPLICA, TipoMensaje.FIN_ENTRADA):
+            raise ErrorMensaje("El tipo no corresponde a coordinación entre réplicas")
+        if self._publicando:
+            raise ErrorMiddleware("La publicación no admite llamadas reentrantes")
+        cuerpo = self._codificador.codificar(SobreMensaje(
+            entrada, tipo, self._configuracion.proceso, contenido,
+        ))
+        destino = self._topologia.destino_coordinacion(entrada.nombre, instancia)
+        self._publicando = True
+        try:
+            self._publicar_cuerpo(destino, cuerpo, reservar_capacidad=False)
+        finally:
+            self._publicando = False
+
+    def descartar_seguimiento(self):
+        """Libera todos los contadores locales al cerrar el middleware, sin emitir EOF."""
+        self._salidas.clear()
+
     def _enviar_preparados(self, preparados):
         confirmadas = []
         for identidad, destino, cuerpo in preparados:
+            estado = self._salidas.setdefault(identidad, _EstadoSalida())
             try:
+                if estado.total == MAXIMO_LOTES:
+                    raise ErrorMensaje("La cantidad de lotes excede el rango u64")
                 self._publicar_cuerpo(destino, cuerpo)
             except ErrorMiddleware as error:
                 if confirmadas:
                     raise ErrorPublicacionParcial(confirmadas, identidad) from error
                 raise
+            estado.total += 1
             confirmadas.append(identidad)
 
     def _preparar(self, envio):
@@ -101,6 +172,9 @@ class PublicadorDatos:
             contenido=envio.datos.contenido,
         )
         cuerpo = self._codificador.codificar(sobre)
+        estado = self._salidas.get((envio.grupo, sobre.entrada))
+        if estado is not None and estado.cierre_iniciado:
+            raise EntradaFinalizada("El productor ya inició el cierre de esa salida")
         ruta = self._configuracion.obtener_ruta(
             sobre.origen.grupo, envio.grupo, sobre.entrada.nombre,
         )
@@ -127,8 +201,9 @@ class PublicadorDatos:
         cantidad = self._configuracion.obtener_grupo(envio.grupo).instancias
         return int.from_bytes(huella, byteorder="big") % cantidad
 
-    def _publicar_cuerpo(self, destino, cuerpo):
-        self._capacidad.adquirir(destino.cola)
+    def _publicar_cuerpo(self, destino, cuerpo, *, reservar_capacidad=True):
+        if reservar_capacidad:
+            self._capacidad.adquirir(destino.cola)
         try:
             self._conexion.canal.basic_publish(
                 exchange=destino.exchange,
@@ -136,16 +211,18 @@ class PublicadorDatos:
                 body=cuerpo,
                 mandatory=True,
                 properties=pika.BasicProperties(
-                    headers={CABECERA_CAPACIDAD: VERSION_CAPACIDAD},
+                    headers={CABECERA_CAPACIDAD: VERSION_CAPACIDAD} if reservar_capacidad else None,
                     content_type="application/octet-stream",
                     delivery_mode=pika.spec.PERSISTENT_DELIVERY_MODE,
                 ),
             )
         except pika.exceptions.UnroutableError as error:
-            self._capacidad.devolver(destino.cola)
+            if reservar_capacidad:
+                self._capacidad.devolver(destino.cola)
             raise ErrorMensaje("El mensaje no llegó a una cola destinataria") from error
         except pika.exceptions.NackError as error:
-            self._capacidad.devolver(destino.cola)
+            if reservar_capacidad:
+                self._capacidad.devolver(destino.cola)
             # Un NACK puede indicar una cola llena, pero no identifica la causa.
             raise PublicacionRechazada("El broker no admitió la publicación") from error
         except (pika.exceptions.AMQPConnectionError, OSError) as error:

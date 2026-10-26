@@ -26,6 +26,7 @@ from .interfaz import (
     ErrorPublicacionParcial,
     ErrorRecepcion,
     ErrorRecursosEjecucion,
+    ErrorSeguimientoEntrada,
     ErrorTopologia,
     Evento,
     FinEntrada,

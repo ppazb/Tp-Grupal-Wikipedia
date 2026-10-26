@@ -33,6 +33,8 @@ class LimitesComunicacion:
     Los cuerpos preparados ocupan como máximo max_envios_por_publicacion por
     max_bytes_por_mensaje, sin contar objetos del llamador ni temporales de codificación.
     mensajes_sin_confirmar limita entregas por canal receptor, no por grupo.
+    max_mensajes_por_cola limita las colas de datos y sus permisos; las colas de
+    control no tienen ese límite para permitir avanzar a las barreras de cierre.
     """
 
     mensajes_sin_confirmar: int
@@ -89,6 +91,10 @@ class ConfiguracionComunicacion:
 
         Cuenta cada grupo una sola vez y rechaza entradas sin rutas productoras.
         """
+        return len(self.productores_entrada(grupo, entrada))
+
+    def productores_entrada(self, grupo: str, entrada: str) -> frozenset[IdentidadProceso]:
+        """Identifica las instancias productoras de una entrada sin duplicarlas."""
         self.obtener_grupo(grupo)
         productores = {
             ruta.origen for ruta in self.rutas
@@ -96,4 +102,8 @@ class ConfiguracionComunicacion:
         }
         if not productores:
             raise ErrorConfiguracion("La entrada solicitada no tiene rutas productoras")
-        return sum(self.obtener_grupo(origen).instancias for origen in productores)
+        return frozenset(
+            IdentidadProceso(origen, instancia)
+            for origen in productores
+            for instancia in range(self.obtener_grupo(origen).instancias)
+        )

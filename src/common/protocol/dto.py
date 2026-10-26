@@ -68,20 +68,45 @@ class TipoMensaje(IntEnum):
 
     DATOS = 0x01
     EOF = 0x02
+    PREPARAR_CIERRE = 0x03
+    AVANCE_REPLICA = 0x04
+    FIN_ENTRADA = 0x05
+
+
+@dataclass(frozen=True)
+class CierreProductor:
+    """Cantidad final de lotes publicados por un productor hacia una entrada."""
+
+    total_lotes: int
+
+
+@dataclass(frozen=True)
+class PrepararCierre:
+    """Total anunciado por todos los productores de la entrada del grupo."""
+
+    total_lotes: int
+
+
+@dataclass(frozen=True)
+class AvanceReplica:
+    """Cantidad acumulada de lotes resueltos por una réplica."""
+
+    lotes_resueltos: int
 
 
 @dataclass(frozen=True)
 class SobreMensaje:
     """Identifica la ejecución, entrada, tipo, origen y contenido de un mensaje.
 
-    DATOS transporta un Lote. EOF transporta contenido nulo e indica
-    que el productor terminó sus aportes para esa entrada.
+    DATOS transporta un Lote. EOF transporta un CierreProductor e indica
+    que el productor terminó sus aportes para esa entrada. La coordinación usa
+    PrepararCierre, AvanceReplica y contenido nulo para FIN_ENTRADA.
     """
 
     entrada: Entrada
     tipo: TipoMensaje
     origen: IdentidadProceso
-    contenido: Optional[Lote]
+    contenido: Union[Lote, CierreProductor, PrepararCierre, AvanceReplica, None]
 
 
 @dataclass(frozen=True)
@@ -94,4 +119,4 @@ class ResultadoDecodificacion:
     @property
     def registros_validos(self):
         """Devuelve los registros aceptados; un EOF no contiene registros."""
-        return self.sobre.contenido.registros if self.sobre.contenido is not None else ()
+        return self.sobre.contenido.registros if self.sobre.tipo is TipoMensaje.DATOS else ()

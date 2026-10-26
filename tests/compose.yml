@@ -13,10 +13,11 @@ services:
       - datos_broker:/var/lib/rabbitmq
 
   escenarios:
-    image: wikipedia-pruebas-middleware:local
+    image: wikipedia-pruebas:local
     build:
-      context: ../..
-      dockerfile: tests/middleware/Dockerfile
+      context: ..
+      dockerfile: tests/Dockerfile
+    command: ["python", "-m", "unittest", "discover", "-s", "${DIRECTORIO_PRUEBAS:-tests}", "-t", ".", "-p", "test_*.py", "-v"]
     init: true
     depends_on:
       rabbitmq:
