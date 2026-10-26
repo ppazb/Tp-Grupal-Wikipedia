@@ -3,7 +3,7 @@
 from dataclasses import dataclass, field
 
 from ..common.protocol.dto import (
-    AvanceReplica, FinEntrada, IdentidadProceso, PrepararCierre, TipoMensaje,
+    AvanceReplica, Entrada, FinEntrada, IdentidadProceso, PrepararCierre, TipoMensaje,
 )
 from .eof_manager import SeguimientoEntradas
 from .interfaz import ErrorMensajeInvalido, ErrorSeguimientoEntrada
@@ -88,10 +88,21 @@ class CoordinacionCierre:
         estado.fin_entregado = True
 
     def validar_liberacion(self, id_ejecucion):
-        """Impide retirar barreras locales que todavía participan de la coordinación."""
-        if any(not estado.fin_entregado for entrada, estado in self._barreras.items()
-               if entrada.id_ejecucion == id_ejecucion):
+        """Exige atender todas las entradas configuradas de una ejecución con actividad."""
+        estados = [self._barreras.get(Entrada(id_ejecucion, nombre)) for nombre in self._productores]
+        if any(estado is not None for estado in estados) and any(
+            estado is None or not estado.fin_entregado for estado in estados
+        ):
             raise ErrorSeguimientoEntrada("La ejecución tiene cierres locales pendientes")
+
+    def entradas_pendientes(self, id_ejecucion):
+        """Devuelve entradas sin cierre consolidado local, incluidas las que no tuvieron actividad."""
+        pendientes = set()
+        for nombre in self._productores:
+            estado = self._barreras.get(Entrada(id_ejecucion, nombre))
+            if estado is None or not estado.fin_recibido:
+                pendientes.add(nombre)
+        return frozenset(pendientes)
 
     def liberar_ejecucion(self, id_ejecucion):
         """Libera los contadores y barreras de una ejecución con cierres locales atendidos."""

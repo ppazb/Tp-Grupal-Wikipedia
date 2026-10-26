@@ -186,6 +186,19 @@ class Middleware(ComunicacionGrupos[Contenido]):
         Las salidas a cerrar y sus dependencias las determina el negocio.
         Todas las réplicas deben recibir, incluso sin datos propios, para atender
         la coordinación. FinEntrada cierra una dependencia, no toda la ejecución.
+        entradas_pendientes permite consultar las demás dependencias desde el callback.
+        """
+
+    @abstractmethod
+    def entradas_pendientes(self, id_ejecucion: str) -> frozenset[str]:
+        """Devuelve nombres de entradas configuradas sin cierre consolidado recibido localmente.
+
+        Incluye entradas sin datos ni controles recibidos. Dentro del finalizador,
+        la entrada que lo activó ya no está pendiente, aunque el callback siga en
+        ejecución. Un conjunto vacío no significa que terminaron sus publicaciones
+        o las salidas del proceso. Es una consulta local sin espera ni mensajes.
+        Una ejecución desconocida o liberada tiene todas sus entradas pendientes;
+        un grupo sin entradas devuelve un conjunto vacío.
         """
 
     @abstractmethod
@@ -197,5 +210,7 @@ class Middleware(ComunicacionGrupos[Contenido]):
         total de lotes a la coordinadora del destino y bloquea nuevos aportes.
         No implica que los demás productores terminaron ni que los datos ya
         fueron procesados.
+        Cada destino y nombre de entrada se cierra por separado, incluso cuando
+        otras ramas comparten el mismo identificador de ejecución o nombre.
         Puede elevar ErrorConexion, ErrorMensaje o MiddlewareCerrado.
         """

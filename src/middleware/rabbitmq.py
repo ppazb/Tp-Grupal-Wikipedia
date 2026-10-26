@@ -11,7 +11,7 @@ from .configuracion import ErrorConfiguracion
 from .coordinacion import CoordinacionCierre
 from .interfaz import (
     Middleware, ErrorCierre, ErrorConexion, ErrorMiddleware, ErrorRecepcion,
-    ErrorRecursosEjecucion, MiddlewareCerrado,
+    ErrorRecursosEjecucion, ErrorSeguimientoEntrada, MiddlewareCerrado,
     OperacionInterrumpida,
 )
 from .publicador import PublicadorDatos
@@ -128,6 +128,15 @@ class MiddlewareRabbitMQ(Middleware[Lote]):
             self._receptor.recibir(procesar, al_finalizar=al_finalizar)
         finally:
             self._recibiendo = False
+
+    def entradas_pendientes(self, id_ejecucion):
+        """Consulta dependencias sin cierre local, sin consumir mensajes ni crear estado."""
+        self._validar_abierta()
+        if type(id_ejecucion) is not str or not id_ejecucion.strip():
+            raise ErrorSeguimientoEntrada("La ejecución debe tener un identificador no vacío")
+        if self._coordinacion is None:
+            return frozenset()
+        return self._coordinacion.entradas_pendientes(id_ejecucion)
 
     def detener_recepcion(self):
         """Detiene nuevas entregas sin interrumpir el procesamiento en curso."""
