@@ -1,0 +1,66 @@
+{
+  "broker": {
+    "host": "rabbitmq",
+    "puerto": 5672,
+    "usuario": "prueba",
+    "contrasena": "prueba",
+    "virtual_host": "/wikipedia",
+    "latido_segundos": 60,
+    "timeout_conexion_segundos": 10,
+    "timeout_bloqueo_segundos": 30
+  },
+  "proceso": {
+    "grupo": "productores",
+    "instancia": 0
+  },
+  "limites": {
+    "mensajes_sin_confirmar": 4,
+    "max_mensajes_por_cola": 1,
+    "max_bytes_por_mensaje": 65536,
+    "max_envios_por_publicacion": 8
+  },
+  "grupos": {
+    "productores": 2,
+    "consumidores": 3,
+    "combinadores": 2,
+    "sumidero": 1
+  },
+  "rutas": [
+    {
+      "nombre": "productores_consumidores_palabras",
+      "origen": "productores",
+      "destino": "consumidores",
+      "entrada": "palabras",
+      "esquemas": [
+        "PALABRA"
+      ]
+    },
+    {
+      "nombre": "productores_combinadores_palabras",
+      "origen": "productores",
+      "destino": "combinadores",
+      "entrada": "palabras",
+      "esquemas": [
+        "PALABRA"
+      ]
+    },
+    {
+      "nombre": "productores_combinadores_referencias",
+      "origen": "productores",
+      "destino": "combinadores",
+      "entrada": "referencias",
+      "esquemas": [
+        "PALABRA"
+      ]
+    },
+    {
+      "nombre": "consumidores_sumidero_conteos",
+      "origen": "consumidores",
+      "destino": "sumidero",
+      "entrada": "conteos",
+      "esquemas": [
+        "CONTEO_PALABRA"
+      ]
+    }
+  ]
+}

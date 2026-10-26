@@ -1,12 +1,6 @@
 """Escenarios de reparto, presión de carga, rechazos y recursos con RabbitMQ real."""
 
-from contextlib import ExitStack
-import multiprocessing
-from queue import Empty
-import signal
-import unittest
 from unittest.mock import patch
-from uuid import uuid4
 
 from src.common.protocol.dto import CierreProductor, EnvioDatos, SobreMensaje, TipoMensaje
 from src.common.protocol.registros import CodigoError
@@ -20,98 +14,27 @@ from src.middleware.rabbitmq import MiddlewareRabbitMQ
 from src.middleware.topologia import TopologiaGrupos
 import pika
 
+from tests.soporte import EscenarioRabbitMQ
+
 from .soporte import (
-    PLAZO_BLOQUEO, PLAZO_ESCENARIO, PLAZO_PROCESO, administrar_virtual_host,
+    CONFIGURACION,
     aviso, configurar, consumir_en_proceso, conteo, palabras, publicar_en_proceso,
 )
 
 
-def vencer_plazo(numero, marco):
-    raise AssertionError('El escenario excedió su plazo; posible bloqueo de comunicación')
-
-
-class EscenariosMiddleware(unittest.TestCase):
+class EscenariosMiddleware(EscenarioRabbitMQ):
     """Cada caso usa un virtual host propio y libera procesos, conexiones y colas."""
 
-    def setUp(self):
-        anterior = signal.signal(signal.SIGALRM, vencer_plazo)
-        self.addCleanup(signal.signal, signal.SIGALRM, anterior)
-        self.addCleanup(signal.alarm, 0)
-        signal.alarm(PLAZO_ESCENARIO)
-        self.virtual_host = f'escenario_{uuid4().hex}'
-        self.configuracion = configurar(self.virtual_host)
-        administrar_virtual_host(self.configuracion, 'PUT')
-        self.addCleanup(administrar_virtual_host, self.configuracion, 'DELETE')
-        self.recursos = ExitStack()
-        self.addCleanup(self.recursos.close)
-        inicializar_capacidad(self.configuracion)
-        self.inspector = self.recursos.enter_context(ConexionBroker(self.configuracion.broker))
-        self.topologia = TopologiaGrupos(self.configuracion)
+    archivo_configuracion = CONFIGURACION
+    grupo_fuente = 'ocurrencias'
 
     def abrir(self, grupo, instancia=0):
         opciones = {}
         if grupo == 'gateway_resultados':
             opciones['informar_error'] = self.fail
         return self.recursos.enter_context(MiddlewareRabbitMQ(
-            configurar(self.virtual_host, grupo, instancia), **opciones,
+            self.configurar(grupo, instancia), **opciones,
         ))
-
-    def lanzar(self, funcion, grupo, *argumentos, instancia=0):
-        contexto = multiprocessing.get_context('spawn')
-        eventos = contexto.Queue(maxsize=16)
-        proceso = contexto.Process(
-            target=funcion,
-            args=(configurar(self.virtual_host, grupo, instancia), eventos, *argumentos),
-        )
-        proceso.start()
-        self.addCleanup(self.limpiar_proceso, proceso, eventos)
-        return proceso, eventos
-
-    def limpiar_proceso(self, proceso, eventos):
-        if proceso.is_alive():
-            # Solo se fuerza al auxiliar de prueba cuando falló o terminó el escenario.
-            proceso.terminate()
-        proceso.join(PLAZO_PROCESO)
-        if proceso.is_alive():
-            proceso.kill()
-            proceso.join(PLAZO_PROCESO)
-        eventos.close()
-        eventos.join_thread()
-        self.assertFalse(proceso.is_alive(), 'No se pudo cerrar el proceso auxiliar')
-        proceso.close()
-
-    def esperar(self, eventos):
-        try:
-            return eventos.get(timeout=PLAZO_PROCESO)
-        except Empty:
-            self.fail('El proceso auxiliar no informó progreso dentro del plazo')
-
-    def finalizar(self, proceso):
-        proceso.join(PLAZO_PROCESO)
-        self.assertEqual(proceso.exitcode, 0, 'El proceso auxiliar falló o quedó bloqueado')
-
-    def comprobar_bloqueado(self, eventos):
-        # La notificación anterior proviene del bucle de E/S de la reserva real.
-        self.assertEqual(self.esperar(eventos), 'esperando')
-        with self.assertRaises(Empty):
-            eventos.get(timeout=PLAZO_BLOQUEO)
-
-    def recibir(self, middleware):
-        recibidos = []
-        middleware.recibir(recibidos.append)
-        self.assertEqual(len(recibidos), 1)
-        return recibidos[0]
-
-    def estado(self, cola):
-        return self.inspector.canal.queue_declare(queue=cola, passive=True).method
-
-    def comprobar_capacidad_recuperada(self):
-        for cola in self.topologia.colas_datos():
-            with self.subTest(cola=cola):
-                datos = self.estado(cola)
-                permisos = self.estado(self.topologia.cola_capacidad(cola))
-                self.assertEqual((datos.message_count, datos.consumer_count), (0, 0))
-                self.assertEqual((permisos.message_count, permisos.consumer_count), (1, 0))
 
     def inyectar(self, cuerpo, *, reservar=True):
         """Introduce bytes inválidos por AMQP sin agregar accesos al código productivo."""
