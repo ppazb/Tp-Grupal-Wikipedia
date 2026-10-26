@@ -2,11 +2,11 @@
 
 from functools import partial
 import logging
-from typing import Callable
+from typing import Callable, Optional
 
 import pika
 
-from ..common.protocol.dto import Datos, Evento, TipoMensaje
+from ..common.protocol.dto import Datos, Entrada, Evento, TipoMensaje
 from ..common.protocol.registros import Esquema
 from .broker_connection import ConexionBroker
 from .capacidad import CapacidadDatos
@@ -57,8 +57,11 @@ class ReceptorDatos:
         self._error_procesamiento = None
         self._retener_pendiente = False
 
-    def recibir(self, procesar: Callable[[Evento], None]) -> None:
-        """Atiende controles internos hasta entregar datos, un cierre o detenerse."""
+    def recibir(
+        self, procesar: Callable[[Evento], None], *,
+        al_finalizar: Optional[Callable[[Entrada], None]] = None,
+    ) -> None:
+        """Atiende controles y entrega datos o ejecuta la finalización de una entrada."""
         canal = self._conexion.canal
         if self._recibiendo:
             raise ErrorRecepcion("La recepción no admite llamadas reentrantes")
@@ -66,6 +69,8 @@ class ReceptorDatos:
             raise ErrorRecepcion("Quedaron recursos pendientes de limpieza; cerrar la conexión")
         if not callable(procesar):
             raise ErrorRecepcion("El procesador debe ser invocable")
+        if al_finalizar is not None and not callable(al_finalizar):
+            raise ErrorRecepcion("El finalizador de entradas debe ser invocable")
         if self._detenido:
             return
         self._recibiendo = True
@@ -77,7 +82,7 @@ class ReceptorDatos:
                 entregado = False
                 if self._entrega is not None and not self._detenido:
                     if self._cola_pendiente == self._colas.control:
-                        entregado = self._procesar_control(canal, self._entrega, procesar)
+                        entregado = self._procesar_control(canal, self._entrega, procesar, al_finalizar)
                     else:
                         self._procesar(canal, self._entrega, procesar)
                         entregado = True
@@ -177,7 +182,7 @@ class ReceptorDatos:
         if self._coordinacion is not None:
             self._coordinacion.resolver_lote(sobre)
 
-    def _procesar_control(self, canal, cuerpo, procesar):
+    def _procesar_control(self, canal, cuerpo, procesar, al_finalizar):
         try:
             sobre = self._codificador.decodificar(cuerpo).sobre
             evento = self._coordinacion.recibir_control(sobre)
@@ -187,7 +192,10 @@ class ReceptorDatos:
             return False
         if evento is not None:
             try:
-                procesar(evento)
+                if al_finalizar is None:
+                    procesar(evento)
+                else:
+                    al_finalizar(evento.entrada)
             except BaseException as error:
                 self._error_procesamiento = error
                 raise

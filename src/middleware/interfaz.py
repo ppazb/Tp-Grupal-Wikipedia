@@ -172,9 +172,18 @@ class Middleware(ComunicacionGrupos[Contenido]):
     """Extiende la comunicación por grupos con cierres lógicos de entradas."""
 
     @abstractmethod
-    def recibir(self, procesar: Callable[[Evento[Contenido]], None]) -> None:
-        """Entrega datos; entrega FinEntrada al consolidar los aportes y cierres.
+    def recibir(
+        self, procesar: Callable[[Evento[Contenido]], None], *,
+        al_finalizar: Optional[Callable[[Entrada], None]] = None,
+    ) -> None:
+        """Entrega datos y notifica el cierre consolidado de cada entrada.
 
+        Con al_finalizar, procesar recibe solo Datos y al_finalizar recibe Entrada.
+        Sin ese callback, procesar recibe también los eventos FinEntrada.
+        La finalización es síncrona: puede publicar acumulados y luego cerrar sus
+        salidas con finalizar_entrada. El cierre recibido se confirma después de
+        que el callback retorna correctamente; sus errores se propagan.
+        Las salidas a cerrar y sus dependencias las determina el negocio.
         Todas las réplicas deben recibir, incluso sin datos propios, para atender
         la coordinación. FinEntrada cierra una dependencia, no toda la ejecución.
         """

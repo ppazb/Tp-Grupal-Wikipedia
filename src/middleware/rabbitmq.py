@@ -114,8 +114,8 @@ class MiddlewareRabbitMQ(Middleware[Lote]):
         finally:
             self._publicando = False
 
-    def recibir(self, procesar):
-        """Entrega datos o FinEntrada tras resolver la barrera de todas las réplicas."""
+    def recibir(self, procesar, *, al_finalizar=None):
+        """Entrega datos y ejecuta al_finalizar, o entrega FinEntrada si no se indicó."""
         self._validar_abierta()
         if self._interrumpida:
             raise OperacionInterrumpida("La comunicación fue interrumpida")
@@ -125,7 +125,7 @@ class MiddlewareRabbitMQ(Middleware[Lote]):
             raise ErrorRecepcion("No se puede iniciar una recepción durante otra operación")
         self._recibiendo = True
         try:
-            self._receptor.recibir(procesar)
+            self._receptor.recibir(procesar, al_finalizar=al_finalizar)
         finally:
             self._recibiendo = False
 
