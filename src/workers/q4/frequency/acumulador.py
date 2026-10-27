@@ -40,6 +40,11 @@ class AcumuladorFrecuencias:
             for palabra, cantidad in frecuencias.items()
         )
 
+    def cantidad_palabras(self, id_ejecucion: str) -> int:
+        """Devuelve la cantidad de contadores distintos sin crear estado para la ejecución."""
+        self._validar_ejecucion(id_ejecucion)
+        return len(self._frecuencias.get(id_ejecucion, {}))
+
     def liberar_ejecucion(self, id_ejecucion: str) -> None:
         """Elimina los conteos de una ejecución; repetir la operación no tiene efecto."""
         self._validar_ejecucion(id_ejecucion)
