@@ -1,0 +1,226 @@
+# docker-compose.yml
+name: wikipedia-analysis
+
+networks:
+  wiki_net:
+    driver: bridge
+
+volumes:
+  datos_broker:
+
+x-worker-base: &worker-base
+  build:
+    context: .
+  networks:
+    - wiki_net
+  volumes:
+    - ./config:/app/config:ro
+  depends_on:
+    rabbitmq:
+      condition: service_healthy #Esperamos a que rabbit se instancie healty antes se seguir
+    inicializador:
+      condition: service_completed_successfully
+  stop_grace_period: 30s # tiempo que le damos al sistema antes de hacer sigkill para manejar un grace shutdown
+  restart: on-failure
+
+services:
+  rabbitmq:
+    image: rabbitmq:4.1-management
+    networks:
+      - wiki_net
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      - RABBITMQ_DEFAULT_USER=wikipedia
+      - RABBITMQ_DEFAULT_PASS=desarrollo
+      - RABBITMQ_DEFAULT_VHOST=/wikipedia
+    volumes:
+      - datos_broker:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
+      interval: 5s
+      timeout: 10s
+      retries: 12
+
+  inicializador:
+    build:
+      context: .
+      dockerfile: src/workers/date_router/Dockerfile
+    entrypoint: ["python3", "-m", "src.middleware.inicializar", "config/config.json"]
+    networks:
+      - wiki_net
+    volumes:
+      - ./config:/app/config:ro
+    environment:
+      - WIKI_MW_BROKER_HOST=rabbitmq
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    restart: "no"
+
+  gateway:
+    <<: *worker-base #Comando para evitar repetir codigo, basicamente trae todo el codigo que habia en worker base aca evitando volver a definir lo mismo
+    build:
+      context: .
+      dockerfile: src/gateway/Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      - WIKI_MW_BROKER_HOST=rabbitmq
+      - WIKI_MW_PROCESO_GRUPO=gateway_resultados
+      - WIKI_MW_PROCESO_INSTANCIA=0
+    deploy:
+      replicas: 1
+
+  client:
+    build:
+      context: .
+      dockerfile: src/client/Dockerfile
+    networks:
+      - wiki_net
+    volumes:
+      - ./config:/app/config:ro
+      - ./data/input:/app/data/input:ro
+      - ./data/output:/app/data/output:rw
+    environment:
+      - GATEWAY_HOST=gateway
+      - GATEWAY_PORT=8080
+    depends_on:
+      - gateway
+    stop_grace_period: 30s
+
+  date_router:
+    <<: *worker-base
+    build:
+      context: .
+      dockerfile: src/workers/date_router/Dockerfile
+    environment:
+      - WIKI_MW_BROKER_HOST=rabbitmq
+      - WIKI_MW_PROCESO_GRUPO=date_router
+      - WIKI_MW_PROCESO_INSTANCIA=0
+    deploy:
+      replicas: 1
+
+  word_occurrences:
+    <<: *worker-base
+    build:
+      context: .
+      dockerfile: src/workers/word_occurrences/Dockerfile
+    environment:
+      - WIKI_MW_BROKER_HOST=rabbitmq
+      - WIKI_MW_PROCESO_GRUPO=word_occurrences
+      - WIKI_MW_PROCESO_INSTANCIA=0
+    deploy:
+      replicas: 1
+
+  q1_filter_lang:
+    <<: *worker-base
+    build:
+      context: .
+      dockerfile: src/workers/q1/filter_lang/Dockerfile
+    environment:
+      - WIKI_MW_BROKER_HOST=rabbitmq
+      - WIKI_MW_PROCESO_GRUPO=q1_filter_lang
+      - WIKI_MW_PROCESO_INSTANCIA=0
+    deploy:
+      replicas: 1
+
+  q1_formatter:
+    <<: *worker-base
+    build:
+      context: .
+      dockerfile: src/workers/q1/formatter/Dockerfile
+    environment:
+      - WIKI_MW_BROKER_HOST=rabbitmq
+      - WIKI_MW_PROCESO_GRUPO=q1_formatter
+      - WIKI_MW_PROCESO_INSTANCIA=0
+    deploy:
+      replicas: 1
+
+  q2_filter_bio:
+    <<: *worker-base
+    build:
+      context: .
+      dockerfile: src/workers/q2/filter_bio/Dockerfile
+    environment:
+      - WIKI_MW_BROKER_HOST=rabbitmq
+      - WIKI_MW_PROCESO_GRUPO=q2_filter_bio
+      - WIKI_MW_PROCESO_INSTANCIA=0
+    deploy:
+      replicas: 1
+
+  q2_image_downloader:
+    <<: *worker-base
+    build:
+      context: .
+      dockerfile: src/workers/q2/image_downloader/Dockerfile
+    environment:
+      - WIKI_MW_BROKER_HOST=rabbitmq
+      - WIKI_MW_PROCESO_GRUPO=q2_image_downloader
+      - WIKI_MW_PROCESO_INSTANCIA=0
+    deploy:
+      replicas: 1
+
+  q3_intersection:
+    <<: *worker-base
+    build:
+      context: .
+      dockerfile: src/workers/q3/intersection/Dockerfile
+    environment:
+      - WIKI_MW_BROKER_HOST=rabbitmq
+      - WIKI_MW_PROCESO_GRUPO=q3_intersection
+      - WIKI_MW_PROCESO_INSTANCIA=0
+    deploy:
+      replicas: 1
+
+  q4_frequency:
+    <<: *worker-base
+    build:
+      context: .
+      dockerfile: src/workers/q4/frequency/Dockerfile
+    environment:
+      - WIKI_MW_BROKER_HOST=rabbitmq
+      - WIKI_MW_PROCESO_GRUPO=frecuencias
+      - WIKI_MW_PROCESO_INSTANCIA=0
+    deploy:
+      replicas: 1
+
+  q4_top_n:
+    <<: *worker-base
+    build:
+      context: .
+      dockerfile: src/workers/q4/top_n/Dockerfile
+    environment:
+      - WIKI_MW_BROKER_HOST=rabbitmq
+      - WIKI_MW_PROCESO_GRUPO=top_n
+      - WIKI_MW_PROCESO_INSTANCIA=0
+    deploy:
+      replicas: 1
+
+  q5_average:
+    <<: *worker-base
+    build:
+      context: .
+      dockerfile: src/workers/q5/average/Dockerfile
+    environment:
+      - WIKI_MW_BROKER_HOST=rabbitmq
+      - WIKI_MW_PROCESO_GRUPO=q5_average
+      - WIKI_MW_PROCESO_INSTANCIA=0
+    deploy:
+      replicas: 1
+
+  q5_comparator:
+    <<: *worker-base
+    build:
+      context: .
+      dockerfile: src/workers/q5/comparator/Dockerfile
+    volumes:
+      - ./config:/app/config:ro
+      - ./data/temp:/app/data/temp:rw
+    environment:
+      - WIKI_MW_BROKER_HOST=rabbitmq
+      - WIKI_MW_PROCESO_GRUPO=q5_comparator
+      - WIKI_MW_PROCESO_INSTANCIA=0
+    deploy:
+      replicas: 1
