@@ -40,6 +40,22 @@ Para construir su imagen desde la raíz del proyecto:
 docker build -f src/workers/q4/frequency/Dockerfile -t wikipedia-frecuencia .
 ```
 
+Para iniciar Top N con el mismo despliegue y un presupuesto de buffer de 16 MiB:
+
+```bash
+WIKI_MW_PROCESO_GRUPO=top_n .venv/bin/python -m src.workers.q4.top_n.main --presupuesto-memoria-bytes 16777216
+```
+
+El presupuesto es obligatorio y compartido entre las ejecuciones de esa instancia.
+`--directorio-temporal` permite elegir un directorio existente; por defecto se usa
+el temporal del sistema. La ruta `q4` entrega pares `CONTEO_PALABRA` y su cierre
+al grupo `gateway_resultados`, que debe estar consumiendo. El Compose general
+configura las réplicas y su conectividad. Para construir la imagen:
+
+```bash
+docker build -f src/workers/q4/top_n/Dockerfile -t wikipedia-top-n .
+```
+
 Para ejecutar los escenarios con RabbitMQ real (requiere Docker
 con Compose y `make`):
 

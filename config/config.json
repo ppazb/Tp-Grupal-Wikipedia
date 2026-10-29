@@ -44,6 +44,15 @@
       ]
     },
     {
+      "nombre": "resultado_q4",
+      "origen": "top_n",
+      "destino": "gateway_resultados",
+      "entrada": "q4",
+      "esquemas": [
+        "CONTEO_PALABRA"
+      ]
+    },
+    {
       "nombre": "errores_ocurrencias",
       "origen": "ocurrencias",
       "destino": "gateway_resultados",
