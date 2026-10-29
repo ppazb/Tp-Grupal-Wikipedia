@@ -1,0 +1,57 @@
+services:
+  rabbitmq:
+    image: rabbitmq:3-management
+    environment:
+      RABBITMQ_DEFAULT_VHOST: wikipedia     
+      RABBITMQ_DEFAULT_USER: wikipedia
+      RABBITMQ_DEFAULT_PASS: desarrollo
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      retries: 10
+
+  init:
+    build: .
+    command: python -m src.middleware.inicializar config/config.json
+    depends_on: {rabbitmq: {condition: service_healthy}}
+    restart: "no"
+
+  gateway:
+    build: .
+    command: python gateway.py
+    depends_on: {init: {condition: service_completed_successfully}}
+    environment: 
+      WIKI_MW_PROCESO_GRUPO: gateway
+      WIKI_MW_PROCESO_INSTANCIA: "0"
+
+  filtro_2020_0:
+    build: .
+    command: python filtro.py
+    depends_on: {init: {condition: service_completed_successfully}}
+    environment:
+      WIKI_MW_PROCESO_GRUPO: filtro_2020
+      WIKI_MW_PROCESO_INSTANCIA: "0"
+
+  filtro_2020_1:
+    build: .
+    command: python filtro.py
+    depends_on: {init: {condition: service_completed_successfully}}
+    environment:
+      WIKI_MW_PROCESO_GRUPO: filtro_2020
+      WIKI_MW_PROCESO_INSTANCIA: "1"
+
+  filtro_2021_0:
+    build: .
+    command: python filtro.py
+    depends_on: {init: {condition: service_completed_successfully}}
+    environment:
+      WIKI_MW_PROCESO_GRUPO: filtro_2021
+      WIKI_MW_PROCESO_INSTANCIA: "0"
+
+  filtro_2021_1:
+    build: .
+    command: python filtro.py
+    depends_on: {init: {condition: service_completed_successfully}}
+    environment:
+      WIKI_MW_PROCESO_GRUPO: filtro_2021
+      WIKI_MW_PROCESO_INSTANCIA: "1"

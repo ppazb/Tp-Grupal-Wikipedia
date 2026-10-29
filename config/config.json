@@ -20,12 +20,24 @@
     "max_envios_por_publicacion": 8
   },
   "grupos": {
+    "gateway": 1,
+    "filtro_2020": 2,
+    "filtro_2021": 2,
     "ocurrencias": 2,
     "frecuencias": 2,
     "top_n": 1,
     "gateway_resultados": 1
   },
   "rutas": [
+
+ 
+    {"nombre": "gw_a_f2020", "origen": "gateway", "destino": "filtro_2020",
+     "entrada": "articulos", "esquemas": ["ARTICULO"]},
+
+    {"nombre": "gw_a_f2021", "origen": "gateway", "destino": "filtro_2021",
+     "entrada": "articulos", "esquemas": ["ARTICULO"]},
+
+
     {
       "nombre": "palabras",
       "origen": "ocurrencias",
