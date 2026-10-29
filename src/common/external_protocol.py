@@ -2,11 +2,14 @@
 from enum import IntEnum
 import socket
 import struct
-from .protocol.dto import IdentidadProceso
 
-# Marca de origen de los mensajes en el tramo TCP, no funcionma como identificador de cliente
-# id cliente = id_ejecucion
-IDENTIDAD_CLIENTE = IdentidadProceso("client", 0)
+from .protocol.primitivas import BYTES_U32, EscritorBinario, LectorBinario
+
+# Campos de una fila cruda, en el orden en que viajan; todos son textos (None se toma como "").
+# Los campos struct del Parquet (image, in_language) llegan ya aplanados.
+CAMPOS_FILA = (
+    "abstract", "date_modified", "image_content_url", "in_language", "name", "sections", "url",
+)
 
 
 class TipoFrame(IntEnum):
@@ -77,3 +80,27 @@ def recibir_exactamente(socket: socket.socket,cantidad: int,*,permitir_cierre: b
             raise ConnectionError("La conexión TCP se cerró durante un frame")
         partes.extend(fragmento)
     return bytes(partes)
+
+
+# Cuerpo de un frame DATOS: | u32 cantidad de filas | por fila, un texto u32-prefijado por campo de CAMPOS_FILA |
+# Eleva ErrorSerializacion (ValueError) si no entra en max_bytes.
+def codificar_filas(filas, max_bytes: int) -> bytes:
+    escritor = EscritorBinario(max_bytes)
+    escritor.entero(len(filas), BYTES_U32)
+    
+    for fila in filas:
+        for campo in CAMPOS_FILA:
+            escritor.texto(fila[campo])
+    
+    return escritor.resultado()
+
+
+def decodificar_filas(cuerpo: bytes) -> list[dict[str, str]]:
+    lector = LectorBinario(cuerpo)
+    filas = []
+    
+    for _ in range(lector.entero(BYTES_U32)):
+        filas.append({campo: lector.texto() for campo in CAMPOS_FILA})
+    lector.finalizar()
+    
+    return filas

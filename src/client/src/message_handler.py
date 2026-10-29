@@ -1,39 +1,66 @@
 import struct
-import uuid
 
-from ...common.protocol.dto import CierreProductor, Entrada, IdentidadProceso, SobreMensaje, TipoMensaje
-from ...common.protocol.registros import Esquema, Lote
+from ...common.external_protocol import codificar_filas
+from ...common.protocol.primitivas import ErrorSerializacion
 
-# Para que el gateway pueda identificar que el mensaje viene de un cliente
-IDENTIDAD_CLIENTE = IdentidadProceso("client", 0) 
 BYTES_8 = 8
 
-# Maneja la serializacion de mensajes y el conteo de lotes enviados y confirmados
-#tambien con uuid me aseguro que cada cliente tenga un ID unico
+
+class LoteDemasiadoGrande(ValueError):
+    """El lote serializado no entra en un frame."""
+
+
+def _texto(valor):
+    # Un valor nulo viaja como texto vacío; el gateway decide si la fila es válida.
+    if valor is None:
+        return ""
+    if hasattr(valor, "isoformat"):  
+        return valor.isoformat()
+    return valor if isinstance(valor, str) else str(valor)
+
+
+def _nombres_secciones(secciones):
+    """Nombres de las secciones del artículo; una sección sin nombre se omite."""
+    return tuple(
+        seccion["name"] for seccion in secciones or ()
+        if isinstance(seccion, dict) and isinstance(seccion.get("name"), str)
+    )
+
+
+def fila_plana(fila):
+    """Aplana los structs del Parquet a los campos de texto que viajan al gateway."""
+    imagen = fila.get("image")
+    idioma = fila.get("in_language")
+    return {
+        "abstract": _texto(fila.get("abstract")),
+        "date_modified": _texto(fila.get("date_modified")),
+        "image_content_url": _texto(imagen.get("content_url") if isinstance(imagen, dict) else None),
+        "in_language": _texto(idioma.get("identifier") if isinstance(idioma, dict) else None),
+        "name": _texto(fila.get("name")),
+        "sections": _nombres_secciones(fila.get("sections")),
+        "url": _texto(fila.get("url")),
+    }
+
+
+# Serializa las filas crudas del Parquet para el gateway (que es quien arma los artículos)
+# y lleva la cuenta de lotes enviados y confirmados.
 class ManejadorMensajes:
-    def __init__(self, codificador, nombre_entrada):
-        self._codificador = codificador
-        self.entrada = Entrada(str(uuid.uuid4()), nombre_entrada)
+    def __init__(self, max_bytes):
+        self._max_bytes = max_bytes
         self.lotes_confirmados = 0
 
-    @property
-    def id_ejecucion(self):
-        return self.entrada.id_ejecucion
-
-    def serializar_lote(self, registros):
-        return self._codificador.codificar(
-            SobreMensaje(self.entrada, TipoMensaje.DATOS, IDENTIDAD_CLIENTE,
-            Lote(Esquema.ARTICULO, tuple(registros)),
-        ))
+    def serializar_lote(self, filas):
+        try:
+            return codificar_filas([fila_plana(fila) for fila in filas], self._max_bytes)
+        except ErrorSerializacion as error:
+            raise LoteDemasiadoGrande(str(error)) from error
 
     def serializar_eof(self):
-        return self._codificador.codificar(
-            SobreMensaje(self.entrada, TipoMensaje.EOF, IDENTIDAD_CLIENTE,
-            CierreProductor(self.lotes_confirmados),
-        ))
+        # El gateway verifica que la cantidad de lotes anunciada coincida con la recibida
+        return struct.pack("!Q", self.lotes_confirmados)
 
     def validar_ack(self, contenido, esperado):
-        # True si el ACK es valido y con la cantidad de lotes esperados 
+        # True si el ACK es valido y con la cantidad de lotes esperados
         #!Q = unsigned long long (8 bytes) big-endian
         return len(contenido) == BYTES_8 and struct.unpack("!Q", contenido)[0] == esperado
 
