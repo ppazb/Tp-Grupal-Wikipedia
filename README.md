@@ -25,6 +25,21 @@ con las colas de datos vacías y sin consumidores:
 La inicialización rechaza repeticiones para evitar duplicar permisos. Una preparación
 incompleta requiere un despliegue limpio; no se purgan colas automáticamente.
 
+Para iniciar una instancia de Frecuencia, con el broker y la capacidad preparados:
+
+```bash
+.venv/bin/python -m src.workers.q4.frequency.main
+```
+
+Los parciales respetan `limites.max_bytes_por_mensaje`, incluido el sobre.
+`--config` selecciona el JSON de comunicación; `WIKI_MW_PROCESO_INSTANCIA`
+identifica cada réplica.
+Para construir su imagen desde la raíz del proyecto:
+
+```bash
+docker build -f src/workers/q4/frequency/Dockerfile -t wikipedia-frecuencia .
+```
+
 Para ejecutar los escenarios con RabbitMQ real (requiere Docker
 con Compose y `make`):
 

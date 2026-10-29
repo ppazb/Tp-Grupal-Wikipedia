@@ -172,6 +172,14 @@ class Middleware(ComunicacionGrupos[Contenido]):
     """Extiende la comunicación por grupos con cierres lógicos de entradas."""
 
     @abstractmethod
+    def crear_presupuesto_lote(self, entrada, esquema):
+        """Devuelve un medidor incremental con el espacio disponible para registros.
+
+        Descuenta el sobre de la entrada y la cabecera del lote del máximo de
+        bytes configurado. No reserva permisos de cola ni publica mensajes.
+        """
+
+    @abstractmethod
     def recibir(
         self, procesar: Callable[[Evento[Contenido]], None], *,
         al_finalizar: Optional[Callable[[Entrada], None]] = None,

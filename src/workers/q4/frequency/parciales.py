@@ -1,43 +1,59 @@
-"""Emisión de conteos parciales acotados por ejecución, independiente del transporte."""
+"""Emisión de conteos parciales acotados por los bytes del mensaje de salida."""
 
 from collections.abc import Callable
 
-from src.common.protocol.registros import Esquema, Lote, Palabra
+from src.common.protocol.registros import ConteoPalabra, Esquema, Lote, Palabra
 from .acumulador import AcumuladorFrecuencias
 
 
 class EmisorParciales:
-    """Emite al alcanzar el límite de palabras distintas o finalizar una entrada.
+    """Acumula presencias y emite antes de incorporar una palabra que no cabe.
 
-    emitir recibe el identificador de ejecución y un Lote de ConteoPalabra. Debe
-    retornar cuando la salida fue aceptada o elevar el error correspondiente.
-    El límite cuenta registros de salida; no sustituye el límite de bytes del
-    transporte. La instancia se utiliza secuencialmente dentro de un proceso.
+    crear_presupuesto recibe la ejecución y devuelve el medidor del transporte.
+    emitir recibe la ejecución y el lote; retorna cuando la salida fue aceptada
+    o eleva el error correspondiente. Los conteos usan cantidades de ancho fijo:
+    actualizar una palabra existente no modifica el tamaño del registro de salida.
+    La instancia se utiliza secuencialmente dentro de un proceso.
     """
 
-    def __init__(self, max_conteos_por_parcial: int, emitir: Callable[[str, Lote], None]):
-        if type(max_conteos_por_parcial) is not int or max_conteos_por_parcial <= 0:
-            raise ValueError("max_conteos_por_parcial debe ser un entero positivo")
-        if not callable(emitir):
-            raise TypeError("La operación de emisión debe ser invocable")
-        self._limite = max_conteos_por_parcial
+    def __init__(self, emitir: Callable[[str, Lote], None], crear_presupuesto: Callable):
+        if not callable(emitir) or not callable(crear_presupuesto):
+            raise TypeError('La emisión y la creación del presupuesto deben ser invocables')
         self._emitir = emitir
+        self._crear_presupuesto = crear_presupuesto
+        self._presupuestos = {}
         self._acumulador = AcumuladorFrecuencias()
         self._emitiendo = False
 
     def acumular(self, id_ejecucion: str, aporte: Palabra) -> None:
-        """Suma un aporte y emite los contadores al alcanzar el límite configurado."""
+        """Suma el aporte, emitiendo los conteos previos si su registro nuevo no cabe."""
         self._validar_disponible()
-        # Una emisión anterior fallida conserva el parcial completo. No se admite
-        # otro aporte hasta resolver su salida, para no superar el límite local.
-        if self._acumulador.cantidad_palabras(id_ejecucion) >= self._limite:
+        existente = self._acumulador.contiene_palabra(id_ejecucion, aporte)
+        presupuesto = self._presupuestos.get(id_ejecucion)
+        # Conserva un parcial completo cuya emisión falló hasta resolver su salida.
+        if presupuesto is not None and presupuesto.completo:
             self._emitir_pendientes(id_ejecucion)
+            existente = False
+        if not existente:
+            self._admitir_palabra(id_ejecucion, aporte)
         self._acumulador.acumular(id_ejecucion, aporte)
-        if self._acumulador.cantidad_palabras(id_ejecucion) >= self._limite:
+        if self._presupuestos[id_ejecucion].completo:
             self._emitir_pendientes(id_ejecucion)
 
+    def _admitir_palabra(self, id_ejecucion, aporte):
+        presupuesto = self._presupuestos.get(id_ejecucion)
+        if presupuesto is None:
+            presupuesto = self._crear_presupuesto(id_ejecucion)
+        registro = ConteoPalabra(aporte.palabra, 1)
+        if not presupuesto.admitir(registro):
+            self._emitir_pendientes(id_ejecucion)
+            presupuesto = self._crear_presupuesto(id_ejecucion)
+            if not presupuesto.admitir(registro):
+                raise ValueError('El registro no cabe en un parcial vacío')
+        self._presupuestos[id_ejecucion] = presupuesto
+
     def finalizar_entrada(self, id_ejecucion: str) -> None:
-        """Emite el parcial restante; una entrada vacía no produce lotes.
+        """Emite el resto antes del EOF; una entrada vacía no produce lotes.
 
         No publica EOF. El llamador debe cerrar la salida después de que esta
         operación retorne correctamente. Repetirla sin nuevos aportes no emite.
@@ -53,9 +69,10 @@ class EmisorParciales:
         try:
             self._emitir(id_ejecucion, Lote(Esquema.CONTEO_PALABRA, registros))
             self._acumulador.liberar_ejecucion(id_ejecucion)
+            del self._presupuestos[id_ejecucion]
         finally:
             self._emitiendo = False
 
     def _validar_disponible(self) -> None:
         if self._emitiendo:
-            raise RuntimeError("No se pueden modificar parciales durante su emisión")
+            raise RuntimeError('No se pueden modificar parciales durante su emisión')

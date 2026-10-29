@@ -20,10 +20,7 @@ class AcumuladorFrecuencias:
     def acumular(self, id_ejecucion: str, aporte: Palabra) -> None:
         """Incrementa la frecuencia local de una palabra para la ejecución indicada."""
         self._validar_ejecucion(id_ejecucion)
-        if type(aporte) is not Palabra:
-            raise TypeError("El aporte debe ser un DTO Palabra")
-        if type(aporte.palabra) is not str or not aporte.palabra.strip():
-            raise ValueError("La palabra del aporte debe ser texto no vacío")
+        self._validar_aporte(aporte)
         frecuencias = self._frecuencias.setdefault(id_ejecucion, {})
         frecuencias[aporte.palabra] = frecuencias.get(aporte.palabra, 0) + 1
 
@@ -40,15 +37,23 @@ class AcumuladorFrecuencias:
             for palabra, cantidad in frecuencias.items()
         )
 
-    def cantidad_palabras(self, id_ejecucion: str) -> int:
-        """Devuelve la cantidad de contadores distintos sin crear estado para la ejecución."""
+    def contiene_palabra(self, id_ejecucion: str, aporte: Palabra) -> bool:
+        """Consulta si el aporte actualizaría un contador existente, sin crear estado."""
         self._validar_ejecucion(id_ejecucion)
-        return len(self._frecuencias.get(id_ejecucion, {}))
+        self._validar_aporte(aporte)
+        return aporte.palabra in self._frecuencias.get(id_ejecucion, {})
 
     def liberar_ejecucion(self, id_ejecucion: str) -> None:
         """Elimina los conteos de una ejecución; repetir la operación no tiene efecto."""
         self._validar_ejecucion(id_ejecucion)
         self._frecuencias.pop(id_ejecucion, None)
+
+    @staticmethod
+    def _validar_aporte(aporte):
+        if type(aporte) is not Palabra:
+            raise TypeError("El aporte debe ser un DTO Palabra")
+        if type(aporte.palabra) is not str or not aporte.palabra.strip():
+            raise ValueError("La palabra del aporte debe ser texto no vacío")
 
     @staticmethod
     def _validar_ejecucion(id_ejecucion: str) -> None:
