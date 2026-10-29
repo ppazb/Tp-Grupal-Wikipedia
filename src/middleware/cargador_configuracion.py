@@ -31,7 +31,6 @@ CAMPOS_POR_SECCION = {
     "proceso": ("grupo", "instancia"),
     "limites": (
         "mensajes_sin_confirmar", "max_mensajes_por_cola", "max_bytes_por_mensaje",
-        "max_envios_por_publicacion",
     ),
 }
 CAMPOS_RUTA = ("nombre", "origen", "destino", "entrada", "esquemas")
@@ -203,7 +202,6 @@ def _leer_limites(seccion):
         ),
         max_mensajes_por_cola=_entero(seccion, "max_mensajes_por_cola"),
         max_bytes_por_mensaje=_entero(seccion, "max_bytes_por_mensaje"),
-        max_envios_por_publicacion=_entero(seccion, "max_envios_por_publicacion"),
     )
 
 

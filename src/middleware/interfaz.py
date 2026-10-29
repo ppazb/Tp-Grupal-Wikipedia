@@ -49,7 +49,7 @@ class OperacionInterrumpida(ErrorMiddleware):
 
 
 class PublicacionRechazada(ErrorMiddleware):
-    """La publicación excede el límite local o fue rechazada por el broker.
+    """La publicación fue rechazada por el broker.
 
     Un rechazo remoto no identifica necesariamente su causa.
     """
@@ -144,7 +144,7 @@ class ComunicacionGrupos(ABC, Generic[Contenido]):
 
     @abstractmethod
     def publicar_en_ramas(self, envios) -> None:
-        """Publica salidas acotadas en orden, esperando capacidad por cada destino.
+        """Publica salidas en orden, esperando capacidad por cada destino.
 
         Una espera conserva la salida actual y no repite las confirmadas. Un
         error posterior a un envío confirmado eleva ErrorPublicacionParcial.

@@ -28,10 +28,9 @@ class ConfiguracionBroker:
 
 @dataclass(frozen=True)
 class LimitesComunicacion:
-    """Límites para recepción, colas y preparación local de publicaciones.
+    """Límites para recepción, colas y tamaño de los mensajes.
 
-    Los cuerpos preparados ocupan como máximo max_envios_por_publicacion por
-    max_bytes_por_mensaje, sin contar objetos del llamador ni temporales de codificación.
+    max_bytes_por_mensaje limita cada sobre binario completo.
     mensajes_sin_confirmar limita entregas por canal receptor, no por grupo.
     max_mensajes_por_cola limita las colas de datos y sus permisos; las colas de
     control no tienen ese límite para permitir avanzar a las barreras de cierre.
@@ -40,7 +39,6 @@ class LimitesComunicacion:
     mensajes_sin_confirmar: int
     max_mensajes_por_cola: int
     max_bytes_por_mensaje: int
-    max_envios_por_publicacion: int
 
 
 @dataclass(frozen=True)
