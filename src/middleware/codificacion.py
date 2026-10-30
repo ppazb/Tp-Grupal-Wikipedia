@@ -8,9 +8,10 @@ from ..common.protocol.primitivas import (
     BYTES_U8, BYTES_U16, BYTES_U32, BYTES_U64, ErrorSerializacion, EscritorBinario, LectorBinario,
 )
 from ..common.protocol.registros import Esquema, Lote
-from ..common.protocol.serializer import escribir_lote, leer_lote
+from ..common.protocol.serializer import escribir_cabecera_lote, escribir_lote, leer_lote
 from .configuracion import ErrorConfiguracion
 from .interfaz import ErrorMensaje, ErrorMensajeInvalido
+from .presupuesto_lote import PresupuestoLote
 
 
 class CodificadorMensajes:
@@ -33,12 +34,7 @@ class CodificadorMensajes:
             raise ErrorMensaje(str(error)) from error
 
     def _escribir(self, escritor, sobre):
-        escritor.entero(sobre.tipo.value, BYTES_U8)
-        escritor.texto(sobre.entrada.id_ejecucion)
-        escritor.texto(sobre.entrada.nombre)
-        escritor.texto(sobre.origen.grupo)
-        escritor.entero(sobre.origen.instancia, BYTES_U32)
-        inicio = escritor.iniciar_bloque()
+        inicio = self._escribir_cabecera(escritor, sobre)
         if sobre.tipo is TipoMensaje.DATOS:
             escribir_lote(escritor, sobre.contenido)
         elif sobre.tipo in (TipoMensaje.EOF, TipoMensaje.PREPARAR_CIERRE):
@@ -46,6 +42,27 @@ class CodificadorMensajes:
         elif sobre.tipo is TipoMensaje.AVANCE_REPLICA:
             escritor.entero(sobre.contenido.lotes_resueltos, BYTES_U64)
         escritor.terminar_bloque(inicio)
+
+    def _escribir_cabecera(self, escritor, sobre):
+        escritor.entero(sobre.tipo.value, BYTES_U8)
+        escritor.texto(sobre.entrada.id_ejecucion)
+        escritor.texto(sobre.entrada.nombre)
+        escritor.texto(sobre.origen.grupo)
+        escritor.entero(sobre.origen.instancia, BYTES_U32)
+        return escritor.iniciar_bloque()
+
+    def crear_presupuesto_lote(self, entrada, origen, esquema):
+        """Reserva el tamaño del sobre y la cabecera para construir un lote por bytes."""
+        sobre = SobreMensaje(entrada, TipoMensaje.DATOS, origen, Lote(esquema, ()))
+        _validar_sobre(sobre)
+        try:
+            escritor = EscritorBinario(self._max_bytes_por_mensaje, medir=True)
+            inicio = self._escribir_cabecera(escritor, sobre)
+            escribir_cabecera_lote(escritor, esquema, 0)
+            escritor.terminar_bloque(inicio)
+            return PresupuestoLote(self._max_bytes_por_mensaje - escritor.posicion, esquema)
+        except ErrorSerializacion as error:
+            raise ErrorMensaje(str(error)) from error
 
     def decodificar(self, cuerpo: bytes) -> ResultadoDecodificacion:
         """Valida el sobre completo y devuelve los registros válidos y sus rechazos."""

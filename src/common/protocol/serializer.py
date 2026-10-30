@@ -71,17 +71,29 @@ def escribir_lote(escritor, lote):
         raise ErrorSerializacion("Se esperaba un Lote con esquema explícito")
     if type(lote.registros) is not tuple or not lote.registros:
         raise ErrorSerializacion("El lote debe contener una tupla no vacía de registros")
-    clase, campos = ESQUEMAS[lote.esquema]
-    escritor.entero(lote.esquema.value, BYTES_U16)
-    escritor.entero(len(lote.registros), BYTES_U32)
+    escribir_cabecera_lote(escritor, lote.esquema, len(lote.registros))
     for registro in lote.registros:
-        if type(registro) is not clase:
-            raise ErrorSerializacion("El registro no corresponde al esquema del lote")
-        inicio = escritor.iniciar_bloque()
-        for nombre, tipo in campos:
-            _escribir_campo(escritor, tipo, getattr(registro, nombre))
-        _validar_registro(registro)
-        escritor.terminar_bloque(inicio)
+        escribir_registro(escritor, lote.esquema, registro)
+
+
+def escribir_cabecera_lote(escritor, esquema, cantidad):
+    """Escribe esquema y cantidad; admite cero para medir un lote sin registros."""
+    if type(esquema) is not dto.Esquema:
+        raise ErrorSerializacion("Se esperaba un esquema explícito")
+    escritor.entero(esquema.value, BYTES_U16)
+    escritor.entero(cantidad, BYTES_U32)
+
+
+def escribir_registro(escritor, esquema, registro):
+    """Valida y escribe un registro delimitado según el esquema compartido."""
+    clase, campos = ESQUEMAS[esquema]
+    if type(registro) is not clase:
+        raise ErrorSerializacion("El registro no corresponde al esquema del lote")
+    inicio = escritor.iniciar_bloque()
+    for nombre, tipo in campos:
+        _escribir_campo(escritor, tipo, getattr(registro, nombre))
+    _validar_registro(registro)
+    escritor.terminar_bloque(inicio)
 
 
 def leer_lote(lector, esquema):

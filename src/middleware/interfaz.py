@@ -49,7 +49,7 @@ class OperacionInterrumpida(ErrorMiddleware):
 
 
 class PublicacionRechazada(ErrorMiddleware):
-    """La publicación excede el límite local o fue rechazada por el broker.
+    """La publicación fue rechazada por el broker.
 
     Un rechazo remoto no identifica necesariamente su causa.
     """
@@ -144,7 +144,7 @@ class ComunicacionGrupos(ABC, Generic[Contenido]):
 
     @abstractmethod
     def publicar_en_ramas(self, envios) -> None:
-        """Publica salidas acotadas en orden, esperando capacidad por cada destino.
+        """Publica salidas en orden, esperando capacidad por cada destino.
 
         Una espera conserva la salida actual y no repite las confirmadas. Un
         error posterior a un envío confirmado eleva ErrorPublicacionParcial.
@@ -170,6 +170,14 @@ class ComunicacionGrupos(ABC, Generic[Contenido]):
 
 class Middleware(ComunicacionGrupos[Contenido]):
     """Extiende la comunicación por grupos con cierres lógicos de entradas."""
+
+    @abstractmethod
+    def crear_presupuesto_lote(self, entrada, esquema):
+        """Devuelve un medidor incremental con el espacio disponible para registros.
+
+        Descuenta el sobre de la entrada y la cabecera del lote del máximo de
+        bytes configurado. No reserva permisos de cola ni publica mensajes.
+        """
 
     @abstractmethod
     def recibir(
