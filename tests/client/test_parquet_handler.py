@@ -1,4 +1,3 @@
-"""Tests simples del parquet_handler: arman Parquet chicos en un directorio temporal."""
 
 import tempfile
 import unittest
@@ -17,6 +16,7 @@ def escribir_parquet(directorio, nombre, nombres_articulos, columnas=COLUMNAS_PA
     })
     pq.write_table(tabla, Path(directorio) / nombre)
 
+"""Tests simples del parquet_handler: arman Parquet chicos en un directorio temporal."""
 
 class TestParquetHandler(unittest.TestCase):
 
