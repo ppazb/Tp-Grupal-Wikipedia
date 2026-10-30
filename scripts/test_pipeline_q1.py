@@ -128,12 +128,16 @@ def main():
         terminado = False
 
         def procesar_resultado(datos):
+            if datos.entrada.nombre != "resultados_finales_q1":
+                return
             for reg in datos.contenido.registros:
                 recibidos.add(reg.url)
                 logger.info(" [RESULTADO RECIBIDO] URL: %s | Fecha: %s", reg.url, reg.fecha)
 
         def al_finalizar_resultados(entrada):
             nonlocal terminado
+            if entrada.nombre != "resultados_finales_q1":
+                return
             logger.info(" [BARRERA EOF RECIBIDA] Entrada finalizada: %s", entrada.nombre)
             terminado = True
             middleware.detener_recepcion()

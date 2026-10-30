@@ -9,6 +9,7 @@ from .broker_connection import ConexionBroker
 from .capacidad import CapacidadDatos
 from .configuracion import ErrorConfiguracion
 from .coordinacion import CoordinacionCierre
+from .codificacion import CodificadorMensajes
 from .interfaz import (
     Middleware, ErrorCierre, ErrorConexion, ErrorMiddleware, ErrorRecepcion,
     ErrorRecursosEjecucion, ErrorSeguimientoEntrada, MiddlewareCerrado,
@@ -34,6 +35,8 @@ class MiddlewareRabbitMQ(Middleware[Lote]):
 
     def __init__(self, configuracion, *, informar_error=None):
         self._proceso_propietario = os.getpid()
+        self._identidad = configuracion.proceso
+        self._codificador = CodificadorMensajes(configuracion.limites.max_bytes_por_mensaje)
         self._conexion = ConexionBroker(configuracion.broker)
         self._recursos = RecursosPorEjecucion()
         self._cerrada = False
@@ -100,6 +103,11 @@ class MiddlewareRabbitMQ(Middleware[Lote]):
             self._publicador.publicar_en_ramas(envios)
         finally:
             self._publicando = False
+
+    def crear_presupuesto_lote(self, entrada, esquema):
+        """Calcula el espacio para registros descontando el sobre y la cabecera."""
+        self._validar_abierta()
+        return self._codificador.crear_presupuesto_lote(entrada, self._identidad, esquema)
 
     def finalizar_entrada(self, grupo, entrada):
         """Publica el cierre del productor después de sus lotes confirmados."""

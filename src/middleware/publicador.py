@@ -70,9 +70,9 @@ class PublicadorDatos:
         self.publicar_en_ramas((EnvioDatos(grupo, datos, clave_afinidad),))
 
     def publicar_en_ramas(self, envios: Sequence[EnvioDatos]) -> None:
-        """Valida y publica una secuencia acotada de salidas, en el orden recibido.
+        """Valida y publica una secuencia de salidas, en el orden recibido.
 
-        Rechaza iteradores y secuencias que superen max_envios_por_publicacion.
+        Recibe una secuencia de envíos a las ramas definidas por el llamador.
         Codifica todas las salidas antes de enviar la primera; una secuencia vacía
         no publica nada. Si un envío falla después de otros confirmados, eleva
         ErrorPublicacionParcial con esas salidas y la causa del fallo.
@@ -81,9 +81,7 @@ class PublicadorDatos:
         if self._publicando:
             raise ErrorMiddleware("La publicación no admite llamadas reentrantes")
         if not isinstance(envios, Sequence):
-            raise ErrorMensaje("Las salidas deben ser una secuencia acotada")
-        if len(envios) > self._configuracion.limites.max_envios_por_publicacion:
-            raise PublicacionRechazada("La llamada supera max_envios_por_publicacion")
+            raise ErrorMensaje("Las salidas deben ser una secuencia")
         self._publicando = True
         try:
             preparados = [self._preparar(envio) for envio in envios]

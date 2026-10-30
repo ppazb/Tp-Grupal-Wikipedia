@@ -16,8 +16,7 @@
   "limites": {
     "mensajes_sin_confirmar": 4,
     "max_mensajes_por_cola": 1000,
-    "max_bytes_por_mensaje": 65536,
-    "max_envios_por_publicacion": 8
+    "max_bytes_por_mensaje": 65536
   },
   "grupos": {
     "gateway_resultados": 1,
@@ -167,6 +166,15 @@
       "entrada": "errores",
       "esquemas": [
         "ERROR_REGISTRO"
+      ]
+    },
+    {
+      "nombre": "resultado_q4",
+      "origen": "top_n",
+      "destino": "gateway_resultados",
+      "entrada": "q4",
+      "esquemas": [
+        "CONTEO_PALABRA"
       ]
     }
   ]

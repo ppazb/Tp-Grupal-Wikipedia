@@ -1,17 +1,8 @@
-FROM python:3.11-slim
-
+FROM python:3.12-slim
 WORKDIR /app
-ENV PYTHONUNBUFFERED=1
-
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 COPY requirements.txt .
-RUN pip3 install --no-cache-dir -r requirements.txt
-
-COPY src/common ./src/common
-COPY src/middleware ./src/middleware
-COPY src/workers/__init__.py ./src/workers/__init__.py
-COPY src/workers/base_worker.py ./src/workers/base_worker.py
-COPY src/workers/q4/top_n ./src/workers/q4/top_n
-
-ENV PYTHONPATH="/app"
-
-ENTRYPOINT ["python3", "src/workers/q4/top_n/main.py"]
+RUN pip install --no-cache-dir -r requirements.txt
+COPY src ./src
+COPY config ./config
+ENTRYPOINT ["python", "-m", "src.workers.q4.top_n.main"]

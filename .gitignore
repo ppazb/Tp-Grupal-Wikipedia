@@ -38,3 +38,6 @@ src/workers/date_router/__pycache__/router.cpython-314.pyc
 src/workers/q1/filter_lang/__pycache__/worker.cpython-314.pyc
 src/workers/q1/formatter/__pycache__/worker.cpython-314.pyc
 scripts/__pycache__/test_pipeline_q1.cpython-314.pyc
+
+# Cachés de Python de cualquier versión.
+__pycache__/

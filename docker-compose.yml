@@ -191,6 +191,7 @@ services:
     build:
       context: .
       dockerfile: src/workers/q4/top_n/Dockerfile
+    command: ["--presupuesto-memoria-bytes", "16777216"]
     environment:
       - WIKI_MW_BROKER_HOST=rabbitmq
       - WIKI_MW_PROCESO_GRUPO=top_n

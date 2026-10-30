@@ -16,8 +16,7 @@
   "limites": {
     "mensajes_sin_confirmar": 4,
     "max_mensajes_por_cola": 1,
-    "max_bytes_por_mensaje": 65536,
-    "max_envios_por_publicacion": 8
+    "max_bytes_por_mensaje": 65536
   },
   "grupos": {
     "productores": 2,
