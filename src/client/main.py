@@ -1,14 +1,11 @@
-import time
-import logging
+import sys
 
-def main():
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
-    logging.info("Proceso iniciado. Bucle de espera activo.")
-    try:
-        while True:
-            time.sleep(3600)
-    except KeyboardInterrupt:
-        logging.info("Interrupción manual. Finalizando.")
+from src.client.src.client import ejecutar_client
+
+
+def main() -> int:
+    return ejecutar_client()
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

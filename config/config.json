@@ -28,11 +28,13 @@
     "q3_intersection": 1,
     "word_occurrences": 1,
     "frecuencias": 1,
+    "gateway": 1,
     "top_n": 1,
     "q5_average": 1,
     "q5_comparator": 1
   },
   "rutas": [
+
     {
       "nombre": "mock_a_router",
       "origen": "gateway_resultados",

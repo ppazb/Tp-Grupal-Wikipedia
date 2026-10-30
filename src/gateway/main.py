@@ -1,14 +1,39 @@
-import time
 import logging
+import os
+import signal
+import sys
+import threading
 
-def main():
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
-    logging.info("Proceso iniciado. Bucle de espera activo.")
+from src.middleware.configuracion import ErrorConfiguracion
+from src.middleware.interfaz import ErrorMiddleware
+from src.gateway.src.gateway import ejecutar_gateway
+
+LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
+
+
+def main() -> int:
+    logging.basicConfig(level=LOG_LEVEL, format="%(asctime)s %(levelname)s %(name)s: %(message)s",)
+    
+    stop = threading.Event()
+    
+    signal.signal(signal.SIGTERM, lambda signum, frame: stop.set())
+    signal.signal(signal.SIGINT, lambda signum, frame: stop.set())
+    
     try:
-        while True:
-            time.sleep(3600)
-    except KeyboardInterrupt:
-        logging.info("Interrupción manual. Finalizando.")
+        return ejecutar_gateway(stop)
+    
+    except (ErrorMiddleware, ErrorConfiguracion) as error:
+        logging.getLogger('gateway').error("No se pudo iniciar o ejecutar el gateway: %s", error)
+        return 1
+
+    except OSError as error:
+        logging.getLogger('gateway').error("Error de sistema operativo: %s", error)
+        return 1
+        
+    except Exception:
+        logging.getLogger('gateway').exception("Falló el proceso gateway")
+        return 2
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

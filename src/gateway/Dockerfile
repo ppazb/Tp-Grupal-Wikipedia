@@ -9,6 +9,8 @@ RUN pip3 install --no-cache-dir -r requirements.txt
 COPY src/common ./src/common
 COPY src/middleware ./src/middleware
 COPY src/gateway ./src/gateway
+COPY src ./src
+COPY config ./config
 
 ENV PYTHONPATH="/app"
 

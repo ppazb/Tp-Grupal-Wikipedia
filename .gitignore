@@ -1,3 +1,5 @@
+__pycache__/
+*.py[cod]
 src/common/__pycache__/__init__.cpython-314.pyc
 src/common/protocol/__pycache__/__init__.cpython-314.pyc
 src/common/protocol/__pycache__/dto.cpython-314.pyc
