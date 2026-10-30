@@ -69,3 +69,8 @@ El comando construye el contenedor de pruebas, levanta un broker aislado sin
 publicar puertos y elimina sus contenedores y volúmenes al terminar. Devuelve un
 código distinto de cero si falla una prueba. La primera ejecución descarga las
 imágenes y dependencias. Los escenarios están en `tests/middleware/` y `tests/eof/`.
+
+## Correr el pipeline gateway a Q1
+
+Todo junto, con limpieza al final: `make test-gateway-q1`.
+

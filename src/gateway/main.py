@@ -26,8 +26,8 @@ def main() -> int:
         logging.getLogger('gateway').error("No se pudo iniciar o ejecutar el gateway: %s", error)
         return 1
 
-    except OSError as error:
-        logging.getLogger('gateway').error("Error de sistema operativo: %s", error)
+    except (OSError, ValueError) as error:
+        logging.getLogger('gateway').error("Error de sistema o de configuración: %s", error)
         return 1
         
     except Exception:

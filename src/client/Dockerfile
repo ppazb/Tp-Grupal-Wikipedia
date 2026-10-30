@@ -13,4 +13,4 @@ COPY config ./config
 
 ENV PYTHONPATH="/app"
 
-ENTRYPOINT ["python3", "src/client/main.py"]
+ENTRYPOINT ["python3", "-m", "src.client.main"]
