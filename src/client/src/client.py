@@ -2,6 +2,7 @@ import logging
 import os
 import signal
 import socket
+import threading
 
 import pyarrow.parquet as parquet
 
@@ -30,12 +31,6 @@ SERVER_PORT = int(os.environ.get("SERVER_PORT", "5555"))
 CONNECT_TIMEOUT_SECONDS = float(os.environ.get("CONNECT_TIMEOUT_SECONDS", "10"))
 SOCKET_TIMEOUT_SECONDS = float(os.environ.get("SOCKET_TIMEOUT_SECONDS", "1"))
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
-_detener = False
-
-
-def _solicitar_detencion(signum, frame):
-    global _detener
-    _detener = True
 
 # Responde con ACK al ERROR del gateway para que pueda cerrar la conexión
 def _confirmar_error(socket, max_bytes):
@@ -45,8 +40,8 @@ def _confirmar_error(socket, max_bytes):
         LOG.debug("No se pudo confirmar el ERROR al gateway")
 
 # Lee la respuesta del gateway y valida que confirme esperado lotes.
-def _esperar_confirmacion(socket, max_bytes, manejador, esperado, descripcion):
-    respuesta = recibir_frame(socket, max_bytes, interrumpido=lambda: _detener)
+def _esperar_confirmacion(socket, max_bytes, manejador, esperado, descripcion, detener):
+    respuesta = recibir_frame(socket, max_bytes, interrumpido=detener.is_set)
     if respuesta is None:
         raise ConnectionError(f"El gateway cerró la conexión antes de confirmar {descripcion}")
     
@@ -60,7 +55,7 @@ def _esperar_confirmacion(socket, max_bytes, manejador, esperado, descripcion):
         raise ConnectionError(f"El gateway no confirmó correctamente {descripcion}")
 
 # Envia las filas en uno o mas lotes, un lote que no entra en un frame se divide a la mitad
-def _enviar_filas(socket, manejador, max_bytes, filas):
+def _enviar_filas(socket, manejador, max_bytes, filas, detener):
 
     pendientes = [filas]
     while pendientes:
@@ -77,12 +72,12 @@ def _enviar_filas(socket, manejador, max_bytes, filas):
             continue
 
         enviar_frame(socket, TipoFrame.DATOS, cuerpo, max_bytes)
-        _esperar_confirmacion(socket, max_bytes, manejador, manejador.lotes_confirmados + 1, "el lote")
+        _esperar_confirmacion(socket, max_bytes, manejador, manejador.lotes_confirmados + 1, "el lote", detener)
         # se cuenta recién al ser confirmado por el gateway
         manejador.lote_confirmado()  
 
 
-def enviar_parquet(ruta_archivo, socket, max_bytes, tamano_lote):
+def enviar_parquet(ruta_archivo, socket, max_bytes, tamano_lote, detener):
     archivo = parquet.ParquetFile(ruta_archivo)
     faltantes = set(COLUMNAS_PARQUET) - set(archivo.schema_arrow.names)
     if faltantes:
@@ -92,7 +87,7 @@ def enviar_parquet(ruta_archivo, socket, max_bytes, tamano_lote):
     filas_enviadas = 0
     for lote_arrow in archivo.iter_batches(batch_size=tamano_lote, columns=list(COLUMNAS_PARQUET)):
         
-        if _detener:
+        if detener.is_set():
             LOG.warning("Interrumpido antes del EOF")
             return 143
         
@@ -100,27 +95,28 @@ def enviar_parquet(ruta_archivo, socket, max_bytes, tamano_lote):
         if not filas:
             continue
         
-        _enviar_filas(socket, manejador, max_bytes, filas)
+        _enviar_filas(socket, manejador, max_bytes, filas, detener)
         filas_enviadas += len(filas)
         LOG.info("Lotes admitidos por el gateway: %d", manejador.lotes_confirmados)
 
     enviar_frame(socket, TipoFrame.EOF, manejador.serializar_eof(), max_bytes)
-    _esperar_confirmacion(socket, max_bytes, manejador, manejador.lotes_confirmados, "el EOF")
+    _esperar_confirmacion(socket, max_bytes, manejador, manejador.lotes_confirmados, "el EOF", detener)
 
     LOG.info("EOF confirmado: %d filas enviadas en %d lotes", filas_enviadas, manejador.lotes_confirmados)
     return 0
 
 
 def ejecutar_client() -> int:
-    #despues ver si detener se puede hacer sin variable global, pero por ahora es lo mas simple
-    global _detener
-    _detener = False
+    detener = threading.Event()
+
+    def solicitar_detencion(signum, frame):
+        detener.set()
 
     logging.basicConfig(level=LOG_LEVEL,format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
     #sigterm y sigint
-    signal.signal(signal.SIGTERM, _solicitar_detencion)
-    signal.signal(signal.SIGINT, _solicitar_detencion)
+    signal.signal(signal.SIGTERM, solicitar_detencion)
+    signal.signal(signal.SIGINT, solicitar_detencion)
 
     try:
         if not INPUT_FILE:
@@ -132,7 +128,7 @@ def ejecutar_client() -> int:
 
         with socket.create_connection((SERVER_HOST, SERVER_PORT), timeout=CONNECT_TIMEOUT_SECONDS) as conexion:
             conexion.settimeout(SOCKET_TIMEOUT_SECONDS)
-            return enviar_parquet(INPUT_FILE, conexion, MAX_FRAME_BYTES, BATCH_SIZE)
+            return enviar_parquet(INPUT_FILE, conexion, MAX_FRAME_BYTES, BATCH_SIZE, detener)
 
     except InterruptedError:
         LOG.warning("Envío interrumpido antes de completar la ejecución")
