@@ -4,9 +4,8 @@ from ...common.protocol.registros import Articulo, Idioma
 
 IDIOMAS = {"en": Idioma.INGLES, "fr": Idioma.FRANCES}
 
-"""Construcción de artículos a partir de las filas crudas que envía el cliente."""
-
 def _texto_requerido(valor, campo, indice):
+    """Construcción de artículos a partir de las filas crudas que envía el cliente."""
     if not isinstance(valor, str) or not valor.strip():
         raise ValueError(f"El campo {campo} de la fila {indice} está vacío")
     return valor

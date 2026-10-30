@@ -36,8 +36,8 @@
   "rutas": [
 
     {
-      "nombre": "mock_a_router",
-      "origen": "gateway_resultados",
+      "nombre": "gateway_a_router",
+      "origen": "gateway",
       "destino": "date_router",
       "entrada": "articulos_crudos",
       "esquemas": [

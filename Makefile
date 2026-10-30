@@ -1,4 +1,4 @@
-.PHONY: test test-middleware test-eof
+.PHONY: test test-middleware test-eof test-gateway-q1
 test:
 	bash scripts/probar_escenarios.sh todos
 
@@ -7,3 +7,10 @@ test-middleware:
 
 test-eof:
 	bash scripts/probar_escenarios.sh eof
+
+# Pipeline completo cliente -> gateway -> Q1 con el compose principal.
+# Falla si el cliente no termina bien; siempre baja el despliegue al terminar.
+test-gateway-q1:
+	docker compose down -v
+	docker compose up -d --build --wait rabbitmq inicializador gateway date_router q1_filter_lang q1_formatter
+	docker compose run --no-deps --rm client; status=$$?; docker compose down -v; exit $$status

@@ -1,5 +1,4 @@
 import json
-import struct
 
 from ...common.external_protocol import codificar_filas
 from ...common.protocol.primitivas import ErrorSerializacion
@@ -66,12 +65,12 @@ class ManejadorMensajes:
 
     def serializar_eof(self):
         # El gateway verifica que la cantidad de lotes anunciada coincida con la recibida
-        return struct.pack("!Q", self.lotes_confirmados)
+        return self.lotes_confirmados.to_bytes(BYTES_8, "big")
 
     def validar_ack(self, contenido, esperado):
         # True si el ACK es valido y con la cantidad de lotes esperados
-        #!Q = unsigned long long (8 bytes) big-endian
-        return len(contenido) == BYTES_8 and struct.unpack("!Q", contenido)[0] == esperado
+        # 8 bytes, entero sin signo big-endian
+        return len(contenido) == BYTES_8 and int.from_bytes(contenido, "big") == esperado
 
     def lote_confirmado(self):
         self.lotes_confirmados += 1

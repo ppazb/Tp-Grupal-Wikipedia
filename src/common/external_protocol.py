@@ -1,7 +1,6 @@
 
 from enum import IntEnum
 import socket
-import struct
 
 from .protocol.primitivas import BYTES_U32, EscritorBinario, LectorBinario
 
@@ -31,7 +30,7 @@ def enviar_frame(socket: socket.socket, tipo: TipoFrame, cuerpo: bytes, max_byte
         raise ValueError("El cuerpo del frame supera el max_bytes permitido")
     
     longitud = 1 + len(cuerpo)
-    socket.sendall(struct.pack("!I", longitud) + bytes((tipo,)) + cuerpo)
+    socket.sendall(longitud.to_bytes(4, "big") + bytes((tipo,)) + cuerpo)
 
 
 # Recibe un frame TCP y devuelve una tupla (tipo, cuerpo) o none si se cerró la conexión.
@@ -46,7 +45,7 @@ def recibir_frame(socket: socket.socket, max_bytes: int,*, permitir_cierre: bool
     # recibi_exactamente devuelve None si se cerró la conexion 
     if cabecera is None:
         return None
-    longitud = struct.unpack("!I", cabecera)[0]
+    longitud = int.from_bytes(cabecera, "big")
     if not 1 <= longitud <= max_bytes + 1:
         raise ValueError("El frame TCP tiene una longitud inválida")
     

@@ -14,4 +14,4 @@ COPY config ./config
 
 ENV PYTHONPATH="/app"
 
-ENTRYPOINT ["python3", "src/gateway/main.py"]
+ENTRYPOINT ["python3", "-m", "src.gateway.main"]

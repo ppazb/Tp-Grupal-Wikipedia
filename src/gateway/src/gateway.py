@@ -1,7 +1,6 @@
 import logging
 import os
 import socket
-import struct
 import threading
 import time
 import uuid
@@ -16,18 +15,18 @@ from ...middleware.interfaz import ErrorMensaje, ErrorMiddleware
 from ...middleware.rabbitmq import MiddlewareRabbitMQ
 from .articulos import articulo_desde_fila
 
-# se agregan defaults, cuando hagamos el merge sacamos los defaults ya que 
-# lo correcto es q levante error si no esta en yml
 LOG = logging.getLogger('gateway')
-MIDDLEWARE_CONFIG = os.environ.get("MIDDLEWARE_CONFIG", "config/config.json")
-GATEWAY_GROUP = os.environ.get("GATEWAY_GROUP", "gateway")
-GATEWAY_INSTANCE = int(os.environ.get("GATEWAY_INSTANCE", "0"))
-GATEWAY_ARTICLE_ENTRY = os.environ.get("GATEWAY_ARTICLE_ENTRY")
-GATEWAY_ERROR_ACK_SECONDS = float(os.environ.get("GATEWAY_ERROR_ACK_SECONDS", "5"))
-SERVER_HOST = os.environ.get("SERVER_HOST", "0.0.0.0")
-SERVER_PORT = int(os.environ.get("SERVER_PORT", "5555"))
-MAX_AVISOS_FILA = 20  # tope de warnings por filas descartadas en una ejecución
 
+# Configuración desde el entorno 
+MIDDLEWARE_CONFIG = os.environ["MIDDLEWARE_CONFIG"]
+GATEWAY_GROUP = os.environ["GATEWAY_GROUP"]
+GATEWAY_INSTANCE = int(os.environ["GATEWAY_INSTANCE"])
+GATEWAY_ERROR_ACK_SECONDS = float(os.environ["GATEWAY_ERROR_ACK_SECONDS"])
+SERVER_HOST = os.environ["SERVER_HOST"]
+SERVER_PORT = int(os.environ["SERVER_PORT"])
+
+
+MAX_AVISOS_FILA = 20  # tope de warnings por filas descartadas en una ejecucion
 BYTE_8 = 8  
 
 # Rutas salientes de artículos: el problema se abre en tramos y cada uno recibe el lote.
@@ -44,7 +43,6 @@ def _rutas_articulos(configuracion):
         ruta for ruta in configuracion.rutas
         if ruta.origen == GATEWAY_GROUP
         and Esquema.ARTICULO in ruta.esquemas
-        and (GATEWAY_ARTICLE_ENTRY is None or ruta.entrada == GATEWAY_ARTICLE_ENTRY)
     ]
     
     if not rutas:
@@ -260,7 +258,7 @@ class ServidorGateway:
                 cantidad_lotes += 1
 
                 # ACK: se confirma la recepción del lote
-                enviar_frame(cliente, TipoFrame.ACK, struct.pack("!Q", cantidad_lotes), self._max_bytes)
+                enviar_frame(cliente, TipoFrame.ACK, cantidad_lotes.to_bytes(BYTE_8, "big"), self._max_bytes)
                 
                 continue
 
@@ -273,7 +271,7 @@ class ServidorGateway:
             
             self._publicador.finalizar(id_ejecucion)
             
-            enviar_frame(cliente, TipoFrame.ACK,struct.pack("!Q", cantidad_lotes), self._max_bytes)
+            enviar_frame(cliente, TipoFrame.ACK,cantidad_lotes.to_bytes(BYTE_8, "big"), self._max_bytes)
             
             LOG.info("Ejecución %s admitida: %d lotes, %d filas (%d descartadas), publicados en %s",
                 id_ejecucion, cantidad_lotes, filas_totales, filas_descartadas,", ".join(ruta.destino for ruta in self._rutas),
@@ -330,7 +328,7 @@ class ServidorGateway:
 
     @staticmethod
     def _verificar_eof(cuerpo, cantidad_lotes):
-        if len(cuerpo) != BYTE_8 or struct.unpack("!Q", cuerpo)[0] != cantidad_lotes:
+        if len(cuerpo) != BYTE_8 or int.from_bytes(cuerpo, "big") != cantidad_lotes:
             raise ValueError("La cantidad de lotes anunciada por EOF no coincide")
 
     def _cerrar_clientes(self):
@@ -357,15 +355,15 @@ def ejecutar_gateway(detener):
     grupo = configuracion.obtener_grupo(GATEWAY_GROUP)
     
     if not 0 <= GATEWAY_INSTANCE < grupo.instancias:
-        raise ErrorConfiguracion("GATEWAY_INSTANCE está fuera del grupo gateway")
+        raise ErrorConfiguracion(f"GATEWAY_INSTANCE está fuera del grupo {GATEWAY_GROUP}")
     
     if GATEWAY_ERROR_ACK_SECONDS <= 0:
         raise ValueError("GATEWAY_ERROR_ACK_SECONDS debe ser mayor que cero")
 
-    configuracion = replace(configuracion,proceso=IdentidadProceso(GATEWAY_GROUP, GATEWAY_INSTANCE))
+    configuracion = replace(configuracion, proceso=IdentidadProceso(GATEWAY_GROUP, GATEWAY_INSTANCE))
     publicador = PublicadorMiddleware(configuracion, rutas)
     servidor = ServidorGateway(SERVER_HOST, SERVER_PORT, configuracion.limites.max_bytes_por_mensaje,
-        rutas, publicador, detener,GATEWAY_ERROR_ACK_SECONDS,
+        rutas, publicador, detener, GATEWAY_ERROR_ACK_SECONDS,
     )
     
     try:
