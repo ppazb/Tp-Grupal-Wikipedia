@@ -12,7 +12,7 @@ python3 -m venv .venv
 La configuración está en `config/config.json`. Las variables `WIKI_MW_` permiten
 sobrescribir sus valores; por ejemplo, `WIKI_MW_BROKER_HOST`,
 `WIKI_MW_PROCESO_GRUPO` y `WIKI_MW_PROCESO_INSTANCIA`.
-El archivo actual contiene un ejemplo del tramo Q4, no la topología completa.
+El archivo reúne las rutas de Q1, Q4 y las conexiones declaradas de las ramas aún provisionales.
 El broker debe tener creados el usuario y el virtual host indicados en el archivo.
 
 Antes de iniciar los procesos, inicializar una sola vez la capacidad del despliegue,
@@ -28,7 +28,7 @@ incompleta requiere un despliegue limpio; no se purgan colas automáticamente.
 Para iniciar una instancia de Frecuencia, con el broker y la capacidad preparados:
 
 ```bash
-.venv/bin/python -m src.workers.q4.frequency.main
+WIKI_MW_PROCESO_GRUPO=frecuencias .venv/bin/python -m src.workers.q4.frequency.main
 ```
 
 Los parciales respetan `limites.max_bytes_por_mensaje`, incluido el sobre.

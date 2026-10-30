@@ -40,3 +40,34 @@ class Worker(ABC):
     @abstractmethod
     def finalizar_entrada(self, entrada):
         """Emite resultados pendientes y cierra las salidas que completó esta entrada."""
+
+
+class WorkerBase(Worker):
+    """Abre el middleware desde configuración y adapta los callbacks de los nodos."""
+
+    def __init__(self, ruta_configuracion):
+        from src.middleware.cargador_configuracion import cargar_configuracion
+        from src.middleware.rabbitmq import MiddlewareRabbitMQ
+
+        self.configuracion = cargar_configuracion(ruta_configuracion)
+        self.middleware = MiddlewareRabbitMQ(self.configuracion)
+        super().__init__(self.middleware)
+
+    def iniciar(self):
+        """Ejecuta el ciclo común y restaura señales al cerrar el middleware."""
+        from src.common.runtime.signal_handler import ManejadorSenales
+
+        senales = ManejadorSenales(self.detener)
+        try:
+            with self.middleware:
+                self.ejecutar()
+        finally:
+            senales.restaurar()
+
+    def finalizar_entrada(self, entrada):
+        """Delega la finalización de negocio al callback del nodo."""
+        self.al_finalizar(entrada)
+
+    @abstractmethod
+    def al_finalizar(self, entrada):
+        """Emite pendientes y cierra las salidas correspondientes a la entrada."""
