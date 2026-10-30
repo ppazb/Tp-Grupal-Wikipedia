@@ -1,3 +1,4 @@
+import json
 import struct
 
 from ...common.external_protocol import codificar_filas
@@ -20,7 +21,15 @@ def _texto(valor):
 
 
 def _nombres_secciones(secciones):
-    """Nombres de las secciones del artículo; una sección sin nombre se omite."""
+    """Nombres de las secciones del artículo; una sección sin nombre se omite.
+    En el Parquet la columna viene como un string con JSON, no como lista. Se usa JSON 
+    para poder acceder al dato nada mas
+    """
+    if isinstance(secciones, str):
+        try:
+            secciones = json.loads(secciones)
+        except ValueError:
+            return ()
     return tuple(
         seccion["name"] for seccion in secciones or ()
         if isinstance(seccion, dict) and isinstance(seccion.get("name"), str)
