@@ -7,9 +7,11 @@ from .protocol.primitivas import BYTES_U32, EscritorBinario, LectorBinario
 
 # Campos de una fila cruda, en el orden en que viajan; todos son textos (None se toma como "").
 # Los campos struct del Parquet (image, in_language) llegan ya aplanados.
+# "sections" es la excepción: viaja como lista de textos (CAMPOS_LISTA).
 CAMPOS_FILA = (
     "abstract", "date_modified", "image_content_url", "in_language", "name", "sections", "url",
 )
+CAMPOS_LISTA = frozenset({"sections"})
 
 
 class TipoFrame(IntEnum):
@@ -82,7 +84,8 @@ def recibir_exactamente(socket: socket.socket,cantidad: int,*,permitir_cierre: b
     return bytes(partes)
 
 
-# Cuerpo de un frame DATOS: | u32 cantidad de filas | por fila, un texto u32-prefijado por campo de CAMPOS_FILA |
+# Cuerpo de un frame DATOS: | u32 cantidad de filas | por fila, un campo de CAMPOS_FILA cada uno |
+# Un campo de texto es un texto u32-prefijado; un campo de CAMPOS_LISTA es | u32 cantidad | N textos u32-prefijados |
 # Eleva ErrorSerializacion (ValueError) si no entra en max_bytes.
 def codificar_filas(filas, max_bytes: int) -> bytes:
     escritor = EscritorBinario(max_bytes)
@@ -90,17 +93,28 @@ def codificar_filas(filas, max_bytes: int) -> bytes:
     
     for fila in filas:
         for campo in CAMPOS_FILA:
-            escritor.texto(fila[campo])
+            if campo in CAMPOS_LISTA:
+                escritor.entero(len(fila[campo]), BYTES_U32)
+                for texto in fila[campo]:
+                    escritor.texto(texto)
+            else:
+                escritor.texto(fila[campo])
     
     return escritor.resultado()
 
 
-def decodificar_filas(cuerpo: bytes) -> list[dict[str, str]]:
+def _leer_campo(lector, campo):
+    if campo in CAMPOS_LISTA:
+        return tuple(lector.texto() for _ in range(lector.entero(BYTES_U32)))
+    return lector.texto()
+
+
+def decodificar_filas(cuerpo: bytes) -> list[dict]:
     lector = LectorBinario(cuerpo)
     filas = []
     
     for _ in range(lector.entero(BYTES_U32)):
-        filas.append({campo: lector.texto() for campo in CAMPOS_FILA})
+        filas.append({campo: _leer_campo(lector, campo) for campo in CAMPOS_FILA})
     lector.finalizar()
     
     return filas
