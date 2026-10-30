@@ -1,7 +1,6 @@
 import logging
 import os
 import socket
-import struct
 import threading
 import time
 import uuid
@@ -260,7 +259,7 @@ class ServidorGateway:
                 cantidad_lotes += 1
 
                 # ACK: se confirma la recepción del lote
-                enviar_frame(cliente, TipoFrame.ACK, struct.pack("!Q", cantidad_lotes), self._max_bytes)
+                enviar_frame(cliente, TipoFrame.ACK, cantidad_lotes.to_bytes(BYTE_8, "big"), self._max_bytes)
                 
                 continue
 
@@ -273,7 +272,7 @@ class ServidorGateway:
             
             self._publicador.finalizar(id_ejecucion)
             
-            enviar_frame(cliente, TipoFrame.ACK,struct.pack("!Q", cantidad_lotes), self._max_bytes)
+            enviar_frame(cliente, TipoFrame.ACK,cantidad_lotes.to_bytes(BYTE_8, "big"), self._max_bytes)
             
             LOG.info("Ejecución %s admitida: %d lotes, %d filas (%d descartadas), publicados en %s",
                 id_ejecucion, cantidad_lotes, filas_totales, filas_descartadas,", ".join(ruta.destino for ruta in self._rutas),
@@ -330,7 +329,7 @@ class ServidorGateway:
 
     @staticmethod
     def _verificar_eof(cuerpo, cantidad_lotes):
-        if len(cuerpo) != BYTE_8 or struct.unpack("!Q", cuerpo)[0] != cantidad_lotes:
+        if len(cuerpo) != BYTE_8 or int.from_bytes(cuerpo, "big") != cantidad_lotes:
             raise ValueError("La cantidad de lotes anunciada por EOF no coincide")
 
     def _cerrar_clientes(self):
