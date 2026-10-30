@@ -30,14 +30,6 @@
   },
   "rutas": [
 
- 
-    {"nombre": "gw_a_f2020", "origen": "gateway", "destino": "filtro_2020",
-     "entrada": "articulos", "esquemas": ["ARTICULO"]},
-
-    {"nombre": "gw_a_f2021", "origen": "gateway", "destino": "filtro_2021",
-     "entrada": "articulos", "esquemas": ["ARTICULO"]},
-
-
     {
       "nombre": "palabras",
       "origen": "ocurrencias",
