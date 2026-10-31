@@ -21,6 +21,7 @@ def articulo_desde_fila(fila, indice):
         url=_texto_requerido(fila["url"], "url", indice),
         nombre=_texto_requerido(fila["name"], "name", indice),
         fecha=_texto_requerido(fila["date_modified"], "date_modified", indice),
+        fecha_creacion=fila["date_created"],
         idioma=IDIOMAS[idioma],
         abstract=fila["abstract"],
         secciones=fila["sections"],

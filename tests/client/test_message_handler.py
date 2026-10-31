@@ -9,6 +9,7 @@ from src.common.external_protocol import decodificar_filas
 def una_fila(**cambios):
     fila = {
         "abstract": "Un resumen",
+        "date_created": None,
         "date_modified": None,
         "image": {"content_url": "http://img/x.png"},
         "in_language": {"identifier": "en"},
@@ -33,6 +34,7 @@ class TestMessageHandler(unittest.TestCase):
         plana = fila_plana(una_fila())
         self.assertEqual(plana["image_content_url"], "http://img/x.png")
         self.assertEqual(plana["in_language"], "en")
+        self.assertEqual(plana["date_created"], "")
         self.assertEqual(plana["date_modified"], "") # None viaja como texto vacío
 
     def test_lote_serializado_se_puede_decodificar(self):

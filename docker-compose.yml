@@ -70,6 +70,9 @@ services:
       # grupo de la topología desde el que se publican los artículos
       - GATEWAY_GROUP=gateway
       - GATEWAY_INSTANCE=0
+      # grupo de la topología que recibe los resultados de los workers
+      - GATEWAY_RESULTS_GROUP=gateway_resultados
+      - GATEWAY_RESULTS_INSTANCE=0
       # segundos que se espera el ACK del cliente tras enviarle un ERROR
       - GATEWAY_ERROR_ACK_SECONDS=10
       - SERVER_HOST=0.0.0.0
@@ -91,9 +94,13 @@ services:
       - wiki_net
     volumes:
       - ./input:/app/input:ro
+      - ./output:/app/output
     environment:
       # directorio con los .parquet a enviar (todos, en orden de nombre, como una sola ejecución)
       - INPUT_DIR=/app/input
+      # los resultados se guardan en OUTPUT_DIR/client_<CLIENT_ID>, un archivo por consulta
+      - OUTPUT_DIR=/app/output
+      - CLIENT_ID=0
       # filas por lote
       - BATCH_SIZE=32
       # debe coincidir con limites.max_bytes_por_mensaje de config/config.json (lo usa el gateway)

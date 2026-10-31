@@ -41,6 +41,7 @@ def fila_plana(fila):
     idioma = fila.get("in_language")
     return {
         "abstract": _texto(fila.get("abstract")),
+        "date_created": _texto(fila.get("date_created")),
         "date_modified": _texto(fila.get("date_modified")),
         "image_content_url": _texto(imagen.get("content_url") if isinstance(imagen, dict) else None),
         "in_language": _texto(idioma.get("identifier") if isinstance(idioma, dict) else None),

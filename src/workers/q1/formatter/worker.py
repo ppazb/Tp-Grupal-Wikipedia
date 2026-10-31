@@ -13,6 +13,7 @@ class FormatterQ1(WorkerBase):
     """
 
     def procesar(self, datos: Datos) -> None:
+        self.anunciar_cliente("q1_formatter", datos.entrada.id_ejecucion)
         id_ejecucion = datos.entrada.id_ejecucion
         cantidad = len(datos.contenido.registros)
         logger.info(

@@ -35,7 +35,8 @@ class DateRouter(WorkerBase):
         total_articulos = len(datos.contenido.registros)
         for articulo in datos.contenido.registros:
 
-            anio = _extraer_anio(articulo.fecha)
+            # Escrito hasta 2020-> se decide por la fecha de creación
+            anio = _extraer_anio(articulo.fecha_creacion)
             if anio is not None and anio <= 2020:
                 # Query 1: únicamente URL, fecha e idioma
                 historicos_q1.append(
@@ -47,10 +48,11 @@ class DateRouter(WorkerBase):
                         articulo.nombre, articulo.url, articulo.secciones, articulo.url_imagen
                     )
                 )
-            elif anio is None:
+            elif anio is None and articulo.fecha_creacion.strip():
+                # Sin fecha de creación no se sabe si es de 2020 o antes: queda fuera de Q1 y Q2
                 logger.warning(
-                    "date_router: artículo con formato de fecha inválido ignorado: %s (fecha: '%s')",
-                    articulo.url, articulo.fecha
+                    "date_router: artículo con formato de fecha inválido ignorado: %s (fecha de creación: '%s')",
+                    articulo.url, articulo.fecha_creacion
                 )
 
         id_ejecucion = datos.entrada.id_ejecucion
@@ -68,12 +70,9 @@ class DateRouter(WorkerBase):
 
         # Envio hacia nodo de la rama Query 2
         if biograficos_q2:
-            try:
-                entrada_q2 = Entrada(id_ejecucion, "historicos_q2")
-                lote_q2 = Lote(Esquema.REFERENCIA_BIOGRAFICA, tuple(biograficos_q2))
-                self.middleware.publicar("q2_filter_bio", Datos(entrada_q2, lote_q2))
-            except Exception as error:
-                logger.debug("date_router: no se publicó en q2_filter_bio: %s", error)
+            entrada_q2 = Entrada(id_ejecucion, "historicos_q2")
+            lote_q2 = Lote(Esquema.REFERENCIA_BIOGRAFICA, tuple(biograficos_q2))
+            self.middleware.publicar("q2_filter_bio", Datos(entrada_q2, lote_q2))
 
 
     def al_finalizar(self, entrada: Entrada) -> None:
@@ -87,8 +86,5 @@ class DateRouter(WorkerBase):
         # Rama Query 1 obligatoria
         self.middleware.finalizar_entrada("q1_filter_lang", Entrada(id_ejecucion, "historicos_q1"))
 
-        # Otras ramas cuando sea necesario
-        try:
-            self.middleware.finalizar_entrada("q2_filter_bio", Entrada(id_ejecucion, "historicos_q2"))
-        except Exception:
-            pass
+        # Rama Query 2
+        self.middleware.finalizar_entrada("q2_filter_bio", Entrada(id_ejecucion, "historicos_q2"))

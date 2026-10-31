@@ -8,6 +8,7 @@ LOG = logging.getLogger(__name__)
 EXTENSION_PARQUET = ".parquet"
 COLUMNAS_PARQUET = (
     "abstract",
+    "date_created",
     "date_modified",
     "image",
     "in_language",
