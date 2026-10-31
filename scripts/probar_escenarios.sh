@@ -4,8 +4,8 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 case "${1:-todos}" in
     todos) export DIRECTORIO_PRUEBAS=tests ;;
-    middleware|eof) export DIRECTORIO_PRUEBAS="tests/$1" ;;
-    *) echo "Uso: $0 [todos|middleware|eof]" >&2; exit 2 ;;
+    middleware|eof|q4) export DIRECTORIO_PRUEBAS="tests/$1" ;;
+    *) echo "Uso: $0 [todos|middleware|eof|q4]" >&2; exit 2 ;;
 esac
 proyecto="wiki-pruebas-$$"
 compose=(docker compose -p "$proyecto" -f tests/compose.yml)

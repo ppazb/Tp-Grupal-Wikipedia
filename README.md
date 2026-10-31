@@ -63,6 +63,7 @@ con Compose y `make`):
 make test             # Todos los paquetes
 make test-middleware  # Comunicación
 make test-eof         # Protocolo EOF
+make test-q4          # Q4 contra cálculo serial con datos sintéticos
 ```
 
 El comando construye el contenedor de pruebas, levanta un broker aislado sin
@@ -73,4 +74,3 @@ imágenes y dependencias. Los escenarios están en `tests/middleware/` y `tests/
 ## Correr el pipeline gateway a Q1
 
 Todo junto, con limpieza al final: `make test-gateway-q1`.
-
