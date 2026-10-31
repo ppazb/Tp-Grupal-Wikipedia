@@ -5,6 +5,7 @@ ENV PYTHONUNBUFFERED=1
 
 COPY requirements.txt .
 RUN pip3 install --no-cache-dir -r requirements.txt
+RUN python3 -m nltk.downloader stopwords
 
 COPY src/common ./src/common
 COPY src/middleware ./src/middleware
