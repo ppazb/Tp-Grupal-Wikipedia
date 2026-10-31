@@ -1,6 +1,6 @@
 import logging
 import sys
-from src.workers.q2.image_downloader.image_download import ImageDownloaderQ2
+from src.workers.q2.image_downloader.worker import ImageDownloaderQ2
 
 def main():
     logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')

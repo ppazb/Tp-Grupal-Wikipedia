@@ -1,6 +1,6 @@
 import logging
 import sys
-from src.workers.q2.filter_bio.filter_bio import FilterBioQ2
+from src.workers.q2.filter_bio.worker import FilterBioQ2
 
 def main():
     logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
