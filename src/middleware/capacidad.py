@@ -107,9 +107,10 @@ class CapacidadDatos:
                 raise ErrorCapacidad("No se pudo cancelar la reserva") from error
             REGISTRO.exception("Falló la limpieza de una reserva; se conserva el error original")
 
-    def devolver(self, cola_datos):
-        """Devuelve un permiso después de resolver una entrega o un envío rechazado."""
-        self._conexion.canal
+    def devolver(self, cola_datos, *, durante_apagado=False):
+        """Devuelve un permiso; admite limpieza de reservas no publicadas al apagar."""
+        if not durante_apagado:
+            self._conexion.canal
         try:
             publicar_permiso(self._canal, self._topologia.cola_capacidad(cola_datos))
         except (pika.exceptions.AMQPError, OSError) as error:

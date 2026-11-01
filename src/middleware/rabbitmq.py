@@ -31,13 +31,15 @@ class MiddlewareRabbitMQ(Middleware[Lote]):
     Espera capacidad antes de publicar. Los errores de registros se envían por la
     ruta errores; un sumidero recibe un manejador que los entrega a su aplicación.
     Su uso como contexto cierra conexión y recursos incluso ante excepciones.
+    apagado es un componente Apagado abierto por el proceso: debe permanecer
+    abierto hasta salir del contexto del middleware. No emite EOF al detenerse.
     """
 
-    def __init__(self, configuracion, *, informar_error=None):
+    def __init__(self, configuracion, *, informar_error=None, apagado=None):
         self._proceso_propietario = os.getpid()
         self._identidad = configuracion.proceso
         self._codificador = CodificadorMensajes(configuracion.limites.max_bytes_por_mensaje)
-        self._conexion = ConexionBroker(configuracion.broker)
+        self._conexion = ConexionBroker(configuracion.broker, apagado=apagado)
         self._recursos = RecursosPorEjecucion()
         self._cerrada = False
         self._cerrando = False

@@ -80,6 +80,7 @@ class ReceptorDatos:
                 self._entrega = None
                 self._esperar(canal)
                 entregado = False
+                self._conexion.comprobar_apagado()
                 if self._entrega is not None and not self._detenido:
                     if self._cola_pendiente == self._colas.control:
                         entregado = self._procesar_control(canal, self._entrega, procesar, al_finalizar)
@@ -205,6 +206,7 @@ class ReceptorDatos:
         return evento is not None
 
     def _resolver(self, canal, *, rechazar):
+        self._conexion.comprobar_apagado()
         if rechazar:
             canal.basic_reject(delivery_tag=self._pendiente, requeue=False)
         else:

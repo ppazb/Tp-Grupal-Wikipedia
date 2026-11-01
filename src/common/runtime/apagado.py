@@ -104,14 +104,21 @@ class Apagado:
             return
         if not self._abierto:
             raise RuntimeError('El apagado no está abierto')
+        self.consumir_avisos()
+        if self._solicitado:
+            self.cerrar()
+
+    def consumir_avisos(self):
+        """Drena notificaciones sin ejecutar limpiezas dentro del bucle de un transporte."""
+        self._validar_propietario()
+        if not self._abierto or self._cerrado:
+            raise RuntimeError('El apagado no está abierto')
         while True:
             try:
                 if not self._lectura.recv(BYTES_LECTURA):
                     raise OSError('Se cerró inesperadamente el socket de notificación')
             except BlockingIOError:
                 break
-        if self._solicitado:
-            self.cerrar()
 
     def cerrar(self):
         """Intenta cada limpieza una vez y libera señales y sockets, aun con errores.

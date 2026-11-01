@@ -15,7 +15,7 @@ from .codificacion import CodificadorMensajes
 from .configuracion import ConfiguracionComunicacion
 from .interfaz import (
     EntradaFinalizada, ErrorConexion, ErrorMensaje, ErrorMiddleware, ErrorPublicacionParcial,
-    PublicacionRechazada,
+    PublicacionRechazada, OperacionInterrumpida,
 )
 from .topologia import TopologiaGrupos
 
@@ -151,6 +151,8 @@ class PublicadorDatos:
                 if estado.total == MAXIMO_LOTES:
                     raise ErrorMensaje("La cantidad de lotes excede el rango u64")
                 self._publicar_cuerpo(destino, cuerpo)
+            except OperacionInterrumpida:
+                raise
             except ErrorMiddleware as error:
                 if confirmadas:
                     raise ErrorPublicacionParcial(confirmadas, identidad) from error
@@ -203,7 +205,14 @@ class PublicadorDatos:
         if reservar_capacidad:
             self._capacidad.adquirir(destino.cola)
         try:
-            self._conexion.canal.basic_publish(
+            canal = self._conexion.canal
+        except OperacionInterrumpida:
+            # Aún no se invocó basic_publish: este permiso no respalda ningún dato.
+            if reservar_capacidad:
+                self._capacidad.devolver(destino.cola, durante_apagado=True)
+            raise
+        try:
+            canal.basic_publish(
                 exchange=destino.exchange,
                 routing_key=destino.clave,
                 body=cuerpo,

@@ -5,8 +5,9 @@ import os
 
 import pika
 
+from .apagado_broker import ApagadoBroker
 from .configuracion import ConfiguracionBroker, ErrorConfiguracion
-from .interfaz import ErrorCierre, ErrorConexion, MiddlewareCerrado
+from .interfaz import ErrorCierre, ErrorConexion, MiddlewareCerrado, OperacionInterrumpida
 
 
 REGISTRO = logging.getLogger(__name__)
@@ -21,7 +22,9 @@ class ConexionBroker:
     Un cierre o una apertura fallida impiden reutilizar esta instancia.
     """
 
-    def __init__(self, configuracion: ConfiguracionBroker):
+    def __init__(self, configuracion: ConfiguracionBroker, *, apagado=None):
+        self._apagado = apagado
+        self._enlace_apagado = None
         self._configuracion = configuracion
         self._proceso_propietario = os.getpid()
         self._conexion = None
@@ -34,6 +37,8 @@ class ConexionBroker:
 
         Si falla la creación del canal, cierra la conexión ya adquirida. Si falla
         también esa limpieza, la registra sin reemplazar la causa de apertura.
+        El despertar por señales se conecta tras establecer la conexión; esa
+        primera conexión conserva los timeouts configurados del broker.
         """
         self._validar_proceso()
         if self._cerrada:
@@ -42,14 +47,17 @@ class ConexionBroker:
             self._validar_abierta()
             return
         try:
+            self.comprobar_apagado()
             parametros = self._crear_parametros()
             self._conexion = pika.BlockingConnection(parametros)
+            if self._apagado is not None:
+                self._enlace_apagado = ApagadoBroker(self._conexion, self._apagado)
             self._canal = self._conexion.channel()
         except BaseException as error:
             # También libera recursos ante una interrupción durante la apertura,
             # pero conserva KeyboardInterrupt/SystemExit sin traducirlos.
             self._cerrar_tras_error()
-            if not isinstance(error, Exception) or isinstance(error, ErrorConfiguracion):
+            if not isinstance(error, Exception) or isinstance(error, (ErrorConfiguracion, OperacionInterrumpida)):
                 raise
             raise ErrorConexion("No se pudo abrir la conexión y el canal de RabbitMQ") from error
 
@@ -58,12 +66,14 @@ class ConexionBroker:
         """Devuelve el canal abierto tras validar el proceso propietario y la conexión."""
         self._validar_proceso()
         self._validar_abierta()
+        self.comprobar_apagado()
         return self._canal
 
     def crear_canal(self):
         """Abre un canal de uso interno cuyo cierre pertenece a esta conexión."""
         self._validar_proceso()
         self._validar_abierta()
+        self.comprobar_apagado()
         try:
             canal = self._conexion.channel()
             self._canales_adicionales.append(canal)
@@ -80,6 +90,8 @@ class ConexionBroker:
         """
         self._validar_proceso()
         self._cerrada = True
+        if self._enlace_apagado is not None:
+            self._enlace_apagado.cerrar()
         errores = []
         recursos = [("canal adicional", canal) for canal in self._canales_adicionales]
         recursos.extend((("canal", self._canal), ("conexión", self._conexion)))
@@ -107,6 +119,13 @@ class ConexionBroker:
         ]
         if errores:
             raise ErrorCierre("Falló el cierre de recursos de RabbitMQ; ver registro") from errores[0]
+
+    def comprobar_apagado(self):
+        """Rechaza trabajo nuevo tras SIGTERM sin impedir las limpiezas internas."""
+        if self._enlace_apagado is not None:
+            self._enlace_apagado.comprobar()
+        if self._apagado is not None and self._apagado.solicitado:
+            raise OperacionInterrumpida("La comunicación se detuvo por apagado")
 
     def programar(self, operacion) -> None:
         """Notifica al bucle de E/S para ejecutar una operación al despachar eventos.
