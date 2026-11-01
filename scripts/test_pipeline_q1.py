@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
 Simulador de Gateway para prueba punta a punta de Query 1
-  1. mock de 'gateway' para enviar artículos crudos hacia 'date_router'.
-  2. date_router filtra fechas <= 2020 y envía 'historicos_q1' hacia 'q1_filter_lang'.
-  3. q1_filter_lang filtra idioma inglés y envía hacia 'q1_formatter'.
-  4. q1_formatter formatea a (url, fecha) y publica en 'gateway_resultados'.
-  5. mock de 'gateway_resultados' para recibir los resultados y validar.
+  1. mock de 'gateway' para enviar artículos crudos hacia 'date_router'
+  2. date_router filtra fechas <= 2020 y envía 'historicos_q1' hacia 'q1_filter_lang'
+  3. q1_filter_lang filtra idioma inglés y envía hacia 'q1_formatter'
+  4. q1_formatter formatea a (url, fecha) y publica en 'gateway_resultados'
+  5. mock de 'gateway_resultados' para recibir los resultados y validar
 """
 
 from dataclasses import replace

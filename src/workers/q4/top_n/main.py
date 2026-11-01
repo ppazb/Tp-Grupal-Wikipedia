@@ -5,7 +5,7 @@ from functools import partial
 
 from src.common.protocol.registros import Esquema
 from src.middleware.cargador_configuracion import cargar_configuracion
-from src.workers.base_worker import entorno_worker, comprobar_apagado
+from src.workers.base_worker import destinos_errores, entorno_worker, comprobar_apagado
 from src.workers.arranque import agregar_argumentos_comunicacion, validar_rutas
 from .consolidador import ConsolidadorFrecuencias
 from .worker import WorkerTopN
@@ -44,6 +44,7 @@ def ejecutar():
             middleware, consolidador, entrada=argumentos.entrada,
             grupo_salida=argumentos.grupo_salida, entrada_salida=argumentos.entrada_salida,
         )
+        worker.destinos_errores = destinos_errores(configuracion)
         apagado.registrar_limpieza(worker.cerrar)
         worker.ejecutar(apagado)
 

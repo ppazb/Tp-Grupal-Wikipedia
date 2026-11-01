@@ -4,7 +4,9 @@ from abc import ABC, abstractmethod
 from contextlib import contextmanager
 import logging
 
+from src.common.protocol.dto import Entrada
 from src.common.runtime.apagado import Apagado
+from src.middleware.rechazos import ENTRADA_ERRORES
 from src.middleware.interfaz import OperacionInterrumpida
 
 
@@ -36,12 +38,17 @@ def entorno_worker(configuracion, *, limpiar=None):
             REGISTRO.info("Worker detenido por solicitud de apagado")
 
 
+
 class Worker(ABC):
     """Conecta callbacks de negocio con un middleware proporcionado por el proceso.
 
     El propietario abre y cierra el middleware. La detención se solicita mediante
     detener(), fuera de un manejador de señal, para terminar el ciclo sin polling.
     """
+
+    # Grupos que reciben las notificaciones de rechazo de este worker. Se cierran al terminar la
+    # ejecución: el destino no la da por completa hasta recibir el EOF de todos sus productores.
+    destinos_errores = ()
 
     def __init__(self, middleware):
         self._middleware = middleware
@@ -112,6 +119,8 @@ class Worker(ABC):
         self.finalizar_entrada(entrada)
         self.comprobar_detencion()
         if not self._middleware.entradas_pendientes(entrada.id_ejecucion):
+            for destino in self.destinos_errores:
+                self._middleware.finalizar_entrada(destino, Entrada(entrada.id_ejecucion, ENTRADA_ERRORES))
             self._completada = entrada.id_ejecucion
 
     @abstractmethod
@@ -123,6 +132,15 @@ class Worker(ABC):
         """Emite resultados pendientes y cierra las salidas que completó esta entrada."""
 
 
+def destinos_errores(configuracion):
+    """Grupos a los que el proceso local envía notificaciones de rechazo."""
+    grupo = configuracion.proceso.grupo
+    return tuple(sorted({
+        ruta.destino for ruta in configuracion.rutas
+        if ruta.origen == grupo and ruta.entrada == ENTRADA_ERRORES
+    }))
+
+
 class WorkerBase(Worker):
     """Abre el middleware desde configuración y adapta los callbacks de los nodos."""
 
@@ -132,6 +150,9 @@ class WorkerBase(Worker):
         self.configuracion = cargar_configuracion(ruta_configuracion)
         self.middleware = None
         super().__init__(self.middleware)
+        self._clientes_vistos = set()
+        self.registrar_limpieza(self._clientes_vistos.clear)
+        self.destinos_errores = destinos_errores(self.configuracion)
 
     def iniciar(self):
         """Abre el transporte con apagado común y registra la limpieza del worker."""
@@ -139,9 +160,16 @@ class WorkerBase(Worker):
             self.middleware = self._middleware = middleware
             self.ejecutar(apagado)
 
+    def anunciar_cliente(self, nombre, id_ejecucion):
+        """Registra en el log la primera vez que llegan datos de una ejecución a este worker."""
+        if id_ejecucion not in self._clientes_vistos:
+            self._clientes_vistos.add(id_ejecucion)
+            REGISTRO.info("%s: llegó un nuevo cliente (ejecución '%s')", nombre, id_ejecucion)
+
     def finalizar_entrada(self, entrada):
         """Delega la finalización de negocio al callback del nodo."""
         self.al_finalizar(entrada)
+        self._clientes_vistos.discard(entrada.id_ejecucion)
 
     @abstractmethod
     def al_finalizar(self, entrada):
