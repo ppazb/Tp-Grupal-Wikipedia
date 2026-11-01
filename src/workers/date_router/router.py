@@ -1,4 +1,5 @@
 import logging
+from src.middleware.interfaz import OperacionInterrumpida
 from typing import Optional
 
 from src.workers.base_worker import WorkerBase
@@ -85,6 +86,8 @@ class DateRouter(WorkerBase):
                 entrada_q2 = Entrada(id_ejecucion, "historicos_q2")
                 lote_q2 = Lote(Esquema.REFERENCIA_BIOGRAFICA, tuple(biograficos_q2))
                 self.middleware.publicar("q2_filter_bio", Datos(entrada_q2, lote_q2))
+            except OperacionInterrumpida:
+                raise
             except Exception as error:
                 logger.debug("date_router: no se publicó en q2_filter_bio: %s", error)
 
@@ -94,6 +97,8 @@ class DateRouter(WorkerBase):
                 entrada_hist = Entrada(id_ejecucion, "textos_historicos")
                 lote_hist = Lote(Esquema.TEXTO_ARTICULO, tuple(textos_historicos))
                 self.middleware.publicar("word_occurrences", Datos(entrada_hist, lote_hist))
+            except OperacionInterrumpida:
+                raise
             except Exception as error:
                 logger.debug("date_router: no se publicó en word_occurrences (historicos): %s", error)
 
@@ -103,6 +108,8 @@ class DateRouter(WorkerBase):
                 entrada_rec = Entrada(id_ejecucion, "textos_recientes")
                 lote_rec = Lote(Esquema.TEXTO_ARTICULO, tuple(textos_recientes))
                 self.middleware.publicar("word_occurrences", Datos(entrada_rec, lote_rec))
+            except OperacionInterrumpida:
+                raise
             except Exception as error:
                 logger.debug("date_router: no se publicó en word_occurrences (recientes): %s", error)
 
@@ -122,11 +129,15 @@ class DateRouter(WorkerBase):
         try:
             self.middleware.finalizar_entrada("word_occurrences", Entrada(id_ejecucion, "textos_historicos"))
             self.middleware.finalizar_entrada("word_occurrences", Entrada(id_ejecucion, "textos_recientes"))
+        except OperacionInterrumpida:
+            raise
         except Exception as error:
             logger.debug("date_router: no se propagó EOF a word_occurrences: %s", error)
 
         # Otras ramas cuando sea necesario
         try:
             self.middleware.finalizar_entrada("q2_filter_bio", Entrada(id_ejecucion, "historicos_q2"))
+        except OperacionInterrumpida:
+            raise
         except Exception:
             pass

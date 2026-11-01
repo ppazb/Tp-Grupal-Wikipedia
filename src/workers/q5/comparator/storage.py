@@ -1,5 +1,6 @@
 import logging
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Iterator
 
 from src.common.protocol.registros import Candidato
@@ -11,8 +12,10 @@ class AlmacenamientoCandidatos:
     """Guarda candidatos en disco por ejecución para no sobrecargar la memoria RAM."""
 
     def __init__(self, directorio_base: str = "data/temp"):
-        self._directorio = Path(directorio_base)
-        self._directorio.mkdir(parents=True, exist_ok=True)
+        base = Path(directorio_base)
+        base.mkdir(parents=True, exist_ok=True)
+        self._temporal = TemporaryDirectory(prefix="q5-candidatos-", dir=base)
+        self._directorio = Path(self._temporal.name)
 
     def _ruta_archivo(self, id_ejecucion: str) -> Path:
         return self._directorio / f"q5_candidatos_{id_ejecucion}.bin"
@@ -61,3 +64,7 @@ class AlmacenamientoCandidatos:
             except OSError as error:
                 logger.warning("AlmacenamientoCandidatos: error al eliminar %s: %s", ruta, error)
 
+
+    def cerrar(self):
+        """Elimina únicamente los temporales de esta instancia, incluso sin EOF."""
+        self._temporal.cleanup()

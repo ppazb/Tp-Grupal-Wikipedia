@@ -1,9 +1,11 @@
 """Arranque de Top N con presupuesto explícito y almacenamiento temporal propio."""
 
 import argparse
+from functools import partial
 
 from src.common.protocol.registros import Esquema
 from src.middleware.cargador_configuracion import cargar_configuracion
+from src.workers.base_worker import entorno_worker, comprobar_apagado
 from src.workers.arranque import agregar_argumentos_comunicacion, validar_rutas
 from .consolidador import ConsolidadorFrecuencias
 from .worker import WorkerTopN
@@ -32,18 +34,18 @@ def ejecutar():
     validar_rutas(configuracion, argumentos.entrada, argumentos.grupo_salida,
                   argumentos.entrada_salida, esquema_entrada=Esquema.CONTEO_PALABRA,
                   esquema_salida=Esquema.CONTEO_PALABRA)
-    from src.middleware.rabbitmq import MiddlewareRabbitMQ
-
-    try:
-        with ConsolidadorFrecuencias(
+    with entorno_worker(configuracion) as (middleware, apagado):
+        consolidador = ConsolidadorFrecuencias(
             argumentos.presupuesto_memoria_bytes, argumentos.directorio_temporal,
-        ) as consolidador, MiddlewareRabbitMQ(configuracion) as middleware:
-            WorkerTopN(
-                middleware, consolidador, entrada=argumentos.entrada,
-                grupo_salida=argumentos.grupo_salida, entrada_salida=argumentos.entrada_salida,
-            ).ejecutar()
-    except KeyboardInterrupt:
-        return
+            comprobar_detencion=partial(comprobar_apagado, apagado),
+        )
+        apagado.registrar_limpieza(consolidador.cerrar)
+        worker = WorkerTopN(
+            middleware, consolidador, entrada=argumentos.entrada,
+            grupo_salida=argumentos.grupo_salida, entrada_salida=argumentos.entrada_salida,
+        )
+        apagado.registrar_limpieza(worker.cerrar)
+        worker.ejecutar(apagado)
 
 
 if __name__ == '__main__':

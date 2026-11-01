@@ -41,19 +41,23 @@ def _leer_completo(archivo, cantidad, *, admitir_fin=False):
     return datos
 
 
-def escribir_conteos(ruta, registros):
+def escribir_conteos(ruta, registros, comprobar_detencion=None):
     """Escribe incrementalmente registros ordenados sin conservar el iterable."""
     with ruta.open('xb', buffering=BUFFER_ARCHIVO) as archivo:
         for registro in registros:
+            if comprobar_detencion is not None:
+                comprobar_detencion()
             palabra = registro.palabra.encode('utf-8')
             _escribir_completo(archivo, CABECERA.pack(len(palabra), registro.cantidad))
             _escribir_completo(archivo, palabra)
 
 
-def leer_conteos(archivo, max_bytes_palabra):
+def leer_conteos(archivo, max_bytes_palabra, comprobar_detencion=None):
     """Lee un registro a la vez y rechaza longitudes, conteos u orden inválidos."""
     anterior = None
     while True:
+        if comprobar_detencion is not None:
+            comprobar_detencion()
         cabecera = _leer_completo(archivo, CABECERA.size, admitir_fin=True)
         if cabecera is None:
             return
@@ -76,13 +80,13 @@ def agrupar_conteos(registros):
         yield ConteoPalabra(palabra, cantidad)
 
 
-def fusionar_tramos(primero, segundo, destino, max_bytes_palabra):
+def fusionar_tramos(primero, segundo, destino, max_bytes_palabra, comprobar_detencion=None):
     """Fusiona dos tramos ordenados usando dos lectores y un escritor."""
     with ExitStack() as recursos:
         lectores = [
             leer_conteos(recursos.enter_context(ruta.open('rb', buffering=BUFFER_ARCHIVO)),
-                         max_bytes_palabra)
+                         max_bytes_palabra, comprobar_detencion)
             for ruta in (primero, segundo)
         ]
         registros = merge(*lectores, key=lambda registro: registro.palabra)
-        escribir_conteos(destino, agrupar_conteos(registros))
+        escribir_conteos(destino, agrupar_conteos(registros), comprobar_detencion)

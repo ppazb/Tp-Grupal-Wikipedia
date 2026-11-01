@@ -24,6 +24,7 @@ class EmisorParciales:
         self._presupuestos = {}
         self._acumulador = AcumuladorFrecuencias()
         self._emitiendo = False
+        self._cerrado = False
 
     def acumular(self, id_ejecucion: str, aporte: Palabra) -> None:
         """Suma el aporte, emitiendo los conteos previos si su registro nuevo no cabe."""
@@ -73,6 +74,18 @@ class EmisorParciales:
         finally:
             self._emitiendo = False
 
+    def cerrar(self):
+        """Libera parciales y presupuestos sin vaciarlos hacia la salida."""
+        if self._cerrado:
+            return
+        if self._emitiendo:
+            raise RuntimeError('No se puede cerrar durante una emisión')
+        self._cerrado = True
+        self._acumulador.cerrar()
+        self._presupuestos.clear()
+
     def _validar_disponible(self) -> None:
+        if self._cerrado:
+            raise RuntimeError('El emisor de parciales está cerrado')
         if self._emitiendo:
             raise RuntimeError('No se pueden modificar parciales durante su emisión')

@@ -37,10 +37,14 @@ class ConsolidadorFrecuencias:
     secuencial; un error de almacenamiento exige cerrarla, sin reintentos internos.
     """
 
-    def __init__(self, presupuesto_memoria_bytes: int, directorio_temporal=None):
+    def __init__(self, presupuesto_memoria_bytes: int, directorio_temporal=None,
+                 *, comprobar_detencion=None):
         if (type(presupuesto_memoria_bytes) is not int
                 or presupuesto_memoria_bytes <= BYTES_LISTA_VACIA):
             raise ValueError('El presupuesto debe permitir al menos el buffer vacío')
+        if comprobar_detencion is not None and not callable(comprobar_detencion):
+            raise TypeError("La comprobación de detención debe ser invocable")
+        self._comprobar_detencion = comprobar_detencion
         self._presupuesto = presupuesto_memoria_bytes
         self._temporal = TemporaryDirectory(prefix='q4-conteos-', dir=directorio_temporal)
         self._directorio = Path(self._temporal.name)
@@ -66,6 +70,8 @@ class ConsolidadorFrecuencias:
         estado = self._ejecuciones.get(id_ejecucion)
         if estado is not None and estado.finalizada:
             raise ValueError('La ejecución ya finalizó su entrada')
+        if self._comprobar_detencion is not None:
+            self._comprobar_detencion()
         aporte = (id_ejecucion, parcial.palabra, parcial.cantidad)
         costo = (getsizeof(aporte) + sum(getsizeof(valor) for valor in aporte)
                  + BYTES_REFERENCIAS_POR_APORTE + 4 * len(parcial.palabra))
@@ -118,7 +124,7 @@ class ConsolidadorFrecuencias:
             else:
                 ruta = next(iter(estado.niveles.values()))
                 with ruta.open('rb', buffering=BUFFER_ARCHIVO) as archivo:
-                    yield leer_conteos(archivo, self._presupuesto)
+                    yield leer_conteos(archivo, self._presupuesto, self._comprobar_detencion)
         finally:
             self._leyendo = False
 
@@ -157,7 +163,7 @@ class ConsolidadorFrecuencias:
             for ejecucion, aportes in groupby(self._buffer, key=lambda aporte: aporte[0]):
                 ruta = self._nueva_ruta()
                 registros = (ConteoPalabra(palabra, cantidad) for _, palabra, cantidad in aportes)
-                escribir_conteos(ruta, agrupar_conteos(registros))
+                escribir_conteos(ruta, agrupar_conteos(registros), self._comprobar_detencion)
                 self._incorporar_tramo(self._ejecuciones[ejecucion], ruta)
             self._buffer.clear()
             self._bytes_buffer = BYTES_LISTA_VACIA
@@ -177,7 +183,7 @@ class ConsolidadorFrecuencias:
 
     def _fusionar(self, primero, segundo):
         destino = self._nueva_ruta()
-        fusionar_tramos(primero, segundo, destino, self._presupuesto)
+        fusionar_tramos(primero, segundo, destino, self._presupuesto, self._comprobar_detencion)
         primero.unlink()
         segundo.unlink()
         return destino

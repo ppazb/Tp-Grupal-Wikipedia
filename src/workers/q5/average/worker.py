@@ -1,4 +1,5 @@
 import logging
+from src.middleware.interfaz import OperacionInterrumpida
 from typing import Dict
 
 from src.workers.base_worker import WorkerBase
@@ -15,6 +16,7 @@ class AverageQ5Worker(WorkerBase):
         super().__init__(ruta_configuracion)
         # Diccionario aislado por ejecución para soporte multi-client concurrente
         self._acumuladores: Dict[str, Dict[str, int]] = {}
+        self.registrar_limpieza(self._acumuladores.clear)
 
     def procesar(self, datos: Datos) -> None:
         id_ejecucion = datos.entrada.id_ejecucion
@@ -59,7 +61,8 @@ class AverageQ5Worker(WorkerBase):
         try:
             self.middleware.publicar("q5_comparator", Datos(entrada_resumen, lote_resumen))
             self.middleware.finalizar_entrada("q5_comparator", entrada_resumen)
+        except OperacionInterrumpida:
+            raise
         except Exception as error:
             logger.error("q5_average: error al publicar resumen a q5_comparator: %s", error)
             raise
-

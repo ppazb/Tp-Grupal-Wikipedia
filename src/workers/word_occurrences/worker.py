@@ -1,4 +1,5 @@
 import logging
+from src.middleware.interfaz import OperacionInterrumpida
 from typing import List
 
 from src.workers.base_worker import WorkerBase
@@ -53,6 +54,8 @@ class WordOccurrencesWorker(WorkerBase):
                 entrada_avg = Entrada(id_ejecucion, "cantidades_historicas")
                 lote_avg = Lote(Esquema.CANTIDAD_PALABRAS, tuple(cantidades_q5))
                 self.middleware.publicar("q5_average", Datos(entrada_avg, lote_avg))
+            except OperacionInterrumpida:
+                raise
             except Exception as error:
                 logger.debug("word_occurrences: no se publicó en q5_average: %s", error)
 
@@ -62,6 +65,8 @@ class WordOccurrencesWorker(WorkerBase):
                 entrada_comp = Entrada(id_ejecucion, "candidatos")
                 lote_comp = Lote(Esquema.CANDIDATO, tuple(candidatos_q5))
                 self.middleware.publicar("q5_comparator", Datos(entrada_comp, lote_comp))
+            except OperacionInterrumpida:
+                raise
             except Exception as error:
                 logger.debug("word_occurrences: no se publicó en q5_comparator: %s", error)
 
@@ -71,6 +76,8 @@ class WordOccurrencesWorker(WorkerBase):
                 entrada_palabras = Entrada(id_ejecucion, "palabras")
                 lote_palabras = Lote(Esquema.PALABRA, tuple(palabras_q4))
                 self.middleware.publicar("frecuencias", Datos(entrada_palabras, lote_palabras))
+            except OperacionInterrumpida:
+                raise
             except Exception as error:
                 logger.debug("word_occurrences: no se publicó en frecuencias: %s", error)
 
@@ -82,12 +89,16 @@ class WordOccurrencesWorker(WorkerBase):
         if entrada.nombre == "textos_historicos":
             try:
                 self.middleware.finalizar_entrada("q5_average", Entrada(id_ejecucion, "cantidades_historicas"))
+            except OperacionInterrumpida:
+                raise
             except Exception as error:
                 logger.debug("word_occurrences: error al finalizar en q5_average: %s", error)
 
         elif entrada.nombre == "textos_recientes":
             try:
                 self.middleware.finalizar_entrada("q5_comparator", Entrada(id_ejecucion, "candidatos"))
+            except OperacionInterrumpida:
+                raise
             except Exception as error:
                 logger.debug("word_occurrences: error al finalizar en q5_comparator: %s", error)
 
@@ -95,6 +106,8 @@ class WordOccurrencesWorker(WorkerBase):
         if not self.middleware.entradas_pendientes(id_ejecucion):
             try:
                 self.middleware.finalizar_entrada("frecuencias", Entrada(id_ejecucion, "palabras"))
+            except OperacionInterrumpida:
+                raise
             except Exception as error:
                 logger.debug("word_occurrences: error al finalizar en frecuencias: %s", error)
 

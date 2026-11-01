@@ -19,8 +19,10 @@ class ComparatorQ5Worker(WorkerBase):
         super().__init__(ruta_configuracion)
         directorio_temp = os.environ.get("TEMP_DIR", "data/temp")
         self._storage = AlmacenamientoCandidatos(directorio_temp)
+        self.registrar_limpieza(self._storage.cerrar)
         # Resumen histórico por ejecución: id_ejecucion -> (suma, articulos)
         self._resumenes: Dict[str, Tuple[int, int]] = {}
+        self.registrar_limpieza(self._resumenes.clear)
 
     def procesar(self, datos: Datos) -> None:
         id_ejecucion = datos.entrada.id_ejecucion
@@ -69,6 +71,7 @@ class ComparatorQ5Worker(WorkerBase):
 
         try:
             for candidato in self._storage.iterar_candidatos(id_ejecucion):
+                self.comprobar_detencion()
                 total_evaluados += 1
                 if candidato.cantidad > promedio:
                     total_superaron += 1
@@ -101,4 +104,3 @@ class ComparatorQ5Worker(WorkerBase):
             return
         datos = Datos(entrada, Lote(Esquema.CANDIDATO, tuple(registros)))
         self.middleware.publicar("gateway_resultados", datos)
-

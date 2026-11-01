@@ -1,6 +1,39 @@
 """Ciclo secuencial de recepción y liberación de ejecuciones para workers."""
 
 from abc import ABC, abstractmethod
+from contextlib import contextmanager
+import logging
+
+from src.common.runtime.apagado import Apagado
+from src.middleware.interfaz import OperacionInterrumpida
+
+
+REGISTRO = logging.getLogger(__name__)
+
+
+def comprobar_apagado(apagado):
+    """Interrumpe el trabajo cooperativamente cuando el proceso pidió apagar."""
+    if apagado is not None and apagado.solicitado:
+        raise OperacionInterrumpida("Procesamiento detenido por apagado")
+
+
+@contextmanager
+def entorno_worker(configuracion, *, limpiar=None):
+    """Abre señales y transporte; consume solo interrupciones solicitadas por apagado."""
+    from src.middleware.rabbitmq import MiddlewareRabbitMQ
+
+    iniciado = False
+    with Apagado() as apagado:
+        if limpiar is not None:
+            apagado.registrar_limpieza(limpiar)
+        try:
+            with MiddlewareRabbitMQ(configuracion, apagado=apagado) as middleware:
+                iniciado = True
+                yield middleware, apagado
+        except OperacionInterrumpida:
+            if not iniciado or not apagado.solicitado:
+                raise
+            REGISTRO.info("Worker detenido por solicitud de apagado")
 
 
 class Worker(ABC):
@@ -14,14 +47,60 @@ class Worker(ABC):
         self._middleware = middleware
         self._detenido = False
         self._completada = None
+        self._apagado = None
+        self._limpiezas = []
+        self._cerrado = False
 
-    def ejecutar(self):
-        """Consume entradas y libera su ejecución después de confirmar el cierre local."""
-        while not self._detenido:
-            self._completada = None
-            self._middleware.recibir(self.procesar, al_finalizar=self._finalizar)
-            if self._completada is not None:
-                self._middleware.liberar_ejecucion(self._completada)
+    def ejecutar(self, apagado=None):
+        """Consume entradas y libera recursos al terminar, fallar o recibir una señal."""
+        self._apagado = apagado
+        try:
+            while not self._detenido and not self._cerrado:
+                self.comprobar_detencion()
+                self._completada = None
+                self._middleware.recibir(self._procesar, al_finalizar=self._finalizar)
+                if self._completada is not None:
+                    self._middleware.liberar_ejecucion(self._completada)
+        except BaseException:
+            try:
+                self.cerrar()
+            except Exception:
+                REGISTRO.exception("Falló la limpieza del worker; se conserva el error original")
+            raise
+        else:
+            self.cerrar()
+
+    def comprobar_detencion(self):
+        """Interrumpe el negocio en un punto seguro si se solicitó apagar el proceso."""
+        comprobar_apagado(self._apagado)
+
+    def registrar_limpieza(self, operacion):
+        """Registra una limpieza local, sin publicar resultados ni cierres de entradas."""
+        if self._cerrado:
+            raise RuntimeError("El worker ya está cerrado")
+        if not callable(operacion):
+            raise TypeError("La limpieza debe ser invocable")
+        self._limpiezas.append(operacion)
+
+    def cerrar(self):
+        """Libera todos los recursos locales una sola vez, sin emitir EOF."""
+        if self._cerrado:
+            return
+        self._cerrado = self._detenido = True
+        errores = []
+        for operacion in self._limpiezas:
+            try:
+                operacion()
+            except Exception as error:
+                errores.append(error)
+        self._limpiezas.clear()
+        if errores:
+            raise ExceptionGroup("Falló la limpieza del worker", errores)
+
+    def _procesar(self, datos):
+        self.comprobar_detencion()
+        self.procesar(datos)
+        self.comprobar_detencion()
 
     def detener(self):
         """Detiene nuevas recepciones y deja completar el callback en curso."""
@@ -29,7 +108,9 @@ class Worker(ABC):
         self._middleware.detener_recepcion()
 
     def _finalizar(self, entrada):
+        self.comprobar_detencion()
         self.finalizar_entrada(entrada)
+        self.comprobar_detencion()
         if not self._middleware.entradas_pendientes(entrada.id_ejecucion):
             self._completada = entrada.id_ejecucion
 
@@ -47,22 +128,16 @@ class WorkerBase(Worker):
 
     def __init__(self, ruta_configuracion):
         from src.middleware.cargador_configuracion import cargar_configuracion
-        from src.middleware.rabbitmq import MiddlewareRabbitMQ
 
         self.configuracion = cargar_configuracion(ruta_configuracion)
-        self.middleware = MiddlewareRabbitMQ(self.configuracion)
+        self.middleware = None
         super().__init__(self.middleware)
 
     def iniciar(self):
-        """Ejecuta el ciclo común y restaura señales al cerrar el middleware."""
-        from src.common.runtime.signal_handler import ManejadorSenales
-
-        senales = ManejadorSenales(self.detener)
-        try:
-            with self.middleware:
-                self.ejecutar()
-        finally:
-            senales.restaurar()
+        """Abre el transporte con apagado común y registra la limpieza del worker."""
+        with entorno_worker(self.configuracion, limpiar=self.cerrar) as (middleware, apagado):
+            self.middleware = self._middleware = middleware
+            self.ejecutar(apagado)
 
     def finalizar_entrada(self, entrada):
         """Delega la finalización de negocio al callback del nodo."""

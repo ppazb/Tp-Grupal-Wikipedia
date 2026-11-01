@@ -33,6 +33,7 @@ class WorkerTopN(Worker):
         if datos.contenido.esquema is not Esquema.CONTEO_PALABRA:
             raise ValueError('Top N requiere lotes con esquema CONTEO_PALABRA')
         for parcial in datos.contenido.registros:
+            self.comprobar_detencion()
             self._consolidador.acumular(datos.entrada.id_ejecucion, parcial)
 
     def finalizar_entrada(self, entrada):
