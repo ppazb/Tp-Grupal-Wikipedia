@@ -1,0 +1,245 @@
+{
+  "broker": {
+    "host": "rabbitmq",
+    "puerto": 5672,
+    "usuario": "prueba",
+    "contrasena": "prueba",
+    "virtual_host": "/wikipedia",
+    "latido_segundos": 60,
+    "timeout_conexion_segundos": 10,
+    "timeout_bloqueo_segundos": 30
+  },
+  "proceso": {
+    "grupo": "gateway_resultados",
+    "instancia": 0
+  },
+  "limites": {
+    "mensajes_sin_confirmar": 4,
+    "max_mensajes_por_cola": 1,
+    "max_bytes_por_mensaje": 65536
+  },
+  "grupos": {
+    "gateway_resultados": 1,
+    "date_router": 1,
+    "q1_filter_lang": 1,
+    "q1_formatter": 1,
+    "q2_filter_bio": 1,
+    "q2_image_downloader": 1,
+    "q3_intersection": 1,
+    "word_occurrences": 1,
+    "frecuencias": 1,
+    "gateway": 1,
+    "top_n": 1,
+    "q5_average": 1,
+    "q5_comparator": 1
+  },
+  "rutas": [
+    {
+      "nombre": "gateway_a_router",
+      "origen": "gateway",
+      "destino": "date_router",
+      "entrada": "articulos_crudos",
+      "esquemas": [
+        "ARTICULO"
+      ]
+    },
+    {
+      "nombre": "router_a_q1_lang",
+      "origen": "date_router",
+      "destino": "q1_filter_lang",
+      "entrada": "historicos_q1",
+      "esquemas": [
+        "REFERENCIA_HISTORICA"
+      ]
+    },
+    {
+      "nombre": "q1_lang_a_formatter",
+      "origen": "q1_filter_lang",
+      "destino": "q1_formatter",
+      "entrada": "filtrados_ing_q1",
+      "esquemas": [
+        "RESULTADO_Q1"
+      ]
+    },
+    {
+      "nombre": "q1_formatter_a_gateway",
+      "origen": "q1_formatter",
+      "destino": "gateway_resultados",
+      "entrada": "resultados_finales_q1",
+      "esquemas": [
+        "RESULTADO_Q1"
+      ]
+    },
+    {
+      "nombre": "router_a_q2",
+      "origen": "date_router",
+      "destino": "q2_filter_bio",
+      "entrada": "historicos_q2",
+      "esquemas": [
+        "REFERENCIA_BIOGRAFICA"
+      ]
+    },
+    {
+      "nombre": "router_a_nlp_historicos",
+      "origen": "date_router",
+      "destino": "word_occurrences",
+      "entrada": "textos_historicos",
+      "esquemas": [
+        "TEXTO_ARTICULO"
+      ]
+    },
+    {
+      "nombre": "router_a_nlp_recientes",
+      "origen": "date_router",
+      "destino": "word_occurrences",
+      "entrada": "textos_recientes",
+      "esquemas": [
+        "TEXTO_ARTICULO"
+      ]
+    },
+    {
+      "nombre": "ocurrencias_a_q5_avg",
+      "origen": "word_occurrences",
+      "destino": "q5_average",
+      "entrada": "cantidades_historicas",
+      "esquemas": [
+        "CANTIDAD_PALABRAS"
+      ]
+    },
+    {
+      "nombre": "ocurrencias_a_q5_comp",
+      "origen": "word_occurrences",
+      "destino": "q5_comparator",
+      "entrada": "candidatos",
+      "esquemas": [
+        "CANDIDATO"
+      ]
+    },
+    {
+      "nombre": "q5_avg_a_comp",
+      "origen": "q5_average",
+      "destino": "q5_comparator",
+      "entrada": "resumen_historico",
+      "esquemas": [
+        "RESUMEN_HISTORICO"
+      ]
+    },
+    {
+      "nombre": "resultado_q5",
+      "origen": "q5_comparator",
+      "destino": "gateway_resultados",
+      "entrada": "q5",
+      "esquemas": [
+        "CANDIDATO"
+      ]
+    },
+    {
+      "nombre": "errores_q5_average",
+      "origen": "q5_average",
+      "destino": "gateway_resultados",
+      "entrada": "errores",
+      "esquemas": [
+        "ERROR_REGISTRO"
+      ]
+    },
+    {
+      "nombre": "errores_q5_comparator",
+      "origen": "q5_comparator",
+      "destino": "gateway_resultados",
+      "entrada": "errores",
+      "esquemas": [
+        "ERROR_REGISTRO"
+      ]
+    },
+    {
+      "nombre": "palabras",
+      "origen": "word_occurrences",
+      "destino": "frecuencias",
+      "entrada": "palabras",
+      "esquemas": [
+        "PALABRA"
+      ]
+    },
+    {
+      "nombre": "conteos",
+      "origen": "frecuencias",
+      "destino": "top_n",
+      "entrada": "conteos",
+      "esquemas": [
+        "CONTEO_PALABRA"
+      ]
+    },
+    {
+      "nombre": "errores_date_router",
+      "origen": "date_router",
+      "destino": "gateway_resultados",
+      "entrada": "errores",
+      "esquemas": [
+        "ERROR_REGISTRO"
+      ]
+    },
+    {
+      "nombre": "errores_q1_filter_lang",
+      "origen": "q1_filter_lang",
+      "destino": "gateway_resultados",
+      "entrada": "errores",
+      "esquemas": [
+        "ERROR_REGISTRO"
+      ]
+    },
+    {
+      "nombre": "errores_q1_formatter",
+      "origen": "q1_formatter",
+      "destino": "gateway_resultados",
+      "entrada": "errores",
+      "esquemas": [
+        "ERROR_REGISTRO"
+      ]
+    },
+    {
+      "nombre": "errores_q2_filter_bio",
+      "origen": "q2_filter_bio",
+      "destino": "gateway_resultados",
+      "entrada": "errores",
+      "esquemas": [
+        "ERROR_REGISTRO"
+      ]
+    },
+    {
+      "nombre": "errores_ocurrencias",
+      "origen": "word_occurrences",
+      "destino": "gateway_resultados",
+      "entrada": "errores",
+      "esquemas": [
+        "ERROR_REGISTRO"
+      ]
+    },
+    {
+      "nombre": "errores_frecuencias",
+      "origen": "frecuencias",
+      "destino": "gateway_resultados",
+      "entrada": "errores",
+      "esquemas": [
+        "ERROR_REGISTRO"
+      ]
+    },
+    {
+      "nombre": "errores_top_n",
+      "origen": "top_n",
+      "destino": "gateway_resultados",
+      "entrada": "errores",
+      "esquemas": [
+        "ERROR_REGISTRO"
+      ]
+    },
+    {
+      "nombre": "resultado_q4",
+      "origen": "top_n",
+      "destino": "gateway_resultados",
+      "entrada": "q4",
+      "esquemas": [
+        "CONTEO_PALABRA"
+      ]
+    }
+  ]
+}

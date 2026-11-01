@@ -64,12 +64,11 @@ make test             # Todos los paquetes
 make test-middleware  # Comunicación
 make test-eof         # Protocolo EOF
 make test-q4          # Q4 contra cálculo serial con datos sintéticos
+make test-sigterm     # Apagado de workers integrados con Apagado
 ```
 
-El comando construye el contenedor de pruebas, levanta un broker aislado sin
-publicar puertos y elimina sus contenedores y volúmenes al terminar. Devuelve un
-código distinto de cero si falla una prueba. La primera ejecución descarga las
-imágenes y dependencias. Los escenarios están en `tests/middleware/` y `tests/eof/`.
+El comando general construye el contenedor de pruebas, levanta un broker aislado sin publicar puertos y elimina sus contenedores y volúmenes al terminar. Devuelve un código distinto de cero si falla una prueba. La primera ejecución descarga las
+imágenes y dependencias. Los escenarios están en cada subcarpeta dentro de `tests`.
 
 ## Correr el pipeline gateway a Q1
 

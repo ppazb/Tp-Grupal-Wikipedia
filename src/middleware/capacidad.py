@@ -98,6 +98,7 @@ class CapacidadDatos:
             self._consumidor = None
 
     def _limpiar_espera(self, entrega, preservar_error):
+        self._conexion.preparar_limpieza()
         try:
             self._cancelar_consumidor()
             if entrega and self._canal.is_open:

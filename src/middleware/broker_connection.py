@@ -127,6 +127,13 @@ class ConexionBroker:
         if self._apagado is not None and self._apagado.solicitado:
             raise OperacionInterrumpida("La comunicación se detuvo por apagado")
 
+    def preparar_limpieza(self):
+        """Retira un aviso de apagado pendiente antes de limpiar una operación fallida."""
+        self._validar_proceso()
+        if self._apagado is not None and self._apagado.solicitado:
+            if self._enlace_apagado is not None:
+                self._enlace_apagado.cerrar()
+
     def programar(self, operacion) -> None:
         """Notifica al bucle de E/S para ejecutar una operación al despachar eventos.
 

@@ -270,6 +270,7 @@ class ReceptorDatos:
 
     def _liberar_consumidores(self, canal):
         """Reencola una entrega interrumpida sin devolver su permiso asociado."""
+        self._conexion.preparar_limpieza()
         try:
             if self._pendiente is not None and not self._retener_pendiente and canal.is_open:
                 canal.basic_nack(delivery_tag=self._pendiente, requeue=True)
