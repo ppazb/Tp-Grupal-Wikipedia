@@ -4,6 +4,7 @@ import argparse
 
 from src.common.protocol.registros import Esquema
 from src.middleware.cargador_configuracion import cargar_configuracion
+from src.workers.base_worker import destinos_errores
 from src.workers.arranque import agregar_argumentos_comunicacion, validar_rutas
 from .consolidador import ConsolidadorFrecuencias
 from .worker import WorkerTopN
@@ -38,10 +39,13 @@ def ejecutar():
         with ConsolidadorFrecuencias(
             argumentos.presupuesto_memoria_bytes, argumentos.directorio_temporal,
         ) as consolidador, MiddlewareRabbitMQ(configuracion) as middleware:
-            WorkerTopN(
+            worker = WorkerTopN(
                 middleware, consolidador, entrada=argumentos.entrada,
                 grupo_salida=argumentos.grupo_salida, entrada_salida=argumentos.entrada_salida,
-            ).ejecutar()
+            )
+            # Cierra la entrada de errores del gateway al terminar cada ejecución
+            worker.destinos_errores = destinos_errores(configuracion)
+            worker.ejecutar()
     except KeyboardInterrupt:
         return
 

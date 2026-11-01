@@ -14,6 +14,7 @@ class FilterLangQ1(WorkerBase):
     """
 
     def procesar(self, datos: Datos) -> None:
+        self.anunciar_cliente("q1_filter_lang", datos.entrada.id_ejecucion)
         registros_ingles = []
         for referencia in datos.contenido.registros:
             if referencia.idioma == Idioma.INGLES:

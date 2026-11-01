@@ -81,12 +81,9 @@ class DateRouter(WorkerBase):
 
         # Envio hacia nodo de la rama Query 2
         if biograficos_q2:
-            try:
-                entrada_q2 = Entrada(id_ejecucion, "historicos_q2")
-                lote_q2 = Lote(Esquema.REFERENCIA_BIOGRAFICA, tuple(biograficos_q2))
-                self.middleware.publicar("q2_filter_bio", Datos(entrada_q2, lote_q2))
-            except Exception as error:
-                logger.debug("date_router: no se publicó en q2_filter_bio: %s", error)
+            entrada_q2 = Entrada(id_ejecucion, "historicos_q2")
+            lote_q2 = Lote(Esquema.REFERENCIA_BIOGRAFICA, tuple(biograficos_q2))
+            self.middleware.publicar("q2_filter_bio", Datos(entrada_q2, lote_q2))
 
         # Envio hacia rama NLP / Q5: Históricos
         if textos_historicos:
@@ -125,8 +122,5 @@ class DateRouter(WorkerBase):
         except Exception as error:
             logger.debug("date_router: no se propagó EOF a word_occurrences: %s", error)
 
-        # Otras ramas cuando sea necesario
-        try:
-            self.middleware.finalizar_entrada("q2_filter_bio", Entrada(id_ejecucion, "historicos_q2"))
-        except Exception:
-            pass
+        # Rama Query 2
+        self.middleware.finalizar_entrada("q2_filter_bio", Entrada(id_ejecucion, "historicos_q2"))
