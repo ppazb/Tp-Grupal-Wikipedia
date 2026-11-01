@@ -23,12 +23,14 @@ for _clave, _valor in _entorno_del_gateway_en_el_compose().items():
     os.environ.setdefault(_clave, _valor)
 
 from src.common.external_protocol import (
-    CAMPOS_FILA, TipoFrame, codificar_filas, enviar_frame, recibir_frame,
+    CAMPOS_FILA, TipoFrame, codificar_filas, decodificar_resultado, enviar_frame, recibir_frame,
 )
-from src.common.protocol.registros import Esquema, Idioma
+from src.common.protocol.dto import Datos, Entrada
+from src.common.protocol.registros import Esquema, Idioma, Lote, ResultadoQ1
 from src.gateway.src import gateway
 from src.gateway.src.articulos import articulo_desde_fila
 from src.gateway.src.gateway import ServidorGateway
+from src.gateway.src.resultados import ReceptorResultados, RegistroSesiones
 from src.middleware.cargador_configuracion import cargar_configuracion
 
 MAX_BYTES = 65536
@@ -36,7 +38,7 @@ MAX_BYTES = 65536
 
 def fila(**cambios):
     datos = {
-        "abstract": "resumen", "date_modified": "2019-05-01T10:00:00", "image_content_url": "",
+        "abstract": "resumen", "date_created": "2015-01-01T10:00:00", "date_modified": "2019-05-01T10:00:00", "image_content_url": "",
         "in_language": "en", "name": "Articulo", "sections": ("Abstract",), "url": "http://wiki/a",
     }
     datos.update(cambios)
@@ -45,20 +47,41 @@ def fila(**cambios):
 
 
 class PublicadorFalso:
-    """Guarda lo que el gateway publicaría en el middleware."""
+    """
+    Guarda lo que el gateway publicaría en el middleware.
 
-    def __init__(self):
+    Al cerrar una ejecución simula un pipeline instantáneo: entrega los resultados
+    configurados y da la ejecución por completa.
+    """
+
+    def __init__(self, sesiones, resultados=()):
         self.lotes = []      # (id_ejecucion, lote)
         self.cerradas = []   # id_ejecucion
+        self._sesiones = sesiones
+        self._resultados = resultados  # lotes que se entregan al cliente antes de completar
 
     def publicar(self, id_ejecucion, lote):
         self.lotes.append((id_ejecucion, lote))
 
     def finalizar(self, id_ejecucion):
         self.cerradas.append(id_ejecucion)
+        sesion = self._sesiones.obtener(id_ejecucion)
+        if sesion is None:
+            return
+        for lote in self._resultados:
+            nombre = "resultados_finales_q2" if lote.esquema is Esquema.FRAGMENTO_IMAGEN else "resultados_finales_q1"
+            ReceptorFalso(self._sesiones).procesar(Datos(Entrada(id_ejecucion, nombre), lote))
+        sesion.completa.set()
 
     def interrumpir(self):
         pass
+
+
+class ReceptorFalso(ReceptorResultados):
+    """El receptor real sin middleware: solo se usa procesar()."""
+
+    def __init__(self, sesiones):
+        super().__init__(None, sesiones, MAX_BYTES)
 
 
 class TestArticulos(unittest.TestCase):
@@ -67,6 +90,10 @@ class TestArticulos(unittest.TestCase):
         articulo = articulo_desde_fila(fila(in_language="fr"), 0)
         self.assertEqual(articulo.idioma, Idioma.FRANCES)
         self.assertEqual(articulo.url, "http://wiki/a")
+
+    def test_sin_fecha_de_creacion_el_articulo_se_conserva_con_el_campo_vacio(self):
+        self.assertEqual(articulo_desde_fila(fila(date_created=""), 0).fecha_creacion, "")
+        self.assertEqual(articulo_desde_fila(fila(), 0).fecha_creacion, "2015-01-01T10:00:00")
 
     def test_idioma_o_campos_requeridos_invalidos_se_rechazan(self):
         for cambio in ({"in_language": "es"}, {"url": ""}, {"name": " "}, {"date_modified": ""}):
@@ -85,12 +112,19 @@ class TestConfiguracion(unittest.TestCase):
 class TestServidor(unittest.TestCase):
 
     def setUp(self):
-        self.publicador = PublicadorFalso()
+        self.recibidos = []  # (entrada, lote) de los RESULTADO vistos por respuesta()
+        self.sesiones = RegistroSesiones()
+        self.publicador = PublicadorFalso(self.sesiones, self.resultados())
         self.detener = threading.Event()
-        self.servidor = ServidorGateway("127.0.0.1", 0, MAX_BYTES, (), self.publicador, self.detener, 1)
+        self.servidor = ServidorGateway(
+            "127.0.0.1", 0, MAX_BYTES, (), self.publicador, self.detener, 1, self.sesiones,
+        )
         self.hilo = threading.Thread(target=self.servidor.ejecutar, daemon=True)
         self.hilo.start()
         self.clientes = []
+
+    def resultados(self):
+        return ()
 
     def tearDown(self):
         for cliente in self.clientes:
@@ -119,7 +153,12 @@ class TestServidor(unittest.TestCase):
         enviar_frame(cliente, TipoFrame.EOF, cantidad.to_bytes(8, "big"), MAX_BYTES)
 
     def respuesta(self, cliente):
-        tipo, cuerpo = recibir_frame(cliente, MAX_BYTES)
+        """Próxima respuesta que no sea un resultado: estos pueden llegar entre los ACK."""
+        while True:
+            tipo, cuerpo = recibir_frame(cliente, MAX_BYTES)
+            if tipo is not TipoFrame.RESULTADO:
+                break
+            self.recibidos.append(decodificar_resultado(cuerpo))
         return tipo, (int.from_bytes(cuerpo, "big") if tipo is TipoFrame.ACK else cuerpo.decode())
 
     def test_lotes_y_eof_se_confirman_y_se_publican(self):
@@ -172,6 +211,57 @@ class TestServidor(unittest.TestCase):
             self.enviar_eof(cliente, 1)
             self.respuesta(cliente)
         self.assertEqual(len(set(self.publicador.cerradas)), 2)
+
+
+class TestResultados(TestServidor):
+    """Los resultados vuelven, en lotes, por la conexión de la ejecución que los originó."""
+
+    LOTES = (
+        Lote(Esquema.RESULTADO_Q1, (ResultadoQ1("http://wiki/a", "2019"), ResultadoQ1("http://wiki/b", "2018"))),
+        Lote(Esquema.RESULTADO_Q1, (ResultadoQ1("http://wiki/c", "2017"),)),
+    )
+
+    def resultados(self):
+        return self.LOTES
+
+    def test_resultados_se_reenvian_por_lote_y_cierran_con_fin(self):
+        cliente = self.conectar()
+        self.enviar_lote(cliente, [fila()])
+        self.respuesta(cliente)
+        self.enviar_eof(cliente, 1)
+        self.assertEqual(self.respuesta(cliente), (TipoFrame.ACK, 1))
+
+        while True:
+            tipo, cuerpo = recibir_frame(cliente, MAX_BYTES)
+            if tipo is TipoFrame.FIN:
+                break
+            self.assertIs(tipo, TipoFrame.RESULTADO)
+            self.recibidos.append(decodificar_resultado(cuerpo))
+        self.assertEqual(self.recibidos, [("resultados_finales_q1", lote) for lote in self.LOTES])
+
+    def test_cada_cliente_recibe_solo_los_suyos(self):
+        sesion_ajena = type("S", (), {
+            "enviar": lambda *a: self.fail("resultado a otro cliente"), "marcar_rota": lambda *a: None,
+        })()
+        self.sesiones.registrar("otra-ejecucion", sesion_ajena)
+        cliente = self.conectar()
+        self.enviar_lote(cliente, [fila()])
+        self.respuesta(cliente)
+        self.enviar_eof(cliente, 1)
+        self.respuesta(cliente)
+        recibir_frame(cliente, MAX_BYTES)  # FIN: los resultados ya los vio respuesta()
+        self.assertEqual(len(self.recibidos), len(self.LOTES))
+
+    def test_cliente_con_resultados_pendientes_no_se_cierra_antes_del_fin(self):
+        self.publicador.finalizar = lambda id_ejecucion: self.publicador.cerradas.append(id_ejecucion)
+        cliente = self.conectar()
+        self.enviar_lote(cliente, [fila()])
+        self.respuesta(cliente)
+        self.enviar_eof(cliente, 1)
+        self.respuesta(cliente)
+        cliente.settimeout(0.3)
+        with self.assertRaises(InterruptedError):  # sin datos: vence el timeout y se consulta interrumpido
+            recibir_frame(cliente, MAX_BYTES, interrumpido=lambda: True)
 
 
 if __name__ == "__main__":

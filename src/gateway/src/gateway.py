@@ -14,6 +14,7 @@ from ...middleware.configuracion import ErrorConfiguracion
 from ...middleware.interfaz import ErrorMensaje, ErrorMiddleware
 from ...middleware.rabbitmq import MiddlewareRabbitMQ
 from .articulos import articulo_desde_fila
+from .resultados import ReceptorResultados, RegistroSesiones, SesionCliente
 
 LOG = logging.getLogger('gateway')
 
@@ -22,6 +23,9 @@ MIDDLEWARE_CONFIG = os.environ["MIDDLEWARE_CONFIG"]
 GATEWAY_GROUP = os.environ["GATEWAY_GROUP"]
 GATEWAY_INSTANCE = int(os.environ["GATEWAY_INSTANCE"])
 GATEWAY_ERROR_ACK_SECONDS = float(os.environ["GATEWAY_ERROR_ACK_SECONDS"])
+# grupo de la topología al que los workers envían los resultados
+RESULTS_GROUP = os.environ["GATEWAY_RESULTS_GROUP"]
+RESULTS_INSTANCE = int(os.environ["GATEWAY_RESULTS_INSTANCE"])
 SERVER_HOST = os.environ["SERVER_HOST"]
 SERVER_PORT = int(os.environ["SERVER_PORT"])
 
@@ -93,7 +97,7 @@ class ServidorGateway:
 
     """
 
-    def __init__(self, host, puerto, max_bytes, rutas, publicador, detener, espera_ack_error):
+    def __init__(self, host, puerto, max_bytes, rutas, publicador, detener, espera_ack_error, sesiones=None):
         
         self._direccion = (host, puerto)
         self._max_bytes = max_bytes
@@ -101,6 +105,7 @@ class ServidorGateway:
         self._publicador = publicador
         self._detener = detener
         self._espera_ack_error = espera_ack_error
+        self._sesiones = sesiones if sesiones is not None else RegistroSesiones()
         self._lock_clientes = threading.Lock()
         self._clientes = set()
         self._hilos = set()
@@ -121,6 +126,7 @@ class ServidorGateway:
             self._detener.set()
             self._socket = None
             self._publicador.interrumpir()
+            self._sesiones.cerrar_todas()
             self._cerrar_clientes()
             self._esperar_clientes()
 
@@ -227,6 +233,15 @@ class ServidorGateway:
     def _procesar_cliente(self, cliente):
         # El gateway asigna la ejecución: un uuid nuevo por conexion para no repetir
         id_ejecucion = str(uuid.uuid4())
+        # Se registra antes de publicar: los resultados pueden llegar mientras el cliente sigue enviando
+        sesion = SesionCliente(cliente, self._max_bytes)
+        self._sesiones.registrar(id_ejecucion, sesion)
+        try:
+            self._atender_ejecucion(cliente, sesion, id_ejecucion)
+        finally:
+            self._sesiones.quitar(id_ejecucion)
+
+    def _atender_ejecucion(self, cliente, sesion, id_ejecucion):
         cantidad_lotes = 0
         filas_descartadas = 0
         filas_totales = 0
@@ -258,7 +273,7 @@ class ServidorGateway:
                 cantidad_lotes += 1
 
                 # ACK: se confirma la recepción del lote
-                enviar_frame(cliente, TipoFrame.ACK, cantidad_lotes.to_bytes(BYTE_8, "big"), self._max_bytes)
+                sesion.enviar(TipoFrame.ACK, cantidad_lotes.to_bytes(BYTE_8, "big"))
                 
                 continue
 
@@ -271,12 +286,22 @@ class ServidorGateway:
             
             self._publicador.finalizar(id_ejecucion)
             
-            enviar_frame(cliente, TipoFrame.ACK,cantidad_lotes.to_bytes(BYTE_8, "big"), self._max_bytes)
+            sesion.enviar(TipoFrame.ACK, cantidad_lotes.to_bytes(BYTE_8, "big"))
             
             LOG.info("Ejecución %s admitida: %d lotes, %d filas (%d descartadas), publicados en %s",
                 id_ejecucion, cantidad_lotes, filas_totales, filas_descartadas,", ".join(ruta.destino for ruta in self._rutas),
             )
+            self._esperar_resultados(sesion, id_ejecucion)
             return
+
+    # La conexión sigue abierta hasta que el cliente recibió todos los resultados
+    def _esperar_resultados(self, sesion, id_ejecucion):
+        sesion.completa.wait()
+        if sesion.rota:
+            LOG.warning("Ejecución %s: se corta la espera de resultados", id_ejecucion)
+            return
+        sesion.enviar(TipoFrame.FIN, b"")
+        LOG.info("Ejecución %s: resultados entregados al cliente", id_ejecucion)
 
     # Si el cliente se cayo sin eof, cierra la entrada para que los workers no esperen mas datos
     def _cerrar_por_desconexion(self, id_ejecucion, cantidad_lotes):
@@ -349,6 +374,42 @@ class ServidorGateway:
             hilo.join()
 
 
+def _iniciar_receptor(configuracion, sesiones, detener):
+    """Abre la conexión de recepción de resultados, distinta de la de publicación."""
+    grupo = configuracion.obtener_grupo(RESULTS_GROUP)
+    if not 0 <= RESULTS_INSTANCE < grupo.instancias:
+        raise ErrorConfiguracion(f"GATEWAY_RESULTS_INSTANCE está fuera del grupo {RESULTS_GROUP}")
+
+    configuracion = replace(configuracion, proceso=IdentidadProceso(RESULTS_GROUP, RESULTS_INSTANCE))
+    receptor = None
+    # Los rechazos de mensajes recibidos llegan al cliente como cualquier otro resultado
+    middleware = MiddlewareRabbitMQ(configuracion, informar_error=lambda datos: receptor.procesar(datos))
+    receptor = ReceptorResultados(middleware, sesiones, configuracion.limites.max_bytes_por_mensaje)
+
+    def recibir():
+        try:
+            receptor.ejecutar()
+        except Exception:
+            LOG.exception("Falló la recepción de resultados; se detiene el gateway")
+            detener.set()
+
+    hilo = threading.Thread(target=recibir, name="gateway-results", daemon=True)
+    hilo.start()
+    return receptor, middleware, hilo
+
+
+def _detener_receptor(receptor, middleware, hilo):
+    receptor.detener()
+    hilo.join(5)
+    if hilo.is_alive():
+        try:
+            middleware.interrumpir()
+        except ErrorMiddleware:
+            LOG.debug("El middleware de resultados ya estaba cerrado al interrumpir")
+        hilo.join(5)
+    middleware.cerrar()
+
+
 def ejecutar_gateway(detener):
     configuracion = cargar_configuracion(MIDDLEWARE_CONFIG)
     rutas = _rutas_articulos(configuracion)
@@ -360,14 +421,18 @@ def ejecutar_gateway(detener):
     if GATEWAY_ERROR_ACK_SECONDS <= 0:
         raise ValueError("GATEWAY_ERROR_ACK_SECONDS debe ser mayor que cero")
 
-    configuracion = replace(configuracion, proceso=IdentidadProceso(GATEWAY_GROUP, GATEWAY_INSTANCE))
-    publicador = PublicadorMiddleware(configuracion, rutas)
-    servidor = ServidorGateway(SERVER_HOST, SERVER_PORT, configuracion.limites.max_bytes_por_mensaje,
-        rutas, publicador, detener, GATEWAY_ERROR_ACK_SECONDS,
-    )
-    
+    sesiones = RegistroSesiones()
+    publicador_config = replace(configuracion, proceso=IdentidadProceso(GATEWAY_GROUP, GATEWAY_INSTANCE))
+    publicador = PublicadorMiddleware(publicador_config, rutas)
+    receptor = None
     try:
+        receptor = _iniciar_receptor(configuracion, sesiones, detener)
+        servidor = ServidorGateway(SERVER_HOST, SERVER_PORT, configuracion.limites.max_bytes_por_mensaje,
+            rutas, publicador, detener, GATEWAY_ERROR_ACK_SECONDS, sesiones,
+        )
         servidor.ejecutar()
         return 0
     finally:
+        if receptor is not None:
+            _detener_receptor(*receptor)
         publicador.cerrar()

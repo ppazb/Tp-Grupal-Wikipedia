@@ -35,8 +35,8 @@ class DateRouter(WorkerBase):
         total_articulos = len(datos.contenido.registros)
         for articulo in datos.contenido.registros:
 
-            # Escrito hasta 2020-> se decide por la fecha de creación
-            anio = _extraer_anio(articulo.fecha_creacion)
+            # Igual que la versión secuencial: "hasta 2020" se decide por la fecha de modificación
+            anio = _extraer_anio(articulo.fecha)
             if anio is not None and anio <= 2020:
                 # Query 1: únicamente URL, fecha e idioma
                 historicos_q1.append(
@@ -48,11 +48,10 @@ class DateRouter(WorkerBase):
                         articulo.nombre, articulo.url, articulo.secciones, articulo.url_imagen
                     )
                 )
-            elif anio is None and articulo.fecha_creacion.strip():
-                # Sin fecha de creación no se sabe si es de 2020 o antes: queda fuera de Q1 y Q2
+            elif anio is None:
                 logger.warning(
-                    "date_router: artículo con formato de fecha inválido ignorado: %s (fecha de creación: '%s')",
-                    articulo.url, articulo.fecha_creacion
+                    "date_router: artículo con formato de fecha inválido ignorado: %s (fecha: '%s')",
+                    articulo.url, articulo.fecha
                 )
 
         id_ejecucion = datos.entrada.id_ejecucion

@@ -2,13 +2,18 @@
 from enum import IntEnum
 import socket
 
-from .protocol.primitivas import BYTES_U32, EscritorBinario, LectorBinario
+from .protocol.primitivas import BYTES_U16, BYTES_U32, EscritorBinario, LectorBinario
+from .protocol.registros import Esquema
+from .protocol.serializer import escribir_lote, leer_lote
+
+# El nombre se captura antes de que los parámetros `socket` lo oculten en las funciones de abajo
+_TIMEOUT = socket.timeout
 
 # Campos de una fila cruda, en el orden en que viajan; todos son textos (None se toma como "").
 # Los campos struct del Parquet (image, in_language) llegan ya aplanados.
 # "sections" es la excepción: viaja como lista de textos (CAMPOS_LISTA).
 CAMPOS_FILA = (
-    "abstract", "date_modified", "image_content_url", "in_language", "name", "sections", "url",
+    "abstract", "date_created", "date_modified", "image_content_url", "in_language", "name", "sections", "url",
 )
 CAMPOS_LISTA = frozenset({"sections"})
 
@@ -18,6 +23,8 @@ class TipoFrame(IntEnum):
     EOF = 0x02
     ACK = 0x03
     ERROR = 0x04
+    RESULTADO = 0x05  # gateway -> cliente: un lote de resultados de una consulta
+    FIN = 0x06        # gateway -> cliente: no quedan más resultados de la ejecución
 
 
 # Envia un frame TCP con el tipo y cuerpo indicados, respetando el limite de bytes.
@@ -69,7 +76,7 @@ def recibir_exactamente(socket: socket.socket,cantidad: int,*,permitir_cierre: b
             fragmento = socket.recv(cantidad - len(partes))
 
         #si hay timeout y hay una funcion interrumpido, se consulta si se interrumpio la recepcion TCP
-        except socket.timeout:
+        except _TIMEOUT:
             if interrumpido is not None and interrumpido():
                 raise InterruptedError("La recepción TCP fue interrumpida")
             continue #volver a intentar recibir 
@@ -117,3 +124,25 @@ def decodificar_filas(cuerpo: bytes) -> list[dict]:
     lector.finalizar()
     
     return filas
+
+
+# Cuerpo de un frame RESULTADO: | texto nombre de la entrada | u16 esquema | u32 cantidad | registros |
+# Es un lote del protocolo interno tal cual salió del último worker, para no reenviar registro por registro.
+# Eleva ErrorSerializacion (ValueError) si no entra en max_bytes.
+def codificar_resultado(nombre_entrada: str, lote, max_bytes: int) -> bytes:
+    escritor = EscritorBinario(max_bytes)
+    escritor.texto(nombre_entrada)
+    escribir_lote(escritor, lote)
+    return escritor.resultado()
+
+
+# Devuelve (nombre de la entrada, lote). Un registro inválido eleva ErrorSerializacion (ValueError).
+def decodificar_resultado(cuerpo: bytes):
+    lector = LectorBinario(cuerpo)
+    nombre = lector.texto()
+    esquema = Esquema(lector.entero(BYTES_U16))
+    lote, errores = leer_lote(lector, esquema)
+    if errores:
+        raise ValueError(f"El lote de resultados tiene registros inválidos: {errores[0].detalle}")
+    return nombre, lote
+
