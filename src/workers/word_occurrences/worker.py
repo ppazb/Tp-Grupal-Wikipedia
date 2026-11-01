@@ -1,10 +1,11 @@
 import logging
+import zlib
 from typing import List
 
 from src.workers.base_worker import WorkerBase
 from src.common.protocol.dto import Datos, Entrada
 from src.common.protocol.registros import (
-    Esquema, Lote, Palabra, CantidadPalabras, Candidato, TextoArticulo
+    Esquema, Lote, Palabra, PalabraIdioma, CantidadPalabras, Candidato, TextoArticulo
 )
 from .tokenizer import extract_non_stopwords_from_abstract
 
@@ -12,7 +13,12 @@ logger = logging.getLogger(__name__)
 
 
 class WordOccurrencesWorker(WorkerBase):
-    """Tokeniza abstracts de Wikipedia para alimentar Q4 (frecuencias) y Q5 (promedio y candidatos)."""
+    """Tokeniza abstracts de Wikipedia para alimentar Q3 (intersección), Q4 (frecuencias) y Q5 (promedio y candidatos)."""
+
+    def __init__(self, ruta_configuracion: str):
+        super().__init__(ruta_configuracion)
+        # Las palabras se reparten entre las instancias de Q3 según su hash
+        self._particiones_q3 = self.configuracion.obtener_grupo("q3_intersection").instancias
 
     def procesar(self, datos: Datos) -> None:
         id_ejecucion = datos.entrada.id_ejecucion
@@ -22,6 +28,7 @@ class WordOccurrencesWorker(WorkerBase):
         palabras_q4: List[Palabra] = []
         cantidades_q5: List[CantidadPalabras] = []
         candidatos_q5: List[Candidato] = []
+        pares_q3 = [set() for _ in range(self._particiones_q3)]  # (palabra, idioma) sin repetir, por partición
 
         for articulo in registros:
             if not isinstance(articulo, TextoArticulo):
@@ -33,6 +40,8 @@ class WordOccurrencesWorker(WorkerBase):
             # datos para Q4 (palabras únicas por abstract sin stopwords)
             for pal in set(palabras_no_stop):
                 palabras_q4.append(Palabra(palabra=pal))
+                # dato para Q3: la misma palabra siempre va a la misma partición
+                pares_q3[zlib.crc32(pal.encode("utf-8")) % self._particiones_q3].add((pal, articulo.idioma))
 
             # datos para Q5 según el período del artículo (conteo total de palabras no-stop)
             if entrada_nombre == "textos_historicos":
@@ -47,32 +56,42 @@ class WordOccurrencesWorker(WorkerBase):
             len(palabras_q4), len(cantidades_q5), len(candidatos_q5)
         )
 
-        # Publicar hacia Q5 Average (históricos)
-        if cantidades_q5:
-            try:
-                entrada_avg = Entrada(id_ejecucion, "cantidades_historicas")
-                lote_avg = Lote(Esquema.CANTIDAD_PALABRAS, tuple(cantidades_q5))
-                self.middleware.publicar("q5_average", Datos(entrada_avg, lote_avg))
-            except Exception as error:
-                logger.debug("word_occurrences: no se publicó en q5_average: %s", error)
+        # Hacia Q5 Average (históricos), Q5 Comparator (candidatos), Q4 Frecuencias (palabras únicas por
+        # abstract) y Q3 Intersección (pares palabra-idioma). Cada salida se parte en los mensajes que
+        # hagan falta para respetar el tamaño máximo.
+        self._publicar_por_presupuesto("q5_average", Entrada(id_ejecucion, "cantidades_historicas"), Esquema.CANTIDAD_PALABRAS, cantidades_q5)
+        self._publicar_por_presupuesto("q5_comparator", Entrada(id_ejecucion, "candidatos"), Esquema.CANDIDATO, candidatos_q5)
+        self._publicar_por_presupuesto("frecuencias", Entrada(id_ejecucion, "palabras"), Esquema.PALABRA, palabras_q4)
+        for particion, pares in enumerate(pares_q3):
+            self._publicar_por_presupuesto(
+                "q3_intersection", Entrada(id_ejecucion, "palabras_idioma"), Esquema.PALABRA_IDIOMA,
+                [PalabraIdioma(palabra, idioma) for palabra, idioma in sorted(pares)],
+                clave_afinidad=str(particion),
+            )
 
-        # Publicar hacia Q5 Comparator (candidatos)
-        if candidatos_q5:
-            try:
-                entrada_comp = Entrada(id_ejecucion, "candidatos")
-                lote_comp = Lote(Esquema.CANDIDATO, tuple(candidatos_q5))
-                self.middleware.publicar("q5_comparator", Datos(entrada_comp, lote_comp))
-            except Exception as error:
-                logger.debug("word_occurrences: no se publicó en q5_comparator: %s", error)
+    def _publicar_por_presupuesto(self, grupo: str, entrada: Entrada, esquema: Esquema, registros: list,
+                                  clave_afinidad: str = None) -> None:
+        """
+        Publica los registros en tantos lotes como haga falta para no superar max_bytes_por_mensaje.
 
-        # Publicar hacia Q4 Frecuencias (todas las palabras únicas por abstract)
-        if palabras_q4:
-            try:
-                entrada_palabras = Entrada(id_ejecucion, "palabras")
-                lote_palabras = Lote(Esquema.PALABRA, tuple(palabras_q4))
-                self.middleware.publicar("frecuencias", Datos(entrada_palabras, lote_palabras))
-            except Exception as error:
-                logger.debug("word_occurrences: no se publicó en frecuencias: %s", error)
+        Se llena cada mensaje según el presupuesto de bytes del middleware; con clave de afinidad,
+        todos van a la misma instancia del destino.
+        """
+        if not registros:
+            return
+        pendientes: list = []
+        presupuesto = self.middleware.crear_presupuesto_lote(entrada, esquema)
+        for registro in registros:
+            if not presupuesto.admitir(registro):
+                self.middleware.publicar(grupo, Datos(entrada, Lote(esquema, tuple(pendientes))),
+                                         clave_afinidad=clave_afinidad)
+                pendientes = []
+                presupuesto = self.middleware.crear_presupuesto_lote(entrada, esquema)
+                if not presupuesto.admitir(registro):
+                    raise ValueError(f"Un registro de {esquema.name} no cabe en un lote vacío")
+            pendientes.append(registro)
+        self.middleware.publicar(grupo, Datos(entrada, Lote(esquema, tuple(pendientes))),
+                                 clave_afinidad=clave_afinidad)
 
     def al_finalizar(self, entrada: Entrada) -> None:
         """Propaga el cierre correspondiente al tramo completado."""
@@ -97,4 +116,6 @@ class WordOccurrencesWorker(WorkerBase):
                 self.middleware.finalizar_entrada("frecuencias", Entrada(id_ejecucion, "palabras"))
             except Exception as error:
                 logger.debug("word_occurrences: error al finalizar en frecuencias: %s", error)
+            # Q3 necesita el cierre de todas sus particiones: lo coordina el middleware
+            self.middleware.finalizar_entrada("q3_intersection", Entrada(id_ejecucion, "palabras_idioma"))
 
