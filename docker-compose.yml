@@ -97,7 +97,7 @@ services:
       - ./output:/app/output
     environment:
       # directorio con los .parquet a enviar (todos, en orden de nombre, como una sola ejecución)
-      - INPUT_DIR=/app/input
+      - INPUT_DIR=/app/input/input_0
       # los resultados se guardan en OUTPUT_DIR/client_<CLIENT_ID>, un archivo por consulta
       - OUTPUT_DIR=/app/output
       - CLIENT_ID=0
@@ -127,14 +127,14 @@ services:
       - ./output:/app/output
     environment:
       # directorio con los .parquet a enviar (todos, en orden de nombre, como una sola ejecución)
-      - INPUT_DIR=/app/input/input_2
+      - INPUT_DIR=/app/input/input_1
       # los resultados se guardan en OUTPUT_DIR/client_<CLIENT_ID>, un archivo por consulta
       - OUTPUT_DIR=/app/output
       - CLIENT_ID=1
       # filas por lote
-      - BATCH_SIZE=32
+      - BATCH_SIZE=64
       # debe coincidir con limites.max_bytes_por_mensaje de config/config.json (lo usa el gateway)
-      - MAX_FRAME_BYTES=65536
+      - MAX_FRAME_BYTES=350000
       - SERVER_HOST=gateway
       - SERVER_PORT=5555
       - CONNECT_TIMEOUT_SECONDS=10
