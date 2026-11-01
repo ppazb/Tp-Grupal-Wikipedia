@@ -23,6 +23,7 @@ from src.middleware.rabbitmq import MiddlewareRabbitMQ
 from src.middleware.capacidad import CapacidadDatos
 from src.workers.base_worker import Worker
 from tests.soporte import PLAZO_PROCESO
+from .computo import ObservadorComputo
 
 MODULOS = {
     'date_router': 'date_router', 'q1_filter_lang': 'q1.filter_lang',
@@ -82,7 +83,9 @@ def preparar_archivos(configuracion, temporal):
     base = Path(temporal)
     config = json.loads(Path(__file__).with_name('config.json').read_text())
     config['broker']['virtual_host'] = configuracion.broker.virtual_host
-    config['proceso'] = {'grupo': configuracion.proceso.grupo, 'instancia': 0}
+    config['proceso'] = {'grupo': configuracion.proceso.grupo, 'instancia': configuracion.proceso.instancia}
+    config['grupos'] = {grupo.nombre: grupo.instancias for grupo in configuracion.grupos}
+    config['limites']['max_mensajes_por_cola'] = configuracion.limites.max_mensajes_por_cola
     archivo = base / 'config.json'
     archivo.write_text(json.dumps(config))
     disco = base / 'disco'
@@ -144,6 +147,7 @@ def ejecutar_worker(configuracion, eventos, modo, continuar):
         recursos.enter_context(patch.object(MiddlewareRabbitMQ, '__init__', abrir_observado))
         if modo == 'capacidad':
             recursos.enter_context(patch.object(CapacidadDatos, 'adquirir', adquirir_observado))
+        ObservadorComputo(modo, eventos, continuar).instalar(recursos)
         with TestCase().assertNoLogs('src.middleware', level='ERROR'):
             (modulo.ejecutar if grupo in ('frecuencias', 'top_n') else modulo.main)()
         assert len(instancias) == 1

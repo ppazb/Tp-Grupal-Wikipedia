@@ -16,6 +16,7 @@ class FilterLangQ1(WorkerBase):
     def procesar(self, datos: Datos) -> None:
         registros_ingles = []
         for referencia in datos.contenido.registros:
+            self.comprobar_detencion()
             if referencia.idioma == Idioma.INGLES:
                 # Me quedo solo con URL y fecha
                 registros_ingles.append(

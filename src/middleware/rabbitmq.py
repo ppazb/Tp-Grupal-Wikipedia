@@ -38,8 +38,11 @@ class MiddlewareRabbitMQ(Middleware[Lote]):
     def __init__(self, configuracion, *, informar_error=None, apagado=None):
         self._proceso_propietario = os.getpid()
         self._identidad = configuracion.proceso
-        self._codificador = CodificadorMensajes(configuracion.limites.max_bytes_por_mensaje)
         self._conexion = ConexionBroker(configuracion.broker, apagado=apagado)
+        self._codificador = CodificadorMensajes(
+            configuracion.limites.max_bytes_por_mensaje,
+            comprobar_detencion=self._conexion.comprobar_apagado,
+        )
         self._recursos = RecursosPorEjecucion()
         self._cerrada = False
         self._cerrando = False

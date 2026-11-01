@@ -18,7 +18,9 @@ class WorkerFrecuencia(Worker):
         self._entrada = entrada
         self._grupo_salida = grupo_salida
         self._entrada_salida = entrada_salida
-        self._parciales = EmisorParciales(self._emitir, self._crear_presupuesto)
+        self._parciales = EmisorParciales(
+            self._emitir, self._crear_presupuesto, comprobar_detencion=self.comprobar_detencion,
+        )
         self.registrar_limpieza(self._parciales.cerrar)
 
     def procesar(self, datos):

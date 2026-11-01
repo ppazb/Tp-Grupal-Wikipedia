@@ -3,6 +3,7 @@
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from itertools import groupby
+from functools import cmp_to_key
 from pathlib import Path
 from struct import calcsize
 from sys import getsizeof
@@ -45,6 +46,8 @@ class ConsolidadorFrecuencias:
         if comprobar_detencion is not None and not callable(comprobar_detencion):
             raise TypeError("La comprobación de detención debe ser invocable")
         self._comprobar_detencion = comprobar_detencion
+        self._clave_ordenacion = cmp_to_key(self._comparar_aportes) if comprobar_detencion else None
+        self._bytes_clave = getsizeof(self._clave_ordenacion) if self._clave_ordenacion else 0
         self._presupuesto = presupuesto_memoria_bytes
         self._temporal = TemporaryDirectory(prefix='q4-conteos-', dir=directorio_temporal)
         self._directorio = Path(self._temporal.name)
@@ -74,7 +77,7 @@ class ConsolidadorFrecuencias:
             self._comprobar_detencion()
         aporte = (id_ejecucion, parcial.palabra, parcial.cantidad)
         costo = (getsizeof(aporte) + sum(getsizeof(valor) for valor in aporte)
-                 + BYTES_REFERENCIAS_POR_APORTE + 4 * len(parcial.palabra))
+                 + BYTES_REFERENCIAS_POR_APORTE + self._bytes_clave + 4 * len(parcial.palabra))
         if BYTES_LISTA_VACIA + costo > self._presupuesto:
             raise ValueError('Un aporte individual supera el presupuesto de memoria')
         # Valida UTF-8 antes de admitir el aporte; el costo reserva su codificación.
@@ -159,17 +162,23 @@ class ConsolidadorFrecuencias:
         if not self._buffer:
             return
         try:
-            self._buffer.sort()
+            # El comparador permite abandonar sort entre comparaciones; su clave
+            # auxiliar por aporte está incluida en el presupuesto de memoria.
+            self._buffer.sort(key=self._clave_ordenacion)
             for ejecucion, aportes in groupby(self._buffer, key=lambda aporte: aporte[0]):
                 ruta = self._nueva_ruta()
                 registros = (ConteoPalabra(palabra, cantidad) for _, palabra, cantidad in aportes)
-                escribir_conteos(ruta, agrupar_conteos(registros), self._comprobar_detencion)
+                escribir_conteos(ruta, agrupar_conteos(registros, self._comprobar_detencion), self._comprobar_detencion)
                 self._incorporar_tramo(self._ejecuciones[ejecucion], ruta)
             self._buffer.clear()
             self._bytes_buffer = BYTES_LISTA_VACIA
         except BaseException:
             self._fallido = True
             raise
+
+    def _comparar_aportes(self, primero, segundo):
+        self._comprobar_detencion()
+        return (primero > segundo) - (primero < segundo)
 
     def _incorporar_tramo(self, estado, ruta):
         # Cada nivel contiene hasta un tramo. Se fusionan solo pares del mismo

@@ -39,7 +39,10 @@ class ReceptorDatos:
         self._conexion = conexion
         self._informar_error = informar_error
         self._coordinacion = coordinacion
-        self._codificador = CodificadorMensajes(configuracion.limites.max_bytes_por_mensaje)
+        self._codificador = CodificadorMensajes(
+            configuracion.limites.max_bytes_por_mensaje,
+            comprobar_detencion=conexion.comprobar_apagado,
+        )
         if topologia is None:
             topologia = TopologiaGrupos(configuracion)
             topologia.declarar(conexion)

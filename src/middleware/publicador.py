@@ -45,7 +45,10 @@ class PublicadorDatos:
         self._configuracion = configuracion
         self._conexion = conexion
         self._topologia = topologia or TopologiaGrupos(configuracion)
-        self._codificador = CodificadorMensajes(configuracion.limites.max_bytes_por_mensaje)
+        self._codificador = CodificadorMensajes(
+            configuracion.limites.max_bytes_por_mensaje,
+            comprobar_detencion=conexion.comprobar_apagado,
+        )
         if topologia is None:
             self._topologia.declarar(conexion)
         self._capacidad = capacidad or CapacidadDatos(conexion, self._topologia)

@@ -17,7 +17,8 @@ from .presupuesto_lote import PresupuestoLote
 class CodificadorMensajes:
     """Codifica sobres acotados y decodifica sus registros sin conversiones implícitas."""
 
-    def __init__(self, max_bytes_por_mensaje: int):
+    def __init__(self, max_bytes_por_mensaje: int, *, comprobar_detencion=None):
+        self._comprobar_detencion = comprobar_detencion
         if type(max_bytes_por_mensaje) is not int or max_bytes_por_mensaje <= 0:
             raise ErrorConfiguracion("max_bytes_por_mensaje debe ser un entero positivo")
         self._max_bytes_por_mensaje = max_bytes_por_mensaje
@@ -26,8 +27,13 @@ class CodificadorMensajes:
         """Valida y mide el sobre antes de construir el cuerpo binario completo."""
         _validar_sobre(sobre)
         try:
-            self._escribir(EscritorBinario(self._max_bytes_por_mensaje, medir=True), sobre)
-            escritor = EscritorBinario(self._max_bytes_por_mensaje)
+            medidor = EscritorBinario(
+                self._max_bytes_por_mensaje, medir=True,
+                comprobar_detencion=self._comprobar_detencion,
+            )
+            self._escribir(medidor, sobre)
+            escritor = EscritorBinario(self._max_bytes_por_mensaje,
+                                       comprobar_detencion=self._comprobar_detencion)
             self._escribir(escritor, sobre)
             return escritor.resultado()
         except ErrorSerializacion as error:
@@ -56,11 +62,15 @@ class CodificadorMensajes:
         sobre = SobreMensaje(entrada, TipoMensaje.DATOS, origen, Lote(esquema, ()))
         _validar_sobre(sobre)
         try:
-            escritor = EscritorBinario(self._max_bytes_por_mensaje, medir=True)
+            escritor = EscritorBinario(
+                self._max_bytes_por_mensaje, medir=True,
+                comprobar_detencion=self._comprobar_detencion,
+            )
             inicio = self._escribir_cabecera(escritor, sobre)
             escribir_cabecera_lote(escritor, esquema, 0)
             escritor.terminar_bloque(inicio)
-            return PresupuestoLote(self._max_bytes_por_mensaje - escritor.posicion, esquema)
+            return PresupuestoLote(self._max_bytes_por_mensaje - escritor.posicion, esquema,
+                                   comprobar_detencion=self._comprobar_detencion)
         except ErrorSerializacion as error:
             raise ErrorMensaje(str(error)) from error
 
@@ -70,7 +80,7 @@ class CodificadorMensajes:
             raise ErrorMensajeInvalido("El cuerpo debe ser bytes dentro del límite configurado")
         entrada = origen = esquema = None
         try:
-            lector = LectorBinario(cuerpo)
+            lector = LectorBinario(cuerpo, comprobar_detencion=self._comprobar_detencion)
             tipo = TipoMensaje(lector.entero(BYTES_U8))
             id_ejecucion = lector.texto()
             nombre = lector.texto()
@@ -81,7 +91,7 @@ class CodificadorMensajes:
                     raise ErrorSerializacion("Identificador vacío en el sobre")
             entrada = Entrada(id_ejecucion, nombre)
             origen = IdentidadProceso(grupo, instancia)
-            contenido = LectorBinario(lector.bloque())
+            contenido = LectorBinario(lector.bloque(), comprobar_detencion=self._comprobar_detencion)
             lector.finalizar()
             if tipo is TipoMensaje.DATOS:
                 esquema = contenido.entero(BYTES_U16)
@@ -110,7 +120,8 @@ class CodificadorMensajes:
         _validar_texto(id_ejecucion)
         _validar_texto(clave)
         try:
-            escritor = EscritorBinario(self._max_bytes_por_mensaje)
+            escritor = EscritorBinario(self._max_bytes_por_mensaje,
+                                       comprobar_detencion=self._comprobar_detencion)
             escritor.texto(id_ejecucion)
             escritor.texto(clave)
             return escritor.resultado()

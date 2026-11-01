@@ -37,6 +37,7 @@ class DateRouter(WorkerBase):
 
         total_articulos = len(datos.contenido.registros)
         for articulo in datos.contenido.registros:
+            self.comprobar_detencion()
 
             anio = _extraer_anio(articulo.fecha)
             if anio is not None and anio <= 2020:

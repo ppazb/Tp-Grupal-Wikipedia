@@ -43,3 +43,5 @@ scripts/__pycache__/test_pipeline_q1.cpython-314.pyc
 
 # Cachés de Python de cualquier versión.
 __pycache__/
+
+*docs/

@@ -16,7 +16,9 @@ class EmisorParciales:
     La instancia se utiliza secuencialmente dentro de un proceso.
     """
 
-    def __init__(self, emitir: Callable[[str, Lote], None], crear_presupuesto: Callable):
+    def __init__(self, emitir: Callable[[str, Lote], None], crear_presupuesto: Callable,
+                 *, comprobar_detencion=None):
+        self._comprobar_detencion = comprobar_detencion
         if not callable(emitir) or not callable(crear_presupuesto):
             raise TypeError('La emisión y la creación del presupuesto deben ser invocables')
         self._emitir = emitir
@@ -63,7 +65,12 @@ class EmisorParciales:
         self._emitir_pendientes(id_ejecucion)
 
     def _emitir_pendientes(self, id_ejecucion: str) -> None:
-        registros = tuple(self._acumulador.iterar_conteos(id_ejecucion))
+        pendientes = []
+        for registro in self._acumulador.iterar_conteos(id_ejecucion):
+            if self._comprobar_detencion is not None:
+                self._comprobar_detencion()
+            pendientes.append(registro)
+        registros = tuple(pendientes)
         if not registros:
             return
         self._emitiendo = True

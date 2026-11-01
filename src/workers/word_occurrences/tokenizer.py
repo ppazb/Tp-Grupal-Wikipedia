@@ -22,20 +22,31 @@ except Exception as error:
 
 # Expresiones regulares
 WORD_REGEX = r'\b\w+\b'
-NUMBER_REGEX = r'[+-]?((\d+\.?\d*)|(\.\d+))'
+NUMBER_REGEX = r'[+-]?(?:\d+(?:\.\d*)?|\.\d+)'
 
 
-def extract_non_stopwords_from_abstract(abstract: str) -> List[str]:
+def extract_non_stopwords_from_abstract(abstract: str, comprobar_detencion=None) -> List[str]:
     """Extrae palabras del abstract filtrando stopwords"""
     if not isinstance(abstract, str):
         return []
-    words = re.findall(WORD_REGEX, abstract.lower())
-    return [word for word in words if word not in stop_words and not re.fullmatch(NUMBER_REGEX, word)]
+    palabras = []
+    for coincidencia in re.finditer(WORD_REGEX, abstract.lower()):
+        if comprobar_detencion is not None:
+            comprobar_detencion()
+        palabra = coincidencia.group()
+        if palabra not in stop_words and not re.fullmatch(NUMBER_REGEX, palabra):
+            palabras.append(palabra)
+    return palabras
 
 
-def extraer_palabras_unicas(abstract: str) -> Set[str]:
+def extraer_palabras_unicas(abstract: str, comprobar_detencion=None) -> Set[str]:
     """Devuelve las palabras únicas no triviales de un abstract.
     
     Dentro de un mismo abstract las palabras se cuentan una sola vez para Q4 y Q5.
     """
-    return set(extract_non_stopwords_from_abstract(abstract))
+    unicas = set()
+    for palabra in extract_non_stopwords_from_abstract(abstract, comprobar_detencion):
+        if comprobar_detencion is not None:
+            comprobar_detencion()
+        unicas.add(palabra)
+    return unicas

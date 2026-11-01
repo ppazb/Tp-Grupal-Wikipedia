@@ -12,7 +12,8 @@ class PresupuestoLote:
     registros cuyo tamaño no cambia después de admitirlos.
     """
 
-    def __init__(self, bytes_disponibles, esquema):
+    def __init__(self, bytes_disponibles, esquema, *, comprobar_detencion=None):
+        self._comprobar_detencion = comprobar_detencion
         if type(bytes_disponibles) is not int or bytes_disponibles <= 0:
             raise ErrorMensaje('El sobre y la cabecera no dejan espacio para registros')
         self._capacidad = bytes_disponibles
@@ -25,7 +26,8 @@ class PresupuestoLote:
         Un registro inválido o que no cabe ni en un lote nuevo eleva ErrorMensaje.
         """
         try:
-            escritor = EscritorBinario(self._capacidad, medir=True)
+            escritor = EscritorBinario(self._capacidad, medir=True,
+                                       comprobar_detencion=self._comprobar_detencion)
             escribir_registro(escritor, self._esquema, registro)
         except ErrorSerializacion as error:
             raise ErrorMensaje(str(error)) from error

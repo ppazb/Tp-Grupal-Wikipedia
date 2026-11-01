@@ -27,6 +27,7 @@ class AverageQ5Worker(WorkerBase):
         articulos_lote = 0
 
         for registro in datos.contenido.registros:
+            self.comprobar_detencion()
             if isinstance(registro, CantidadPalabras):
                 subtotal_palabras += registro.cantidad
                 articulos_lote += 1

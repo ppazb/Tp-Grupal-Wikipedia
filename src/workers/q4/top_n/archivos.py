@@ -71,11 +71,13 @@ def leer_conteos(archivo, max_bytes_palabra, comprobar_detencion=None):
         yield ConteoPalabra(palabra, cantidad)
 
 
-def agrupar_conteos(registros):
+def agrupar_conteos(registros, comprobar_detencion=None):
     """Suma palabras contiguas sin materializar el grupo de aportes."""
     for palabra, aportes in groupby(registros, key=lambda registro: registro.palabra):
         cantidad = 0
         for aporte in aportes:
+            if comprobar_detencion is not None:
+                comprobar_detencion()
             cantidad = sumar_cantidades(cantidad, aporte.cantidad)
         yield ConteoPalabra(palabra, cantidad)
 
@@ -89,4 +91,4 @@ def fusionar_tramos(primero, segundo, destino, max_bytes_palabra, comprobar_dete
             for ruta in (primero, segundo)
         ]
         registros = merge(*lectores, key=lambda registro: registro.palabra)
-        escribir_conteos(destino, agrupar_conteos(registros), comprobar_detencion)
+        escribir_conteos(destino, agrupar_conteos(registros, comprobar_detencion), comprobar_detencion)

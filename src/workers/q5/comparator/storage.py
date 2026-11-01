@@ -11,7 +11,8 @@ logger = logging.getLogger(__name__)
 class AlmacenamientoCandidatos:
     """Guarda candidatos en disco por ejecución para no sobrecargar la memoria RAM."""
 
-    def __init__(self, directorio_base: str = "data/temp"):
+    def __init__(self, directorio_base: str = "data/temp", *, comprobar_detencion=None):
+        self._comprobar_detencion = comprobar_detencion
         base = Path(directorio_base)
         base.mkdir(parents=True, exist_ok=True)
         self._temporal = TemporaryDirectory(prefix="q5-candidatos-", dir=base)
@@ -28,6 +29,8 @@ class AlmacenamientoCandidatos:
         ruta = self._ruta_archivo(id_ejecucion)
         with open(ruta, "ab") as archivo:
             for c in candidatos:
+                if self._comprobar_detencion is not None:
+                    self._comprobar_detencion()
                 url_bytes = c.url.encode("utf-8")
                 # 4 bytes longitud url, N bytes url, 8 bytes cantidad
                 archivo.write(len(url_bytes).to_bytes(4, "big"))
@@ -42,6 +45,8 @@ class AlmacenamientoCandidatos:
 
         with open(ruta, "rb") as archivo:
             while True:
+                if self._comprobar_detencion is not None:
+                    self._comprobar_detencion()
                 len_bytes = archivo.read(4)
                 if not len_bytes or len(len_bytes) < 4:
                     break

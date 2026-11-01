@@ -25,14 +25,16 @@ class WordOccurrencesWorker(WorkerBase):
         candidatos_q5: List[Candidato] = []
 
         for articulo in registros:
+            self.comprobar_detencion()
             if not isinstance(articulo, TextoArticulo):
                 continue
             
-            palabras = extraer_palabras_unicas(articulo.abstract)
+            palabras = extraer_palabras_unicas(articulo.abstract, self.comprobar_detencion)
             cantidad = len(palabras)
 
             # datos  para Q4 (palabras únicas por abstract sin stopwords)
             for pal in palabras:
+                self.comprobar_detencion()
                 palabras_q4.append(Palabra(palabra=pal))
 
             # datos para Q5 según el período del artículo

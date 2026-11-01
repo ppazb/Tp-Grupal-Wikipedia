@@ -18,7 +18,9 @@ class ComparatorQ5Worker(WorkerBase):
     def __init__(self, ruta_configuracion: str):
         super().__init__(ruta_configuracion)
         directorio_temp = os.environ.get("TEMP_DIR", "data/temp")
-        self._storage = AlmacenamientoCandidatos(directorio_temp)
+        self._storage = AlmacenamientoCandidatos(
+            directorio_temp, comprobar_detencion=self.comprobar_detencion,
+        )
         self.registrar_limpieza(self._storage.cerrar)
         # Resumen histórico por ejecución: id_ejecucion -> (suma, articulos)
         self._resumenes: Dict[str, Tuple[int, int]] = {}
@@ -29,13 +31,18 @@ class ComparatorQ5Worker(WorkerBase):
         entrada_nombre = datos.entrada.nombre
 
         if entrada_nombre == "candidatos":
-            candidatos = [r for r in datos.contenido.registros if isinstance(r, Candidato)]
+            candidatos = []
+            for registro in datos.contenido.registros:
+                self.comprobar_detencion()
+                if isinstance(registro, Candidato):
+                    candidatos.append(registro)
             if candidatos:
                 self._storage.guardar_candidatos(id_ejecucion, candidatos)
                 logger.debug("q5_comparator: guardados %d candidatos en disco para '%s'", len(candidatos), id_ejecucion)
 
         elif entrada_nombre == "resumen_historico":
             for reg in datos.contenido.registros:
+                self.comprobar_detencion()
                 if isinstance(reg, ResumenHistorico):
                     self._resumenes[id_ejecucion] = (reg.suma, reg.articulos)
                     promedio = (reg.suma / reg.articulos) if reg.articulos > 0 else 0.0
