@@ -21,6 +21,21 @@ class ComparatorQ5Worker(WorkerBase):
         self._storage = AlmacenamientoCandidatos(directorio_temp)
         # Resumen histórico por ejecución: id_ejecucion -> (suma, articulos)
         self._resumenes: Dict[str, Tuple[int, int]] = {}
+        # Tamaño de lote para escrituras agrupadas en disco
+        self._batch_size_q5 = int(os.environ.get("BATCH_SIZE_Q5", os.environ.get("batch_size_q5", "1000")))
+        logger.info("q5_comparator: configurado batch_size_q5=%d", self._batch_size_q5)
+        # Buffer de candidatos en memoria antes de persistir a disco: id_ejecucion -> List[Candidato]
+        self._buffer_candidatos: Dict[str, List[Candidato]] = {}
+
+    def _volcar_buffer(self, id_ejecucion: str) -> None:
+        """Escribe los candidatos acumulados en memoria al archivo temporal de la ejecución."""
+        candidatos = self._buffer_candidatos.pop(id_ejecucion, None)
+        if candidatos:
+            self._storage.guardar_candidatos(id_ejecucion, candidatos)
+            logger.debug(
+                "q5_comparator: volcados %d candidatos a disco para '%s'",
+                len(candidatos), id_ejecucion
+            )
 
     def procesar(self, datos: Datos) -> None:
         id_ejecucion = datos.entrada.id_ejecucion
@@ -29,8 +44,12 @@ class ComparatorQ5Worker(WorkerBase):
         if entrada_nombre == "candidatos":
             candidatos = [r for r in datos.contenido.registros if isinstance(r, Candidato)]
             if candidatos:
-                self._storage.guardar_candidatos(id_ejecucion, candidatos)
-                logger.debug("q5_comparator: guardados %d candidatos en disco para '%s'", len(candidatos), id_ejecucion)
+                if id_ejecucion not in self._buffer_candidatos:
+                    self._buffer_candidatos[id_ejecucion] = []
+                self._buffer_candidatos[id_ejecucion].extend(candidatos)
+
+                if len(self._buffer_candidatos[id_ejecucion]) >= self._batch_size_q5:
+                    self._volcar_buffer(id_ejecucion)
 
         elif entrada_nombre == "resumen_historico":
             for reg in datos.contenido.registros:
@@ -47,6 +66,9 @@ class ComparatorQ5Worker(WorkerBase):
         id_ejecucion = entrada.id_ejecucion
         logger.info("q5_comparator: cierre recibido para entrada '%s' de '%s'", entrada.nombre, id_ejecucion)
 
+        if entrada.nombre == "candidatos":
+            self._volcar_buffer(id_ejecucion)
+
         # Si aún quedan entradas pendientes, no procesamos aún (esperamos la barrera completa)
         if self.middleware.entradas_pendientes(id_ejecucion):
             logger.info("q5_comparator: '%s' aún tiene entradas pendientes. Esperando barrera...", id_ejecucion)
@@ -56,6 +78,7 @@ class ComparatorQ5Worker(WorkerBase):
         self._filtrar_y_publicar_resultados(id_ejecucion)
 
     def _filtrar_y_publicar_resultados(self, id_ejecucion: str) -> None:
+        self._volcar_buffer(id_ejecucion)
         suma, articulos = self._resumenes.pop(id_ejecucion, (0, 0))
         promedio = (suma / articulos) if articulos > 0 else 0.0
 
@@ -93,6 +116,7 @@ class ComparatorQ5Worker(WorkerBase):
             self.middleware.finalizar_entrada("gateway_resultados", entrada_salida)
 
         finally:
+            self._buffer_candidatos.pop(id_ejecucion, None)
             # Liberación de recursos en disco
             self._storage.limpiar_ejecucion(id_ejecucion)
 
