@@ -14,8 +14,8 @@ MAX_BYTES_REFERENCIA_ERROR = 1024
 ESQUEMAS = {
     dto.Esquema.ARTICULO: (dto.Articulo, (
         ("url", "texto_requerido"), ("nombre", "texto_requerido"),
-        ("fecha", "texto_requerido"), ("fecha_creacion", "texto"),
-        ("idioma", "idioma"), ("abstract", "texto"), ("secciones", "textos"), ("url_imagen", "texto"),
+        ("fecha", "texto_requerido"), ("idioma", "idioma"),
+        ("abstract", "texto"), ("secciones", "textos"), ("url_imagen", "texto"),
     )),
     dto.Esquema.TEXTO_ARTICULO: (dto.TextoArticulo, (
         ("url", "texto_requerido"), ("idioma", "idioma"), ("abstract", "texto"),

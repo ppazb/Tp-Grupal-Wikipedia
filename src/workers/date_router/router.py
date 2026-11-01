@@ -31,11 +31,12 @@ class DateRouter(WorkerBase):
     def procesar(self, datos: Datos) -> None:
         historicos_q1 = []
         biograficos_q2 = []
+        textos_historicos = []
+        textos_recientes = []
 
         total_articulos = len(datos.contenido.registros)
         for articulo in datos.contenido.registros:
 
-            # Igual que la versión secuencial: "hasta 2020" se decide por la fecha de modificación
             anio = _extraer_anio(articulo.fecha)
             if anio is not None and anio <= 2020:
                 # Query 1: únicamente URL, fecha e idioma
@@ -48,6 +49,17 @@ class DateRouter(WorkerBase):
                         articulo.nombre, articulo.url, articulo.secciones, articulo.url_imagen
                     )
                 )
+                # NLP / Q5 histórico: abstract, idioma y url
+                if articulo.abstract:
+                    textos_historicos.append(
+                        TextoArticulo(articulo.url, articulo.idioma, articulo.abstract)
+                    )
+            elif anio is not None and anio >= 2021:
+                # NLP / Q5 candidatos recientes: abstract, idioma y url
+                if articulo.abstract:
+                    textos_recientes.append(
+                        TextoArticulo(articulo.url, articulo.idioma, articulo.abstract)
+                    )
             elif anio is None:
                 logger.warning(
                     "date_router: artículo con formato de fecha inválido ignorado: %s (fecha: '%s')",
@@ -57,8 +69,8 @@ class DateRouter(WorkerBase):
         id_ejecucion = datos.entrada.id_ejecucion
         logger.info(
             "date_router: procesado lote de %d artículos para ejecución '%s'. "
-            "Candidatos Q1 (<=2020): %d",
-            total_articulos, id_ejecucion, len(historicos_q1)
+            "Candidatos Q1 (<=2020): %d, Históricos NLP: %d, Recientes NLP: %d",
+            total_articulos, id_ejecucion, len(historicos_q1), len(textos_historicos), len(textos_recientes)
         )
 
         # Envio hacia nodo de la rama Query 1
@@ -73,6 +85,24 @@ class DateRouter(WorkerBase):
             lote_q2 = Lote(Esquema.REFERENCIA_BIOGRAFICA, tuple(biograficos_q2))
             self.middleware.publicar("q2_filter_bio", Datos(entrada_q2, lote_q2))
 
+        # Envio hacia rama NLP / Q5: Históricos
+        if textos_historicos:
+            try:
+                entrada_hist = Entrada(id_ejecucion, "textos_historicos")
+                lote_hist = Lote(Esquema.TEXTO_ARTICULO, tuple(textos_historicos))
+                self.middleware.publicar("word_occurrences", Datos(entrada_hist, lote_hist))
+            except Exception as error:
+                logger.debug("date_router: no se publicó en word_occurrences (historicos): %s", error)
+
+        # Envio hacia rama NLP / Q5: Recientes
+        if textos_recientes:
+            try:
+                entrada_rec = Entrada(id_ejecucion, "textos_recientes")
+                lote_rec = Lote(Esquema.TEXTO_ARTICULO, tuple(textos_recientes))
+                self.middleware.publicar("word_occurrences", Datos(entrada_rec, lote_rec))
+            except Exception as error:
+                logger.debug("date_router: no se publicó en word_occurrences (recientes): %s", error)
+
 
     def al_finalizar(self, entrada: Entrada) -> None:
         """
@@ -84,6 +114,13 @@ class DateRouter(WorkerBase):
 
         # Rama Query 1 obligatoria
         self.middleware.finalizar_entrada("q1_filter_lang", Entrada(id_ejecucion, "historicos_q1"))
+
+        # Rama NLP / Q5
+        try:
+            self.middleware.finalizar_entrada("word_occurrences", Entrada(id_ejecucion, "textos_historicos"))
+            self.middleware.finalizar_entrada("word_occurrences", Entrada(id_ejecucion, "textos_recientes"))
+        except Exception as error:
+            logger.debug("date_router: no se propagó EOF a word_occurrences: %s", error)
 
         # Rama Query 2
         self.middleware.finalizar_entrada("q2_filter_bio", Entrada(id_ejecucion, "historicos_q2"))

@@ -13,7 +13,7 @@ _TIMEOUT = socket.timeout
 # Los campos struct del Parquet (image, in_language) llegan ya aplanados.
 # "sections" es la excepción: viaja como lista de textos (CAMPOS_LISTA).
 CAMPOS_FILA = (
-    "abstract", "date_created", "date_modified", "image_content_url", "in_language", "name", "sections", "url",
+    "abstract", "date_modified", "image_content_url", "in_language", "name", "sections", "url",
 )
 CAMPOS_LISTA = frozenset({"sections"})
 

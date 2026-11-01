@@ -38,7 +38,7 @@ MAX_BYTES = 65536
 
 def fila(**cambios):
     datos = {
-        "abstract": "resumen", "date_created": "2015-01-01T10:00:00", "date_modified": "2019-05-01T10:00:00", "image_content_url": "",
+        "abstract": "resumen", "date_modified": "2019-05-01T10:00:00", "image_content_url": "",
         "in_language": "en", "name": "Articulo", "sections": ("Abstract",), "url": "http://wiki/a",
     }
     datos.update(cambios)
@@ -90,10 +90,6 @@ class TestArticulos(unittest.TestCase):
         articulo = articulo_desde_fila(fila(in_language="fr"), 0)
         self.assertEqual(articulo.idioma, Idioma.FRANCES)
         self.assertEqual(articulo.url, "http://wiki/a")
-
-    def test_sin_fecha_de_creacion_el_articulo_se_conserva_con_el_campo_vacio(self):
-        self.assertEqual(articulo_desde_fila(fila(date_created=""), 0).fecha_creacion, "")
-        self.assertEqual(articulo_desde_fila(fila(), 0).fecha_creacion, "2015-01-01T10:00:00")
 
     def test_idioma_o_campos_requeridos_invalidos_se_rechazan(self):
         for cambio in ({"in_language": "es"}, {"url": ""}, {"name": " "}, {"date_modified": ""}):

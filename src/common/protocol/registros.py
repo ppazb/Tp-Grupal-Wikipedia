@@ -45,8 +45,7 @@ class Articulo:
 
     url: str
     nombre: str
-    fecha: str  # modificación
-    fecha_creacion: str  # puede venir vacía
+    fecha: str
     idioma: Idioma
     abstract: str
     secciones: Tuple[str, ...]

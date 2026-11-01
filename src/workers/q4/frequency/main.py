@@ -4,6 +4,7 @@ import argparse
 
 from src.common.protocol.registros import Esquema
 from src.middleware.cargador_configuracion import cargar_configuracion
+from src.workers.base_worker import destinos_errores
 from src.workers.arranque import agregar_argumentos_comunicacion, validar_rutas
 from .worker import WorkerFrecuencia
 
@@ -29,11 +30,14 @@ def ejecutar():
 
     try:
         with MiddlewareRabbitMQ(configuracion) as middleware:
-            WorkerFrecuencia(
+            worker = WorkerFrecuencia(
                 middleware,
                 entrada=argumentos.entrada, grupo_salida=argumentos.grupo_salida,
                 entrada_salida=argumentos.entrada_salida,
-            ).ejecutar()
+            )
+            # Cierra la entrada de errores del gateway al terminar cada ejecución
+            worker.destinos_errores = destinos_errores(configuracion)
+            worker.ejecutar()
     except KeyboardInterrupt:
         # La salida del contexto libera la conexión tras interrumpir la operación.
         return

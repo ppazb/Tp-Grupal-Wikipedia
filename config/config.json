@@ -107,12 +107,75 @@
       ]
     },
     {
-      "nombre": "router_a_nlp",
+      "nombre": "router_a_nlp_historicos",
       "origen": "date_router",
       "destino": "word_occurrences",
-      "entrada": "textos_nlp",
+      "entrada": "textos_historicos",
       "esquemas": [
         "TEXTO_ARTICULO"
+      ]
+    },
+    {
+      "nombre": "router_a_nlp_recientes",
+      "origen": "date_router",
+      "destino": "word_occurrences",
+      "entrada": "textos_recientes",
+      "esquemas": [
+        "TEXTO_ARTICULO"
+      ]
+    },
+    {
+      "nombre": "ocurrencias_a_q5_avg",
+      "origen": "word_occurrences",
+      "destino": "q5_average",
+      "entrada": "cantidades_historicas",
+      "esquemas": [
+        "CANTIDAD_PALABRAS"
+      ]
+    },
+    {
+      "nombre": "ocurrencias_a_q5_comp",
+      "origen": "word_occurrences",
+      "destino": "q5_comparator",
+      "entrada": "candidatos",
+      "esquemas": [
+        "CANDIDATO"
+      ]
+    },
+    {
+      "nombre": "q5_avg_a_comp",
+      "origen": "q5_average",
+      "destino": "q5_comparator",
+      "entrada": "resumen_historico",
+      "esquemas": [
+        "RESUMEN_HISTORICO"
+      ]
+    },
+    {
+      "nombre": "resultado_q5",
+      "origen": "q5_comparator",
+      "destino": "gateway_resultados",
+      "entrada": "q5",
+      "esquemas": [
+        "CANDIDATO"
+      ]
+    },
+    {
+      "nombre": "errores_q5_average",
+      "origen": "q5_average",
+      "destino": "gateway_resultados",
+      "entrada": "errores",
+      "esquemas": [
+        "ERROR_REGISTRO"
+      ]
+    },
+    {
+      "nombre": "errores_q5_comparator",
+      "origen": "q5_comparator",
+      "destino": "gateway_resultados",
+      "entrada": "errores",
+      "esquemas": [
+        "ERROR_REGISTRO"
       ]
     },
     {
@@ -167,6 +230,42 @@
       "entrada": "errores",
       "esquemas": [
         "ERROR_REGISTRO"
+      ]
+    },
+    {
+      "nombre": "errores_ocurrencias",
+      "origen": "word_occurrences",
+      "destino": "gateway_resultados",
+      "entrada": "errores",
+      "esquemas": [
+        "ERROR_REGISTRO"
+      ]
+    },
+    {
+      "nombre": "errores_frecuencias",
+      "origen": "frecuencias",
+      "destino": "gateway_resultados",
+      "entrada": "errores",
+      "esquemas": [
+        "ERROR_REGISTRO"
+      ]
+    },
+    {
+      "nombre": "errores_top_n",
+      "origen": "top_n",
+      "destino": "gateway_resultados",
+      "entrada": "errores",
+      "esquemas": [
+        "ERROR_REGISTRO"
+      ]
+    },
+    {
+      "nombre": "resultado_q4",
+      "origen": "top_n",
+      "destino": "gateway_resultados",
+      "entrada": "q4",
+      "esquemas": [
+        "CONTEO_PALABRA"
       ]
     }
   ]
