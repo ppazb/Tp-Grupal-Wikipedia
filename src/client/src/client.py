@@ -3,6 +3,7 @@ import os
 import signal
 import socket
 import threading
+import time
 
 from ...common.external_protocol import TipoFrame, decodificar_resultado, enviar_frame, recibir_frame
 from .message_handler import LoteDemasiadoGrande, ManejadorMensajes
@@ -98,6 +99,7 @@ def _enviar_filas(socket, manejador, max_bytes, filas, detener, escritor):
 
 # Envía todos los Parquet del directorio: un único EOF al final
 def enviar_parquets(ruta_directorio, socket, max_bytes, tamano_lote, detener, escritor):
+    inicio = time.monotonic()
     manejador = ManejadorMensajes(max_bytes)
     filas_enviadas = 0
     for filas in iterar_lotes(ruta_directorio, tamano_lote):
@@ -113,7 +115,8 @@ def enviar_parquets(ruta_directorio, socket, max_bytes, tamano_lote, detener, es
 
     LOG.info("EOF confirmado: %d filas enviadas en %d lotes; esperando resultados", filas_enviadas, manejador.lotes_confirmados)
     _recibir_resultados(socket, max_bytes, escritor, detener)
-    LOG.info("Resultados completos, guardados en %s", DIRECTORIO_RESULTADOS)
+    LOG.info("Resultados completos, guardados en %s. Ejecución de inicio a fin: %.1f s",
+             DIRECTORIO_RESULTADOS, time.monotonic() - inicio)
     return 0
 
 
