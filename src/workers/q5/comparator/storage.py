@@ -18,18 +18,20 @@ class AlmacenamientoCandidatos:
         return self._directorio / f"q5_candidatos_{id_ejecucion}.bin"
 
     def guardar_candidatos(self, id_ejecucion: str, candidatos: list[Candidato]) -> None:
-        """Agrega candidatos en modo binario append."""
+        """Agrega candidatos en modo binario append agrupados en un solo bloque."""
         if not candidatos:
             return
         
         ruta = self._ruta_archivo(id_ejecucion)
+        bloque = bytearray()
+        for c in candidatos:
+            url_bytes = c.url.encode("utf-8")
+            bloque.extend(len(url_bytes).to_bytes(4, "big"))
+            bloque.extend(url_bytes)
+            bloque.extend(c.cantidad.to_bytes(8, "big"))
+
         with open(ruta, "ab") as archivo:
-            for c in candidatos:
-                url_bytes = c.url.encode("utf-8")
-                # 4 bytes longitud url, N bytes url, 8 bytes cantidad
-                archivo.write(len(url_bytes).to_bytes(4, "big"))
-                archivo.write(url_bytes)
-                archivo.write(c.cantidad.to_bytes(8, "big"))
+            archivo.write(bloque)
 
     def iterar_candidatos(self, id_ejecucion: str) -> Iterator[Candidato]:
         """Lee candidatos secuencialmente sin cargarlos todos a la vez en RAM."""

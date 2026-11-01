@@ -116,6 +116,36 @@ services:
         condition: service_healthy
     stop_grace_period: 30s
 
+  client_2:
+    build:
+      context: .
+      dockerfile: src/client/Dockerfile
+    networks:
+      - wiki_net
+    volumes:
+      - ./input:/app/input:ro
+      - ./output:/app/output
+    environment:
+      # directorio con los .parquet a enviar (todos, en orden de nombre, como una sola ejecución)
+      - INPUT_DIR=/app/input/input_2
+      # los resultados se guardan en OUTPUT_DIR/client_<CLIENT_ID>, un archivo por consulta
+      - OUTPUT_DIR=/app/output
+      - CLIENT_ID=1
+      # filas por lote
+      - BATCH_SIZE=32
+      # debe coincidir con limites.max_bytes_por_mensaje de config/config.json (lo usa el gateway)
+      - MAX_FRAME_BYTES=65536
+      - SERVER_HOST=gateway
+      - SERVER_PORT=5555
+      - CONNECT_TIMEOUT_SECONDS=10
+      # timeout de lectura del socket: cada cuánto se revisa si hay que detenerse
+      - SOCKET_TIMEOUT_SECONDS=1
+      - LOG_LEVEL=INFO
+    depends_on:
+      gateway:
+        condition: service_healthy
+    stop_grace_period: 30s
+
   date_router:
     <<: *worker-base
     build:
@@ -249,5 +279,6 @@ services:
       - WIKI_MW_BROKER_HOST=rabbitmq
       - WIKI_MW_PROCESO_GRUPO=q5_comparator
       - WIKI_MW_PROCESO_INSTANCIA=0
+      - BATCH_SIZE_Q5=1000
     deploy:
       replicas: 1

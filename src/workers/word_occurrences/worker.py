@@ -7,7 +7,7 @@ from src.common.protocol.dto import Datos, Entrada
 from src.common.protocol.registros import (
     Esquema, Lote, Palabra, PalabraIdioma, CantidadPalabras, Candidato, TextoArticulo
 )
-from .tokenizer import extraer_palabras_unicas
+from .tokenizer import extract_non_stopwords_from_abstract
 
 logger = logging.getLogger(__name__)
 
@@ -34,20 +34,20 @@ class WordOccurrencesWorker(WorkerBase):
             if not isinstance(articulo, TextoArticulo):
                 continue
             
-            palabras = extraer_palabras_unicas(articulo.abstract)
-            cantidad = len(palabras)
+            palabras_no_stop = extract_non_stopwords_from_abstract(articulo.abstract)
+            cantidad_total = len(palabras_no_stop)
 
-            # datos  para Q4 (palabras únicas por abstract sin stopwords)
-            for pal in palabras:
+            # datos para Q4 (palabras únicas por abstract sin stopwords)
+            for pal in set(palabras_no_stop):
                 palabras_q4.append(Palabra(palabra=pal))
                 # dato para Q3: la misma palabra siempre va a la misma partición
                 pares_q3[zlib.crc32(pal.encode("utf-8")) % self._particiones_q3].add((pal, articulo.idioma))
 
-            # datos para Q5 según el período del artículo
+            # datos para Q5 según el período del artículo (conteo total de palabras no-stop)
             if entrada_nombre == "textos_historicos":
-                cantidades_q5.append(CantidadPalabras(cantidad=cantidad))
+                cantidades_q5.append(CantidadPalabras(cantidad=cantidad_total))
             elif entrada_nombre == "textos_recientes":
-                candidatos_q5.append(Candidato(url=articulo.url, cantidad=cantidad))
+                candidatos_q5.append(Candidato(url=articulo.url, cantidad=cantidad_total))
 
         logger.info(
             "word_occurrences: procesados %d abstracts de '%s' para '%s'. "

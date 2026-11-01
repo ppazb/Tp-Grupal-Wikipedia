@@ -34,8 +34,5 @@ def extract_non_stopwords_from_abstract(abstract: str) -> List[str]:
 
 
 def extraer_palabras_unicas(abstract: str) -> Set[str]:
-    """Devuelve las palabras únicas no triviales de un abstract.
-    
-    Dentro de un mismo abstract las palabras se cuentan una sola vez para Q4 y Q5.
-    """
+    """Devuelve las palabras únicas no triviales de un abstract para Q4."""
     return set(extract_non_stopwords_from_abstract(abstract))
