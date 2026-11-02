@@ -1,14 +1,13 @@
-import time
 import logging
+import sys
+from src.workers.q3.intersection.worker import IntersectionQ3
 
 def main():
     logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
-    logging.info("Proceso iniciado. Bucle de espera activo.")
-    try:
-        while True:
-            time.sleep(3600)
-    except KeyboardInterrupt:
-        logging.info("Interrupción manual. Finalizando.")
+    ruta_configuracion = sys.argv[1] if len(sys.argv) > 1 else "config/config.json"
+    
+    worker = IntersectionQ3(ruta_configuracion)
+    worker.iniciar()
 
 if __name__ == "__main__":
     main()
