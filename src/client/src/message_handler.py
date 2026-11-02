@@ -19,7 +19,7 @@ def _texto(valor):
     return valor if isinstance(valor, str) else str(valor)
 
 
-def _nombres_secciones(secciones):
+def _nombres_secciones(secciones, comprobar_detencion=None):
     """Nombres de las secciones del artículo; una sección sin nombre se omite.
     En el Parquet la columna viene como un string con JSON, no como lista. Se usa JSON 
     para poder acceder al dato nada mas
@@ -29,13 +29,17 @@ def _nombres_secciones(secciones):
             secciones = json.loads(secciones)
         except ValueError:
             return ()
-    return tuple(
-        seccion["name"] for seccion in secciones or ()
-        if isinstance(seccion, dict) and isinstance(seccion.get("name"), str)
-    )
+    nombres = []
+    for seccion in secciones or ():
+        if comprobar_detencion is not None:
+            comprobar_detencion()
+        if isinstance(seccion, dict) and isinstance(seccion.get("name"), str):
+            nombres.append(seccion["name"])
+    return tuple(nombres)
 
 
-def fila_plana(fila):
+
+def fila_plana(fila, comprobar_detencion=None):
     """Aplana los structs del Parquet a los campos de texto que viajan al gateway."""
     imagen = fila.get("image")
     idioma = fila.get("in_language")
@@ -45,7 +49,7 @@ def fila_plana(fila):
         "image_content_url": _texto(imagen.get("content_url") if isinstance(imagen, dict) else None),
         "in_language": _texto(idioma.get("identifier") if isinstance(idioma, dict) else None),
         "name": _texto(fila.get("name")),
-        "sections": _nombres_secciones(fila.get("sections")),
+        "sections": _nombres_secciones(fila.get("sections"), comprobar_detencion),
         "url": _texto(fila.get("url")),
     }
 
@@ -53,13 +57,19 @@ def fila_plana(fila):
 # Serializa las filas crudas del Parquet para el gateway (que es quien arma los artículos)
 # y lleva la cuenta de lotes enviados y confirmados.
 class ManejadorMensajes:
-    def __init__(self, max_bytes):
+    def __init__(self, max_bytes, comprobar_detencion=None):
+        self._comprobar_detencion = comprobar_detencion
         self._max_bytes = max_bytes
         self.lotes_confirmados = 0
 
     def serializar_lote(self, filas):
         try:
-            return codificar_filas([fila_plana(fila) for fila in filas], self._max_bytes)
+            planas = []
+            for fila in filas:
+                if self._comprobar_detencion is not None:
+                    self._comprobar_detencion()
+                planas.append(fila_plana(fila, self._comprobar_detencion))
+            return codificar_filas(planas, self._max_bytes, comprobar_detencion=self._comprobar_detencion)
         except ErrorSerializacion as error:
             raise LoteDemasiadoGrande(str(error)) from error
 

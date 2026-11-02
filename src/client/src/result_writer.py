@@ -43,7 +43,8 @@ class EscritorResultados:
     Al crearse, borra los CSV y las imágenes que dejó una ejecucion anterior
     """
 
-    def __init__(self, directorio):
+    def __init__(self, directorio, comprobar_detencion=None):
+        self._comprobar_detencion = comprobar_detencion
         self._directorio = directorio
         self._tablas = {}
         self._transferencias = {}
@@ -61,9 +62,13 @@ class EscritorResultados:
     def escribir(self, nombre_entrada, lote):
         if lote.esquema is Esquema.FRAGMENTO_IMAGEN:
             for fragmento in lote.registros:
+                if self._comprobar_detencion is not None:
+                    self._comprobar_detencion()
                 self._escribir_fragmento(nombre_entrada, fragmento)
             return
         for registro in lote.registros:
+            if self._comprobar_detencion is not None:
+                self._comprobar_detencion()
             self._fila(nombre_entrada, dataclasses.astuple(registro), [c.name for c in dataclasses.fields(registro)])
 
     def _fila(self, nombre_entrada, valores, columnas):
@@ -89,7 +94,8 @@ class EscritorResultados:
         if fragmento.desplazamiento not in transferencia.desplazamientos:
             transferencia.desplazamientos.add(fragmento.desplazamiento)
             transferencia.archivo.seek(fragmento.desplazamiento)
-            transferencia.archivo.write(fragmento.fragmento)
+            if transferencia.archivo.write(fragmento.fragmento) != len(fragmento.fragmento):
+                raise OSError("Escritura incompleta del fragmento de imagen")
             transferencia.recibidos += len(fragmento.fragmento)
         if transferencia.completa:
             transferencia.archivo.close()
@@ -99,11 +105,25 @@ class EscritorResultados:
             self._fila(nombre_entrada, (fragmento.nombre, fragmento.url, relativa), ("nombre", "url", "archivo"))
 
     def cerrar(self):
-        for archivo, _ in self._tablas.values():
-            archivo.close()
-        for transferencia in self._transferencias.values():
-            LOG.warning("Imagen incompleta (%d/%d bytes): %s",
-                        transferencia.recibidos, transferencia.total_bytes, transferencia.ruta)
-            transferencia.archivo.close()
-        self._tablas.clear()
-        self._transferencias.clear()
+        """Cierra todos los archivos y elimina imágenes incompletas, una sola vez."""
+        tablas, self._tablas = self._tablas, {}
+        transferencias, self._transferencias = self._transferencias, {}
+        errores = []
+        for archivo, _ in tablas.values():
+            try:
+                archivo.close()
+            except OSError as error:
+                errores.append(error)
+        for transferencia in transferencias.values():
+            try:
+                transferencia.archivo.close()
+            except OSError as error:
+                errores.append(error)
+            try:
+                os.remove(transferencia.ruta)
+            except FileNotFoundError:
+                pass
+            except OSError as error:
+                errores.append(error)
+        if errores:
+            raise ExceptionGroup("No se pudieron liberar todos los resultados", errores)
