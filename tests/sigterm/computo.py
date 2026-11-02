@@ -31,6 +31,9 @@ class ObservadorComputo:
         """Observa comprobaciones internas, ordenación o acceso a campos binarios."""
         origenes = {
             'computo': 'procesar',
+            'secciones': '_es_biografico',
+            'descarga': '_leer_imagen',
+            'fragmentos': '_publicar_imagen',
             'tokenizacion': 'extract_non_stopwords_from_abstract',
             'almacenamiento': 'guardar_candidatos',
         }

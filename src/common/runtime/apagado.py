@@ -3,6 +3,7 @@
 import logging
 import os
 import signal
+from selectors import DefaultSelector, EVENT_READ
 import socket
 import threading
 
@@ -96,6 +97,17 @@ class Apagado:
         if not self._abierto or self._cerrado:
             raise RuntimeError('El apagado no está abierto')
         return self._lectura.fileno()
+
+    def esperar(self, segundos):
+        """Espera hasta el plazo o una solicitud, sin consumir el aviso ni ejecutar limpiezas."""
+        descriptor = self.fileno()
+        if segundos < 0:
+            raise ValueError('El plazo de espera no puede ser negativo')
+        if not self._solicitado:
+            with DefaultSelector() as selector:
+                selector.register(descriptor, EVENT_READ)
+                selector.select(timeout=segundos)
+        return self._solicitado
 
     def procesar(self):
         """Consume avisos disponibles y ejecuta el cierre si se solicitó detener."""

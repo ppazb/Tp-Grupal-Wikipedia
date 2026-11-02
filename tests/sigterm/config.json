@@ -240,6 +240,33 @@
       "esquemas": [
         "CONTEO_PALABRA"
       ]
+    },
+    {
+      "nombre": "q2_bio_a_descargador",
+      "origen": "q2_filter_bio",
+      "destino": "q2_image_downloader",
+      "entrada": "biografias_q2",
+      "esquemas": [
+        "SOLICITUD_IMAGEN"
+      ]
+    },
+    {
+      "nombre": "q2_descargador_a_gateway",
+      "origen": "q2_image_downloader",
+      "destino": "gateway_resultados",
+      "entrada": "resultados_finales_q2",
+      "esquemas": [
+        "FRAGMENTO_IMAGEN"
+      ]
+    },
+    {
+      "nombre": "errores_q2_image_downloader",
+      "origen": "q2_image_downloader",
+      "destino": "gateway_resultados",
+      "entrada": "errores",
+      "esquemas": [
+        "ERROR_REGISTRO"
+      ]
     }
   ]
 }

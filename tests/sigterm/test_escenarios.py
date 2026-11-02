@@ -13,13 +13,14 @@ from src.common.protocol.dto import Datos, Entrada
 from src.common.protocol.registros import ConteoPalabra, Esquema, Lote
 from tests.soporte import EscenarioRabbitMQ
 from .soporte import ejecutar_worker, entrada_prueba
+from .http_q2 import IMAGEN, servir_imagen
 
 PLAZO_APAGADO_SEGUNDOS = 5
 
 
-def apagar_conjunto(caso, procesos):
+def apagar_conjunto(caso, procesos, plazo=PLAZO_APAGADO_SEGUNDOS):
     """Envía a todos primero y exige limpieza y salida dentro de un plazo compartido."""
-    limite = monotonic() + PLAZO_APAGADO_SEGUNDOS
+    limite = monotonic() + plazo
     for proceso, _, continuar in procesos:
         os.kill(proceso.pid, signal.SIGTERM)
         if continuar is not None:
@@ -34,7 +35,7 @@ def apagar_conjunto(caso, procesos):
         proceso.kill()
     for proceso in pendientes:
         proceso.join(PLAZO_APAGADO_SEGUNDOS)
-    caso.assertFalse(pendientes, f'Se excedieron {PLAZO_APAGADO_SEGUNDOS}s; se envió SIGKILL')
+    caso.assertFalse(pendientes, f'Se excedieron {plazo}s; se envió SIGKILL')
     for proceso, eventos, _ in procesos:
         caso.assertEqual(proceso.exitcode, 0, 'El worker no terminó mediante su limpieza normal')
         # El hijo une el hilo de la cola antes de salir: el aviso ya debe estar disponible.
@@ -50,9 +51,10 @@ class EscenariosWorker:
 
     archivo_configuracion = Path(__file__).with_name('config.json')
     grupo_fuente = 'gateway'
+    plazo_apagado = PLAZO_APAGADO_SEGUNDOS
 
     def apagar_en_plazo(self, proceso, eventos, continuar=None):
-        apagar_conjunto(self, [(proceso, eventos, continuar)])
+        apagar_conjunto(self, [(proceso, eventos, continuar)], self.plazo_apagado)
 
     def comprobar_apagado(self, modo):
         continuar = multiprocessing.get_context('spawn').Event()
@@ -205,3 +207,70 @@ class ConjuntoReplicas(EscenarioRabbitMQ):
         for cola in self.topologia.colas_datos():
             self.assertEqual(self.estado(cola).consumer_count, 0)
             self.assertEqual(self.estado(self.topologia.cola_capacidad(cola)).consumer_count, 0)
+
+
+class FiltroBiografico(EscenariosWorker, EscenarioRabbitMQ):
+    grupo = 'q2_filter_bio'
+
+    def test_sigterm_dentro_de_las_secciones(self):
+        self.comprobar_apagado('secciones')
+
+
+class Descargador(EscenariosWorker, EscenarioRabbitMQ):
+    grupo = 'q2_image_downloader'
+    plazo_apagado = 30
+
+    def comprobar_descarga(self, modo):
+        liberar = multiprocessing.get_context('spawn').Event()
+        servidor, avisos = self.lanzar(servir_imagen, 'q2_image_downloader', modo, liberar)
+        self.addCleanup(liberar.set)
+        puerto = self.esperar(avisos)
+        fuente, datos = entrada_prueba(self.grupo)
+        solicitud = replace(datos.contenido.registros[0], url_imagen=f'http://127.0.0.1:{puerto}/imagen')
+        datos = replace(datos, contenido=replace(datos.contenido, registros=(solicitud,)))
+        with self.abrir(fuente, informar_error=self.fail) as productor:
+            productor.publicar(self.grupo, datos)
+        continuar = multiprocessing.get_context('spawn').Event()
+        self.addCleanup(continuar.set)
+        observacion = modo if modo in ('descarga', 'fragmentos') else f'http_{modo}'
+        proceso, eventos = self.lanzar(ejecutar_worker, self.grupo, observacion, continuar)
+        self.assertEqual(self.esperar(avisos), 'peticion')
+        esperados = {'cuerpo': 'leyendo', 'reintento': 'reintentando',
+                     'completo': 'procesado_sin_ack', 'descarga': 'computando', 'fragmentos': 'computando'}
+        if modo in esperados:
+            self.assertEqual(self.esperar(eventos), esperados[modo])
+        barrera = continuar if modo in ('completo', 'descarga', 'fragmentos') else None
+        self.apagar_en_plazo(proceso, eventos, barrera)
+        liberar.set()
+        self.finalizar(servidor)
+        salida = TopologiaGrupos(self.configurar(self.grupo)).destino_datos(
+            'gateway_resultados', 'resultados_finales_q2',
+        )
+        self.assertEqual(self.estado(salida.cola).message_count, int(modo == 'completo'))
+        if modo == 'completo':
+            with self.abrir('gateway_resultados', informar_error=self.fail) as receptor:
+                recibidos = self.recibir(receptor).contenido.registros
+            self.assertEqual(b''.join(r.fragmento for r in recibidos), IMAGEN)
+            self.assertTrue(all(r.total_bytes == len(IMAGEN) for r in recibidos))
+        colas = TopologiaGrupos(self.configurar('gateway_resultados')).colas_recepcion()
+        self.assertEqual(self.estado(colas.control).message_count, 0)
+        entrada = TopologiaGrupos(self.configurar(fuente)).destino_datos(self.grupo, datos.entrada.nombre)
+        self.assertEqual(self.estado(entrada.cola).message_count, 1)
+
+    def test_sigterm_esperando_cabeceras_http(self):
+        self.comprobar_descarga('cabeceras')
+
+    def test_sigterm_esperando_cuerpo_http(self):
+        self.comprobar_descarga('cuerpo')
+
+    def test_sigterm_durante_descarga_http(self):
+        self.comprobar_descarga('descarga')
+
+    def test_sigterm_durante_fragmentacion(self):
+        self.comprobar_descarga('fragmentos')
+
+    def test_sigterm_despierta_reintento_http(self):
+        self.comprobar_descarga('reintento')
+
+    def test_descarga_completa_y_sigterm_antes_del_ack(self):
+        self.comprobar_descarga('completo')

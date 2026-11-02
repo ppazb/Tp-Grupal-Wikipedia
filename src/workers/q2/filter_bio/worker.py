@@ -9,28 +9,32 @@ logger = logging.getLogger(__name__)
 SECCIONES_BIOGRAFICAS = frozenset({"biography", "biographie"})
 
 
-def _es_biografico(secciones) -> bool:
+def _es_biografico(secciones, comprobar_detencion) -> bool:
     """Indica si alguna sección es 'biography' o 'biographie'."""
-    return any(seccion.strip().lower() in SECCIONES_BIOGRAFICAS for seccion in secciones)
+    for seccion in secciones:
+        comprobar_detencion()
+        if seccion.strip().lower() in SECCIONES_BIOGRAFICAS:
+            return True
+    return False
 
 
 class FilterBioQ2(WorkerBase):
     """
-    Filtra los artículos que tienen una sección biography/biographie 
+    Filtra los artículos que tienen una sección biography/biographie
     y emite la solicitud (nombre, url, url_imagen) de descargar la imagen
     """
 
     def procesar(self, datos: Datos) -> None:
         self.anunciar_cliente("q2_filter_bio", datos.entrada.id_ejecucion) #aviso que llego cliente
-        
-        solicitudes = [
-            SolicitudImagen(ref.nombre, ref.url, ref.url_imagen)
-            for ref in datos.contenido.registros
-            if _es_biografico(ref.secciones)
-        ]
+
+        solicitudes = []
+        for ref in datos.contenido.registros:
+            self.comprobar_detencion()
+            if _es_biografico(ref.secciones, self.comprobar_detencion):
+                solicitudes.append(SolicitudImagen(ref.nombre, ref.url, ref.url_imagen))
 
         id_ejecucion = datos.entrada.id_ejecucion
-        
+
         logger.info("q2_filter_bio: %d/%d artículos bibliografia para ejecución '%s'",len(solicitudes), len(datos.contenido.registros), id_ejecucion)
 
         if solicitudes:

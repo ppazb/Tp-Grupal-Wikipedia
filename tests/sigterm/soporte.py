@@ -17,15 +17,17 @@ from unittest import TestCase
 from src.common.protocol.dto import Datos, Entrada
 from src.common.protocol.registros import (
     Articulo, Candidato, CantidadPalabras, ConteoPalabra, Esquema, Idioma, Lote,
-    Palabra, ReferenciaHistorica, ResultadoQ1, TextoArticulo,
+    Palabra, ReferenciaHistorica, ReferenciaBiografica, ResultadoQ1, SolicitudImagen, TextoArticulo,
 )
 from src.middleware.rabbitmq import MiddlewareRabbitMQ
 from src.middleware.capacidad import CapacidadDatos
 from src.workers.base_worker import Worker
 from tests.soporte import PLAZO_PROCESO
 from .computo import ObservadorComputo
+from .http_q2 import ObservadorHTTP
 
 MODULOS = {
+    'q2_filter_bio': 'q2.filter_bio', 'q2_image_downloader': 'q2.image_downloader',
     'date_router': 'date_router', 'q1_filter_lang': 'q1.filter_lang',
     'q1_formatter': 'q1.formatter', 'word_occurrences': 'word_occurrences',
     'frecuencias': 'q4.frequency', 'top_n': 'q4.top_n',
@@ -36,6 +38,10 @@ MODULOS = {
 def entrada_prueba(grupo):
     """Devuelve un lote válido y el grupo que lo publica en la topología del escenario."""
     opciones = {
+        'q2_filter_bio': ('date_router', 'historicos_q2', Esquema.REFERENCIA_BIOGRAFICA,
+                          (ReferenciaBiografica('nombre', 'url', ('Abstract', 'Biography'), ''),)),
+        'q2_image_downloader': ('q2_filter_bio', 'biografias_q2', Esquema.SOLICITUD_IMAGEN,
+                                (SolicitudImagen('nombre', 'url', ''),)),
         'date_router': ('gateway', 'articulos_crudos', Esquema.ARTICULO,
                         (Articulo('url', 'nombre', '2019', Idioma.INGLES, 'tree tree forêt', (), ''),)),
         'q1_filter_lang': ('date_router', 'historicos_q1', Esquema.REFERENCIA_HISTORICA,
@@ -124,7 +130,7 @@ def ejecutar_worker(configuracion, eventos, modo, continuar):
 
     def procesar_observado(worker, datos):
         procesar_original(worker, datos)
-        if modo == 'activo':
+        if modo in ('activo', 'http_completo'):
             if grupo in ('top_n', 'q5_comparator'):
                 assert any(p.is_file() for p in disco.rglob('*')), 'No se ejercitó almacenamiento'
             eventos.put('procesado_sin_ack')
@@ -148,10 +154,15 @@ def ejecutar_worker(configuracion, eventos, modo, continuar):
         if modo == 'capacidad':
             recursos.enter_context(patch.object(CapacidadDatos, 'adquirir', adquirir_observado))
         ObservadorComputo(modo, eventos, continuar).instalar(recursos)
+        http = ObservadorHTTP(modo, eventos)
+        if grupo == 'q2_image_downloader':
+            http.instalar(recursos)
         with TestCase().assertNoLogs('src.middleware', level='ERROR'):
             (modulo.ejecutar if grupo in ('frecuencias', 'top_n') else modulo.main)()
         assert len(instancias) == 1
         comprobar_recursos(instancias[0], disco, anteriores)
+        if grupo == 'q2_image_downloader':
+            http.comprobar(instancias[0])
     # La cola de observación crea su propio hilo; se drena y une antes del control.
     eventos.put('limpio')
     eventos.close()
