@@ -12,7 +12,7 @@ from .broker_connection import ConexionBroker
 from .capacidad import CapacidadDatos
 from .codificacion import CodificadorMensajes
 from .configuracion import ConfiguracionComunicacion, ErrorConfiguracion
-from .interfaz import ErrorConexion, ErrorMensajeInvalido, ErrorRecepcion
+from .interfaz import ErrorConexion, ErrorMensajeInvalido, ErrorRecepcion, OperacionInterrumpida
 from .rechazos import ENTRADA_ERRORES, notificacion_rechazo
 from .topologia import TopologiaGrupos
 
@@ -265,6 +265,8 @@ class ReceptorDatos:
                 if canal.is_open:
                     canal.basic_cancel(consumer_tag=consumidor)
                 self._consumidores.remove(consumidor)
+            except OperacionInterrumpida:
+                raise
             except Exception as error:
                 REGISTRO.exception("No se pudo cancelar el consumidor")
                 errores.append(error)

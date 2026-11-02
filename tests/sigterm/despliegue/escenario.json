@@ -1,0 +1,18 @@
+{
+  "plazo_arranque_segundos": 180,
+  "plazo_apagado_segundos": 15,
+  "margen_comando_segundos": 10,
+  "filas_por_cliente": 100000,
+  "filas_por_lote": 8,
+  "palabras_por_abstract": 40,
+  "replicas": {
+    "date_router": 2,
+    "word_occurrences": 2,
+    "frecuencias": 3
+  },
+  "max_bytes_por_mensaje": 32768,
+  "max_mensajes_por_cola": 32,
+  "presupuesto_top_n_bytes": 4096,
+  "candidatos_por_escritura": 4,
+  "plazo_despliegue_segundos": 30
+}

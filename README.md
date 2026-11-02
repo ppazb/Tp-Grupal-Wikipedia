@@ -64,11 +64,18 @@ make test             # Todos los paquetes
 make test-middleware  # Comunicación
 make test-eof         # Protocolo EOF
 make test-q4          # Q4 contra cálculo serial con datos sintéticos
-make test-sigterm     # Apagado de workers integrados con Apagado
+make test-sigterm     # Escenarios de apagado por componente
+make test-sigterm-despliegue # Parada con docker compose stop, clientes y réplicas reales
 ```
 
 El comando general construye el contenedor de pruebas, levanta un broker aislado sin publicar puertos y elimina sus contenedores y volúmenes al terminar. Devuelve un código distinto de cero si falla una prueba. La primera ejecución descarga las
 imágenes y dependencias. Los escenarios están en cada subcarpeta dentro de `tests`.
+
+La prueba de apagado del despliegue también se ejecuta con `make test`. Genera
+Parquet sintéticos y usa un proyecto Compose aislado sin puertos publicados.
+El límite por proceso está en `tests/sigterm/despliegue/escenario.json` (15 s por proceso y 30 s para el despliegue completo).
+Los tiempos y registros quedan en `output/pruebas-sigterm/`. Requiere Python 3
+en el host; las dependencias del sistema se ejecutan dentro de Docker.
 
 ## Correr el pipeline gateway a Q1
 

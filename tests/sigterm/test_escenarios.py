@@ -100,6 +100,9 @@ class EscenariosWorker:
 class Router(EscenariosWorker, EscenarioRabbitMQ):
     grupo = 'date_router'
 
+    def test_sigterm_cancelando_consumidores(self):
+        self.comprobar_apagado('cancelacion')
+
     def test_sigterm_durante_decodificacion(self):
         self.comprobar_apagado('decodificacion')
 

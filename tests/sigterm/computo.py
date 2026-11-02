@@ -1,6 +1,7 @@
 """Barreras para enviar señales dentro de operaciones reales, antes de completarlas."""
 
 import sys
+from pika.adapters.blocking_connection import BlockingChannel
 from unittest.mock import patch
 
 from src.common.protocol.primitivas import EscritorBinario, LectorBinario
@@ -50,6 +51,7 @@ class ObservadorComputo:
             recursos.enter_context(patch.object(Worker, 'comprobar_detencion', comprobar))
         else:
             operaciones = {
+                'cancelacion': (BlockingChannel, 'basic_cancel'),
                 'ordenacion': (ConsolidadorFrecuencias, '_comparar_aportes'),
                 'serializacion': (EscritorBinario, 'agregar'),
                 'decodificacion': (LectorBinario, 'tomar'),
