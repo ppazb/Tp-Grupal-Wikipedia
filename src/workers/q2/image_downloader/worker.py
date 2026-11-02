@@ -80,8 +80,8 @@ class ImageDownloaderQ2(WorkerBase):
             # Sin imagen el artículo igual forma parte de la respuesta
             imagen = self._descargar(solicitud.url_imagen) if solicitud.url_imagen else b""
             if imagen is None:
-                logger.warning("q2_image_downloader: no se pudo descargar la imagen de '%s', se descarta",
-                               solicitud.url)
+                logger.info("q2_image_downloader: no se pudo descargar la imagen de '%s', se descarta",
+                            solicitud.url)
                 continue
             self._publicar_imagen(lote, solicitud, imagen)
             publicadas += 1
@@ -101,8 +101,8 @@ class ImageDownloaderQ2(WorkerBase):
                     return self._leer_imagen(respuesta)
             except requests.RequestException as error:
                 self.comprobar_detencion()
-                logger.warning("q2_image_downloader: intento %d/%d falló para %s: %s",
-                               intento, MAX_INTENTOS, url_imagen, error)
+                logger.info("q2_image_downloader: intento %d/%d falló para %s: %s",
+                            intento, MAX_INTENTOS, url_imagen, error)
                 if intento < MAX_INTENTOS and not self._detenido:
                     self._apagado.esperar(ESPERA_ENTRE_INTENTOS_SEGUNDOS)
                     self.comprobar_detencion()

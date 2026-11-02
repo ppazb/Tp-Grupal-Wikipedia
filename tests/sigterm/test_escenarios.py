@@ -274,3 +274,7 @@ class Descargador(EscenariosWorker, EscenarioRabbitMQ):
 
     def test_descarga_completa_y_sigterm_antes_del_ack(self):
         self.comprobar_descarga('completo')
+
+
+class Interseccion(EscenariosWorker, EscenarioRabbitMQ):
+    grupo = 'q3_intersection'

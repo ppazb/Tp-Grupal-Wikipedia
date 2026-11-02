@@ -17,7 +17,7 @@ from unittest import TestCase
 from src.common.protocol.dto import Datos, Entrada
 from src.common.protocol.registros import (
     Articulo, Candidato, CantidadPalabras, ConteoPalabra, Esquema, Idioma, Lote,
-    Palabra, ReferenciaHistorica, ReferenciaBiografica, ResultadoQ1, SolicitudImagen, TextoArticulo,
+    Palabra, PalabraIdioma, ReferenciaHistorica, ReferenciaBiografica, ResultadoQ1, SolicitudImagen, TextoArticulo,
 )
 from src.middleware.rabbitmq import MiddlewareRabbitMQ
 from src.middleware.capacidad import CapacidadDatos
@@ -27,6 +27,7 @@ from .computo import ObservadorComputo
 from .http_q2 import ObservadorHTTP
 
 MODULOS = {
+    'q3_intersection': 'q3.intersection',
     'q2_filter_bio': 'q2.filter_bio', 'q2_image_downloader': 'q2.image_downloader',
     'date_router': 'date_router', 'q1_filter_lang': 'q1.filter_lang',
     'q1_formatter': 'q1.formatter', 'word_occurrences': 'word_occurrences',
@@ -38,6 +39,8 @@ MODULOS = {
 def entrada_prueba(grupo):
     """Devuelve un lote válido y el grupo que lo publica en la topología del escenario."""
     opciones = {
+        'q3_intersection': ('word_occurrences', 'palabras_idioma', Esquema.PALABRA_IDIOMA,
+                            (PalabraIdioma('hotel', Idioma.INGLES), PalabraIdioma('hotel', Idioma.FRANCES))),
         'q2_filter_bio': ('date_router', 'historicos_q2', Esquema.REFERENCIA_BIOGRAFICA,
                           (ReferenciaBiografica('nombre', 'url', ('Abstract', 'Biography'), ''),)),
         'q2_image_downloader': ('q2_filter_bio', 'biografias_q2', Esquema.SOLICITUD_IMAGEN,
@@ -72,7 +75,7 @@ def comprobar_recursos(worker, disco, anteriores):
     assert apagado._lectura is None and apagado._escritura is None
     assert all(signal.getsignal(numero) == anterior for numero, anterior in anteriores.items())
     assert not list(disco.iterdir()), 'Quedaron temporales propios del worker'
-    for nombre in ('_acumuladores', '_resumenes'):
+    for nombre in ('_acumuladores', '_resumenes', '_buffer_candidatos', '_ejecuciones'):
         assert not getattr(worker, nombre, {}), f'Quedó estado en {nombre}'
     if hasattr(worker, '_parciales'):
         assert not worker._parciales._presupuestos
@@ -140,7 +143,7 @@ def ejecutar_worker(configuracion, eventos, modo, continuar):
 
     with TemporaryDirectory(prefix='sigterm-worker-') as temporal, ExitStack() as recursos:
         archivo, disco, nltk = preparar_archivos(configuracion, temporal)
-        recursos.enter_context(patch.dict(os.environ, {'TEMP_DIR': str(disco), 'NLTK_DATA': str(nltk)}))
+        recursos.enter_context(patch.dict(os.environ, {'TEMP_DIR': str(disco), 'NLTK_DATA': str(nltk), 'BATCH_SIZE_Q5': '1'}))
         modulo = importlib.import_module(f'src.workers.{MODULOS[grupo]}.main')
         argumentos = ['worker', str(archivo)]
         if grupo in ('frecuencias', 'top_n'):

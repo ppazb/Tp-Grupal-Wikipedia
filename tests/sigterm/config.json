@@ -267,6 +267,33 @@
       "esquemas": [
         "ERROR_REGISTRO"
       ]
+    },
+    {
+      "nombre": "ocurrencias_a_q3",
+      "origen": "word_occurrences",
+      "destino": "q3_intersection",
+      "entrada": "palabras_idioma",
+      "esquemas": [
+        "PALABRA_IDIOMA"
+      ]
+    },
+    {
+      "nombre": "resultado_q3",
+      "origen": "q3_intersection",
+      "destino": "gateway_resultados",
+      "entrada": "q3",
+      "esquemas": [
+        "PALABRA"
+      ]
+    },
+    {
+      "nombre": "errores_q3_intersection",
+      "origen": "q3_intersection",
+      "destino": "gateway_resultados",
+      "entrada": "errores",
+      "esquemas": [
+        "ERROR_REGISTRO"
+      ]
     }
   ]
 }
