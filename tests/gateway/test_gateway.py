@@ -75,6 +75,9 @@ class PublicadorFalso:
     def interrumpir(self):
         pass
 
+    def cerrar_cliente(self):
+        pass
+
 
 class ReceptorFalso(ReceptorResultados):
     """El receptor real sin middleware: solo se usa procesar()."""

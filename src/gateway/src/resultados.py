@@ -17,7 +17,7 @@ class SesionCliente:
         self._socket = socket
         self._max_bytes = max_bytes
         self._lock = threading.Lock()
-        self.rota = False
+        self._rota = threading.Event()
         # Se activa cuando llegaron todos los resultados o cuando la sesión ya no sirve
         self.completa = threading.Event()
 
@@ -31,8 +31,12 @@ class SesionCliente:
                 self.marcar_rota()
                 raise
 
+    @property
+    def rota(self):
+        return self._rota.is_set()
+
     def marcar_rota(self):
-        self.rota = True
+        self._rota.set()
         self.completa.set()
 
 
@@ -42,9 +46,12 @@ class RegistroSesiones:
     def __init__(self):
         self._lock = threading.Lock()
         self._sesiones = {}
+        self._cerrado = False
 
     def registrar(self, id_ejecucion, sesion):
         with self._lock:
+            if self._cerrado:
+                raise InterruptedError("El registro de sesiones está cerrado")
             self._sesiones[id_ejecucion] = sesion
 
     def quitar(self, id_ejecucion):
@@ -58,6 +65,7 @@ class RegistroSesiones:
     def cerrar_todas(self):
         """Despierta a quienes esperan resultados cuando el gateway se detiene."""
         with self._lock:
+            self._cerrado = True
             sesiones = tuple(self._sesiones.values())
         for sesion in sesiones:
             sesion.marcar_rota()
@@ -84,9 +92,11 @@ class ReceptorResultados(Worker):
         try:
             sesion.enviar(
                 TipoFrame.RESULTADO,
-                codificar_resultado(datos.entrada.nombre, datos.contenido, self._max_bytes),
+                codificar_resultado(datos.entrada.nombre, datos.contenido, self._max_bytes,
+                                    comprobar_detencion=self.comprobar_detencion),
             )
         except OSError:
+            self.comprobar_detencion()
             LOG.warning("Ejecución %s: el cliente se desconectó, se descartan sus resultados", id_ejecucion)
         except ValueError:
             LOG.exception("Ejecución %s: no se pudo reenviar un lote de %s", id_ejecucion, datos.entrada.nombre)

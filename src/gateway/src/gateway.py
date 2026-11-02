@@ -1,3 +1,5 @@
+from contextlib import ExitStack
+from selectors import DefaultSelector, EVENT_READ
 import logging
 import os
 import socket
@@ -11,7 +13,7 @@ from ...common.protocol.dto import Datos, EnvioDatos, Entrada, IdentidadProceso
 from ...common.protocol.registros import Esquema, Lote
 from ...middleware.cargador_configuracion import cargar_configuracion
 from ...middleware.configuracion import ErrorConfiguracion
-from ...middleware.interfaz import ErrorMensaje, ErrorMiddleware
+from ...middleware.interfaz import ErrorMensaje, ErrorMiddleware, OperacionInterrumpida
 from ...middleware.rabbitmq import MiddlewareRabbitMQ
 from .articulos import articulo_desde_fila
 from .resultados import ReceptorResultados, RegistroSesiones, SesionCliente
@@ -55,40 +57,46 @@ def _rutas_articulos(configuracion):
     return tuple(rutas)
 
 class PublicadorMiddleware:
-    """Publica en el middleware desde el hilo de cada cliente.
-    El middleware no admite dos publicaciones a la vez, 
-    asiq se usa lock. Cada hilo publica su propio lote y vuelve cuando se publicó, 
-    por eso el ACK al cliente sale después de publicar.
-    """
+    """Mantiene un middleware por hilo de cliente, abierto y cerrado por su dueño."""
 
-    def __init__(self, configuracion, rutas):
+    def __init__(self, configuracion, rutas, detener):
+        self._configuracion = configuracion
         self._rutas = rutas
-        self._lock = threading.Lock()
-        self._middleware = MiddlewareRabbitMQ(configuracion)
+        self._detener = detener
+        self._local = threading.local()
+
+    def _obtener(self):
+        if self._detener.is_set():
+            raise OperacionInterrumpida("El gateway se está deteniendo")
+        if not hasattr(self._local, 'middleware'):
+            with ExitStack() as recursos:
+                aviso = recursos.enter_context(self._detener.aviso())
+                middleware = recursos.enter_context(MiddlewareRabbitMQ(self._configuracion, apagado=aviso))
+                self._local.middleware = middleware
+                self._local.recursos = recursos.pop_all()
+        return self._local.middleware
 
     def publicar(self, id_ejecucion, lote):
-        with self._lock:
-            self._middleware.publicar_en_ramas(tuple(
-                EnvioDatos(ruta.destino, Datos(Entrada(id_ejecucion, ruta.entrada), lote))
-                for ruta in self._rutas
-            ))
+        self._obtener().publicar_en_ramas(tuple(
+            EnvioDatos(ruta.destino, Datos(Entrada(id_ejecucion, ruta.entrada), lote))
+            for ruta in self._rutas
+        ))
 
     def finalizar(self, id_ejecucion):
-        with self._lock:
-            for ruta in self._rutas:
-                self._middleware.finalizar_entrada(ruta.destino, Entrada(id_ejecucion, ruta.entrada))
+        middleware = self._obtener()
+        for ruta in self._rutas:
+            middleware.finalizar_entrada(ruta.destino, Entrada(id_ejecucion, ruta.entrada))
+        self.cerrar_cliente()
 
     def interrumpir(self):
-        # Sin lock: tiene q poder despertar a un publicar() que está esperando capacidad
-        try:
-            self._middleware.interrumpir()
-        except ErrorMiddleware:
-            LOG.debug("El middleware ya estaba cerrado al interrumpir")
+        self._detener.set()
 
-    def cerrar(self):
-        with self._lock:
-            self._middleware.cerrar()
-
+    def cerrar_cliente(self):
+        """Libera la conexión del hilo actual sin emitir EOF; admite repetir el cierre."""
+        recursos = getattr(self._local, 'recursos', None)
+        if recursos is not None:
+            del self._local.middleware, self._local.recursos
+            recursos.close()
 
 
 class ServidorGateway:
@@ -97,8 +105,10 @@ class ServidorGateway:
 
     """
 
-    def __init__(self, host, puerto, max_bytes, rutas, publicador, detener, espera_ack_error, sesiones=None):
+    def __init__(self, host, puerto, max_bytes, rutas, publicador, detener, espera_ack_error, sesiones=None, apagado=None):
         
+        self._apagado = apagado
+        self._vigilante = None
         self._direccion = (host, puerto)
         self._max_bytes = max_bytes
         self._rutas = rutas
@@ -123,12 +133,16 @@ class ServidorGateway:
             self._aceptar()
         
         finally:
-            self._detener.set()
             self._socket = None
-            self._publicador.interrumpir()
-            self._sesiones.cerrar_todas()
-            self._cerrar_clientes()
-            self._esperar_clientes()
+            # ExitStack intenta todos los pasos aunque falle una limpieza previa.
+            with ExitStack() as limpieza:
+                if self._vigilante is not None and self._vigilante.ident is not None:
+                    limpieza.callback(self._vigilante.join)
+                limpieza.callback(self._esperar_clientes)
+                limpieza.callback(self._cerrar_clientes)
+                limpieza.callback(self._sesiones.cerrar_todas)
+                limpieza.callback(self._publicador.interrumpir)
+                limpieza.callback(self._detener.set)
 
     def _aceptar(self):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as servidor:
@@ -136,27 +150,42 @@ class ServidorGateway:
             servidor.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             servidor.bind(self._direccion)
             servidor.listen()
-            threading.Thread(
+            self._vigilante = threading.Thread(
                 target=self._despertar_accept_al_detener,
                 args=(servidor,),
                 name="gateway-stop-watcher",
-                daemon=True,
-            ).start()
+            )
+            self._vigilante.start()
             LOG.info(
                 "Gateway escuchando en %s:%d; artículos -> %s",
                 *servidor.getsockname(),
                 ", ".join(f"{ruta.destino}/{ruta.entrada}" for ruta in self._rutas),
             )
-            while not self._detener.is_set():
-                try:
-                    cliente, direccion = servidor.accept()
-                except OSError:
+            with DefaultSelector() as selector:
+                servidor.setblocking(False)
+                selector.register(servidor, EVENT_READ)
+                if self._apagado is not None:
+                    selector.register(self._apagado.fileno(), EVENT_READ)
+                while not self._detener.is_set():
+                    if self._apagado is not None and self._apagado.solicitado:
+                        self._detener.set()
+                        break
+                    disponibles = selector.select()
+                    if self._apagado is not None and self._apagado.solicitado:
+                        self._detener.set()
+                        break
                     if self._detener.is_set():
                         break
-                    raise
-                self._lanzar_cliente(cliente, direccion)
+                    if not any(clave.fileobj is servidor for clave, _ in disponibles):
+                        continue
+                    try:
+                        cliente, direccion = servidor.accept()
+                    except BlockingIOError:
+                        continue
+                    cliente.setblocking(True)
+                    self._lanzar_cliente(cliente, direccion)
 
-    # Espera la señal de detención y hace fallar el accept() bloqueado.
+    # Despierta el selector de aceptación cuando un hilo solicita la detención.
     def _despertar_accept_al_detener(self, servidor):
         self._detener.wait()
         try:
@@ -167,10 +196,14 @@ class ServidorGateway:
     #se lanza un hilo por cada cliente que se conecta 
     def _lanzar_cliente(self, cliente, direccion):
         hilo = threading.Thread(target=self._atender_cliente, args=(cliente, direccion),
-            name=f"gateway-client-{direccion[0]}:{direccion[1]}",daemon=True,
+            name=f"gateway-client-{direccion[0]}:{direccion[1]}",
         )
 
         with self._lock_clientes:
+            terminados = {h for h in self._hilos if not h.is_alive()}
+            for terminado in terminados:
+                terminado.join()
+            self._hilos.difference_update(terminados)
             self._clientes.add(cliente)
             self._hilos.add(hilo)
         
@@ -190,6 +223,10 @@ class ServidorGateway:
         try:
             self._procesar_cliente(cliente)
         
+        except (InterruptedError, OperacionInterrumpida):
+            if not self._detener.is_set():
+                LOG.exception("Se interrumpió una conexión sin solicitud de apagado")
+                self._detener.set()
         except (OSError, ValueError, ErrorMiddleware, RuntimeError) as error:
             LOG.warning("Se rechazo la conexion %s: %s", direccion, error)
             self._notificar_error(cliente, direccion, str(error).encode("utf-8"))
@@ -200,6 +237,11 @@ class ServidorGateway:
         
         finally:
             try:
+                self._publicador.cerrar_cliente()
+            except Exception:
+                LOG.exception("No se pudo cerrar el publicador del cliente")
+                self._detener.set()
+            try:
                 cliente.shutdown(socket.SHUT_RDWR)
             
             except OSError:
@@ -208,10 +250,11 @@ class ServidorGateway:
             
             with self._lock_clientes:
                 self._clientes.discard(cliente)
-                self._hilos.discard(threading.current_thread())
 
     # Envia ERROR y espera el ACK del cliente (o su cierre) hasta limite de tiempo
     def _notificar_error(self, cliente, direccion, mensaje):
+        if self._detener.is_set():
+            return
         
         try:
             enviar_frame(cliente, TipoFrame.ERROR, mensaje[:self._max_bytes], self._max_bytes)
@@ -256,6 +299,8 @@ class ServidorGateway:
             except ConnectionError:
                 frame = None  
             
+            self._comprobar_detencion()
+
             # Se deconecto sin enviar eof
             if frame is None:
                 self._cerrar_por_desconexion(id_ejecucion, cantidad_lotes)
@@ -300,6 +345,7 @@ class ServidorGateway:
         if sesion.rota:
             LOG.warning("Ejecución %s: se corta la espera de resultados", id_ejecucion)
             return
+        self._comprobar_detencion()
         sesion.enviar(TipoFrame.FIN, b"")
         LOG.info("Ejecución %s: resultados entregados al cliente", id_ejecucion)
 
@@ -314,11 +360,12 @@ class ServidorGateway:
 
     #Arma los artículos del lote crudo y los publica; devuelve (descartadas, totales)
     def _procesar_datos(self, id_ejecucion, cuerpo, descartadas_previas):
-        filas = decodificar_filas(cuerpo)
+        filas = decodificar_filas(cuerpo, comprobar_detencion=self._comprobar_detencion)
         articulos = []
         descartadas = 0
         
         for indice, fila in enumerate(filas):
+            self._comprobar_detencion()
             try:
                 articulos.append(articulo_desde_fila(fila, indice))
             
@@ -337,6 +384,7 @@ class ServidorGateway:
         pendientes = [articulos]
         
         while pendientes:
+            self._comprobar_detencion()
             lote = pendientes.pop(0)
             
             try:
@@ -350,6 +398,10 @@ class ServidorGateway:
                 
                 mitad = len(lote) // 2
                 pendientes[0:0] = (lote[:mitad], lote[mitad:])
+
+    def _comprobar_detencion(self):
+        if self._detener.is_set():
+            raise InterruptedError("El gateway se está deteniendo")
 
     @staticmethod
     def _verificar_eof(cuerpo, cantidad_lotes):
@@ -375,64 +427,55 @@ class ServidorGateway:
 
 
 def _iniciar_receptor(configuracion, sesiones, detener):
-    """Abre la conexión de recepción de resultados, distinta de la de publicación."""
+    """Abre, consume y cierra el middleware de resultados dentro de su hilo dueño."""
     grupo = configuracion.obtener_grupo(RESULTS_GROUP)
     if not 0 <= RESULTS_INSTANCE < grupo.instancias:
         raise ErrorConfiguracion(f"GATEWAY_RESULTS_INSTANCE está fuera del grupo {RESULTS_GROUP}")
-
     configuracion = replace(configuracion, proceso=IdentidadProceso(RESULTS_GROUP, RESULTS_INSTANCE))
-    receptor = None
-    # Los rechazos de mensajes recibidos llegan al cliente como cualquier otro resultado
-    middleware = MiddlewareRabbitMQ(configuracion, informar_error=lambda datos: receptor.procesar(datos))
-    receptor = ReceptorResultados(middleware, sesiones, configuracion.limites.max_bytes_por_mensaje)
+    errores = []
 
     def recibir():
         try:
-            receptor.ejecutar()
-        except Exception:
+            with detener.aviso() as aviso:
+                with MiddlewareRabbitMQ(configuracion, apagado=aviso,
+                                        informar_error=lambda datos: receptor.procesar(datos)) as middleware:
+                    receptor = ReceptorResultados(middleware, sesiones, configuracion.limites.max_bytes_por_mensaje)
+                    receptor.ejecutar(aviso)
+        except OperacionInterrumpida:
+            if not detener.is_set():
+                errores.append(RuntimeError("Se interrumpió el receptor sin solicitar el apagado"))
+                detener.set()
+        except Exception as error:
+            errores.append(error)
             LOG.exception("Falló la recepción de resultados; se detiene el gateway")
             detener.set()
 
-    hilo = threading.Thread(target=recibir, name="gateway-results", daemon=True)
+    hilo = threading.Thread(target=recibir, name="gateway-results")
     hilo.start()
-    return receptor, middleware, hilo
+    return hilo, errores
 
 
-def _detener_receptor(receptor, middleware, hilo):
-    receptor.detener()
-    hilo.join(5)
-    if hilo.is_alive():
-        try:
-            middleware.interrumpir()
-        except ErrorMiddleware:
-            LOG.debug("El middleware de resultados ya estaba cerrado al interrumpir")
-        hilo.join(5)
-    middleware.cerrar()
-
-
-def ejecutar_gateway(detener):
+def ejecutar_gateway(detener, apagado):
     configuracion = cargar_configuracion(MIDDLEWARE_CONFIG)
     rutas = _rutas_articulos(configuracion)
     grupo = configuracion.obtener_grupo(GATEWAY_GROUP)
-    
     if not 0 <= GATEWAY_INSTANCE < grupo.instancias:
         raise ErrorConfiguracion(f"GATEWAY_INSTANCE está fuera del grupo {GATEWAY_GROUP}")
-    
     if GATEWAY_ERROR_ACK_SECONDS <= 0:
         raise ValueError("GATEWAY_ERROR_ACK_SECONDS debe ser mayor que cero")
 
     sesiones = RegistroSesiones()
     publicador_config = replace(configuracion, proceso=IdentidadProceso(GATEWAY_GROUP, GATEWAY_INSTANCE))
-    publicador = PublicadorMiddleware(publicador_config, rutas)
-    receptor = None
+    publicador = PublicadorMiddleware(publicador_config, rutas, detener)
+    hilo, errores = _iniciar_receptor(configuracion, sesiones, detener)
     try:
-        receptor = _iniciar_receptor(configuracion, sesiones, detener)
         servidor = ServidorGateway(SERVER_HOST, SERVER_PORT, configuracion.limites.max_bytes_por_mensaje,
-            rutas, publicador, detener, GATEWAY_ERROR_ACK_SECONDS, sesiones,
+            rutas, publicador, detener, GATEWAY_ERROR_ACK_SECONDS, sesiones, apagado,
         )
         servidor.ejecutar()
-        return 0
     finally:
-        if receptor is not None:
-            _detener_receptor(*receptor)
-        publicador.cerrar()
+        detener.set()
+        hilo.join()
+    if errores:
+        raise ExceptionGroup("Falló el receptor de resultados del gateway", errores)
+    return 0
