@@ -48,3 +48,5 @@ __pycache__/
 output/
 input/
 version-secuencial.ipynb
+/docker-compose.yaml
+/registros/

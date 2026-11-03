@@ -125,7 +125,7 @@ def escenario(base, informe, opciones, proyecto):
 def main():
     opciones = json.loads(Path(__file__).with_name('escenario.json').read_text())
     proyecto = f'wiki-apagado-{uuid4().hex[:10]}'
-    informe = RAIZ / 'output/pruebas-sigterm' / proyecto
+    informe = RAIZ / 'registros/pruebas-sigterm' / proyecto
     informe.mkdir(parents=True)
     print(f'Registros del escenario: {informe}', flush=True)
     with TemporaryDirectory(prefix='wiki-stop-') as temporal:

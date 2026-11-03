@@ -29,5 +29,6 @@ trap 'exit 143' TERM
 "${compose[@]}" up --build --attach escenarios --abort-on-container-exit --exit-code-from escenarios
 
 if [ "${1:-todos}" = todos ]; then
+    python3 -m unittest tests.compose.escenarios -v
     python3 -m tests.sigterm.despliegue.ejecutar
 fi
