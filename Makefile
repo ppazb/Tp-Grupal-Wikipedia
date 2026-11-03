@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := test
-.PHONY: test test-middleware test-eof test-q4 test-sigterm test-sigterm-despliegue test-compose generar-compose up up-quiet down
+.PHONY: test test-middleware test-eof test-q4 test-q5 test-sigterm test-sigterm-despliegue test-compose generar-compose up up-quiet down
 CLIENTES ?= 1
 COMPOSE = docker compose -f docker-compose.yaml
 
@@ -20,6 +20,9 @@ test-eof:
 
 test-q4:
 	bash scripts/probar_escenarios.sh q4
+
+test-q5:
+	bash scripts/probar_escenarios.sh q5
 
 test-sigterm:
 	bash scripts/probar_escenarios.sh sigterm

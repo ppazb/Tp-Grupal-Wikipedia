@@ -1,3 +1,4 @@
+from contextlib import closing
 import logging
 import os
 from typing import Dict, List, Tuple
@@ -101,18 +102,19 @@ class ComparatorQ5Worker(WorkerBase):
         total_superaron = 0
 
         try:
-            for candidato in self._storage.iterar_candidatos(id_ejecucion):
-                self.comprobar_detencion()
-                total_evaluados += 1
-                if candidato.cantidad > promedio:
-                    total_superaron += 1
-                    if not presupuesto.admitir(candidato):
-                        self._publicar_lote(entrada_salida, lote_actual)
-                        lote_actual.clear()
-                        presupuesto = self.middleware.crear_presupuesto_lote(entrada_salida, Esquema.CANDIDATO)
+            with closing(self._storage.iterar_candidatos(id_ejecucion)) as candidatos:
+                for candidato in candidatos:
+                    self.comprobar_detencion()
+                    total_evaluados += 1
+                    if candidato.cantidad > promedio:
+                        total_superaron += 1
                         if not presupuesto.admitir(candidato):
-                            raise ValueError("El candidato supera el tamaño máximo permitido para un lote vacío")
-                    lote_actual.append(candidato)
+                            self._publicar_lote(entrada_salida, lote_actual)
+                            lote_actual.clear()
+                            presupuesto = self.middleware.crear_presupuesto_lote(entrada_salida, Esquema.CANDIDATO)
+                            if not presupuesto.admitir(candidato):
+                                raise ValueError("El candidato supera el tamaño máximo permitido para un lote vacío")
+                        lote_actual.append(candidato)
 
             # Publicar último lote remanente
             if lote_actual:
@@ -123,13 +125,20 @@ class ComparatorQ5Worker(WorkerBase):
                 id_ejecucion, total_evaluados, total_superaron
             )
 
-            # Finalizar entrada hacia gateway_resultados
-            self.middleware.finalizar_entrada("gateway_resultados", entrada_salida)
+        except BaseException:
+            try:
+                self._limpiar_candidatos(id_ejecucion)
+            except Exception:
+                logger.exception("Falló la limpieza de candidatos; se conserva el error original")
+            raise
+        else:
+            self._limpiar_candidatos(id_ejecucion)
 
-        finally:
-            self._buffer_candidatos.pop(id_ejecucion, None)
-            # Liberación de recursos en disco
-            self._storage.limpiar_ejecucion(id_ejecucion)
+        self.middleware.finalizar_entrada("gateway_resultados", entrada_salida)
+
+    def _limpiar_candidatos(self, id_ejecucion):
+        self._buffer_candidatos.pop(id_ejecucion, None)
+        self._storage.limpiar_ejecucion(id_ejecucion)
 
     def _publicar_lote(self, entrada: Entrada, registros: List[Candidato]) -> None:
         if not registros:

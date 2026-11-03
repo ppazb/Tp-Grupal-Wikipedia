@@ -66,6 +66,7 @@ make test                    # Todos los paquetes y escenarios de despliegue
 make test-middleware         # Comunicación con RabbitMQ real
 make test-eof                # Protocolo EOF
 make test-q4                 # Q4 contra cálculo serial con datos sintéticos
+make test-q5                 # Persistencia, lectura y limpieza de candidatos
 make test-sigterm            # Apagado por componente
 make test-sigterm-despliegue  # Parada del despliegue con clientes concurrentes y réplicas
 make test-compose            # Generación de Compose, sin levantar contenedores
