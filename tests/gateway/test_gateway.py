@@ -7,6 +7,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 CONFIG = Path(__file__).parents[2] / "config" / "config.json"
 COMPOSE = Path(__file__).parents[2] / "docker-compose.yml"
@@ -18,19 +19,17 @@ def _entorno_del_gateway_en_el_compose():
     return dict(re.findall(r"^\s+- (\w+)=\s*(\S+)", bloque, re.M))
 
 
-# El gateway lee su configuración del entorno al importarse: se usa la misma que define el compose
-for _clave, _valor in _entorno_del_gateway_en_el_compose().items():
-    os.environ.setdefault(_clave, _valor)
-
 from src.common.external_protocol import (
     CAMPOS_FILA, TipoFrame, codificar_filas, decodificar_resultado, enviar_frame, recibir_frame,
 )
 from src.common.protocol.dto import Datos, Entrada
 from src.common.protocol.registros import Esquema, Idioma, Lote, ResultadoQ1
-from src.gateway.src import gateway
-from src.gateway.src.articulos import articulo_desde_fila
-from src.gateway.src.gateway import ServidorGateway
-from src.gateway.src.resultados import ReceptorResultados, RegistroSesiones
+# El módulo captura su configuración al importarse, sin contaminar los otros escenarios.
+with patch.dict(os.environ, _entorno_del_gateway_en_el_compose()):
+    from src.gateway.src import gateway
+    from src.gateway.src.articulos import articulo_desde_fila
+    from src.gateway.src.gateway import ServidorGateway
+    from src.gateway.src.resultados import ReceptorResultados, RegistroSesiones
 from src.middleware.cargador_configuracion import cargar_configuracion
 
 MAX_BYTES = 65536
@@ -74,6 +73,9 @@ class PublicadorFalso:
         sesion.completa.set()
 
     def interrumpir(self):
+        pass
+
+    def cerrar_cliente(self):
         pass
 
 

@@ -4,7 +4,7 @@ import argparse
 
 from src.common.protocol.registros import Esquema
 from src.middleware.cargador_configuracion import cargar_configuracion
-from src.workers.base_worker import destinos_errores
+from src.workers.base_worker import destinos_errores, entorno_worker
 from src.workers.arranque import agregar_argumentos_comunicacion, validar_rutas
 from .worker import WorkerFrecuencia
 
@@ -26,21 +26,14 @@ def ejecutar():
     validar_rutas(configuracion, argumentos.entrada, argumentos.grupo_salida,
                   argumentos.entrada_salida, esquema_entrada=Esquema.PALABRA,
                   esquema_salida=Esquema.CONTEO_PALABRA)
-    from src.middleware.rabbitmq import MiddlewareRabbitMQ
-
-    try:
-        with MiddlewareRabbitMQ(configuracion) as middleware:
-            worker = WorkerFrecuencia(
-                middleware,
-                entrada=argumentos.entrada, grupo_salida=argumentos.grupo_salida,
-                entrada_salida=argumentos.entrada_salida,
-            )
-            # Cierra la entrada de errores del gateway al terminar cada ejecución
-            worker.destinos_errores = destinos_errores(configuracion)
-            worker.ejecutar()
-    except KeyboardInterrupt:
-        # La salida del contexto libera la conexión tras interrumpir la operación.
-        return
+    with entorno_worker(configuracion) as (middleware, apagado):
+        worker = WorkerFrecuencia(
+            middleware, entrada=argumentos.entrada, grupo_salida=argumentos.grupo_salida,
+            entrada_salida=argumentos.entrada_salida,
+        )
+        worker.destinos_errores = destinos_errores(configuracion)
+        apagado.registrar_limpieza(worker.cerrar)
+        worker.ejecutar(apagado)
 
 
 if __name__ == '__main__':

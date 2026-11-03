@@ -93,8 +93,8 @@ def recibir_exactamente(socket: socket.socket,cantidad: int,*,permitir_cierre: b
 # Cuerpo de un frame DATOS: | u32 cantidad de filas | por fila, un campo de CAMPOS_FILA cada uno |
 # Un campo de texto es un texto u32-prefijado; un campo de CAMPOS_LISTA es | u32 cantidad | N textos u32-prefijados |
 # Eleva ErrorSerializacion (ValueError) si no entra en max_bytes.
-def codificar_filas(filas, max_bytes: int) -> bytes:
-    escritor = EscritorBinario(max_bytes)
+def codificar_filas(filas, max_bytes: int, *, comprobar_detencion=None) -> bytes:
+    escritor = EscritorBinario(max_bytes, comprobar_detencion=comprobar_detencion)
     escritor.entero(len(filas), BYTES_U32)
     
     for fila in filas:
@@ -115,8 +115,8 @@ def _leer_campo(lector, campo):
     return lector.texto()
 
 
-def decodificar_filas(cuerpo: bytes) -> list[dict]:
-    lector = LectorBinario(cuerpo)
+def decodificar_filas(cuerpo: bytes, *, comprobar_detencion=None) -> list[dict]:
+    lector = LectorBinario(cuerpo, comprobar_detencion=comprobar_detencion)
     filas = []
     
     for _ in range(lector.entero(BYTES_U32)):
@@ -129,20 +129,19 @@ def decodificar_filas(cuerpo: bytes) -> list[dict]:
 # Cuerpo de un frame RESULTADO: | texto nombre de la entrada | u16 esquema | u32 cantidad | registros |
 # Es un lote del protocolo interno tal cual salió del último worker, para no reenviar registro por registro.
 # Eleva ErrorSerializacion (ValueError) si no entra en max_bytes.
-def codificar_resultado(nombre_entrada: str, lote, max_bytes: int) -> bytes:
-    escritor = EscritorBinario(max_bytes)
+def codificar_resultado(nombre_entrada: str, lote, max_bytes: int, *, comprobar_detencion=None) -> bytes:
+    escritor = EscritorBinario(max_bytes, comprobar_detencion=comprobar_detencion)
     escritor.texto(nombre_entrada)
     escribir_lote(escritor, lote)
     return escritor.resultado()
 
 
 # Devuelve (nombre de la entrada, lote). Un registro inválido eleva ErrorSerializacion (ValueError).
-def decodificar_resultado(cuerpo: bytes):
-    lector = LectorBinario(cuerpo)
+def decodificar_resultado(cuerpo: bytes, *, comprobar_detencion=None):
+    lector = LectorBinario(cuerpo, comprobar_detencion=comprobar_detencion)
     nombre = lector.texto()
     esquema = Esquema(lector.entero(BYTES_U16))
     lote, errores = leer_lote(lector, esquema)
     if errores:
         raise ValueError(f"El lote de resultados tiene registros inválidos: {errores[0].detalle}")
     return nombre, lote
-

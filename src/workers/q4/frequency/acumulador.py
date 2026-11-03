@@ -48,6 +48,10 @@ class AcumuladorFrecuencias:
         self._validar_ejecucion(id_ejecucion)
         self._frecuencias.pop(id_ejecucion, None)
 
+    def cerrar(self):
+        """Descarta todos los conteos locales sin emitir resultados."""
+        self._frecuencias.clear()
+
     @staticmethod
     def _validar_aporte(aporte):
         if type(aporte) is not Palabra:

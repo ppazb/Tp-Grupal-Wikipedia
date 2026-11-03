@@ -103,13 +103,13 @@ def leer_lote(lector, esquema):
     if cantidad == 0 or cantidad > lector.restantes // BYTES_U32:
         raise ErrorSerializacion("Cantidad de registros inválida")
     # El primer recorrido no crea DTO: una frontera rota invalida todo el lote.
-    fronteras = LectorBinario(lector.vista_restante())
+    fronteras = LectorBinario(lector.vista_restante(), comprobar_detencion=lector.comprobar_detencion)
     for _ in range(cantidad):
         fronteras.bloque()
     fronteras.finalizar()
     registros, errores = [], []
     for indice in range(cantidad):
-        registro = LectorBinario(lector.bloque())
+        registro = LectorBinario(lector.bloque(), comprobar_detencion=lector.comprobar_detencion)
         try:
             valores = {nombre: _leer_campo(registro, tipo) for nombre, tipo in campos}
             registro.finalizar()

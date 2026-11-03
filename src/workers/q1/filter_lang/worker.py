@@ -17,6 +17,7 @@ class FilterLangQ1(WorkerBase):
         self.anunciar_cliente("q1_filter_lang", datos.entrada.id_ejecucion)
         registros_ingles = []
         for referencia in datos.contenido.registros:
+            self.comprobar_detencion()
             if referencia.idioma == Idioma.INGLES:
                 # Me quedo solo con URL y fecha
                 registros_ingles.append(

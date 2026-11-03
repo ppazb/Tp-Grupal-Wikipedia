@@ -16,7 +16,9 @@ class EmisorParciales:
     La instancia se utiliza secuencialmente dentro de un proceso.
     """
 
-    def __init__(self, emitir: Callable[[str, Lote], None], crear_presupuesto: Callable):
+    def __init__(self, emitir: Callable[[str, Lote], None], crear_presupuesto: Callable,
+                 *, comprobar_detencion=None):
+        self._comprobar_detencion = comprobar_detencion
         if not callable(emitir) or not callable(crear_presupuesto):
             raise TypeError('La emisión y la creación del presupuesto deben ser invocables')
         self._emitir = emitir
@@ -24,6 +26,7 @@ class EmisorParciales:
         self._presupuestos = {}
         self._acumulador = AcumuladorFrecuencias()
         self._emitiendo = False
+        self._cerrado = False
 
     def acumular(self, id_ejecucion: str, aporte: Palabra) -> None:
         """Suma el aporte, emitiendo los conteos previos si su registro nuevo no cabe."""
@@ -62,7 +65,12 @@ class EmisorParciales:
         self._emitir_pendientes(id_ejecucion)
 
     def _emitir_pendientes(self, id_ejecucion: str) -> None:
-        registros = tuple(self._acumulador.iterar_conteos(id_ejecucion))
+        pendientes = []
+        for registro in self._acumulador.iterar_conteos(id_ejecucion):
+            if self._comprobar_detencion is not None:
+                self._comprobar_detencion()
+            pendientes.append(registro)
+        registros = tuple(pendientes)
         if not registros:
             return
         self._emitiendo = True
@@ -73,6 +81,18 @@ class EmisorParciales:
         finally:
             self._emitiendo = False
 
+    def cerrar(self):
+        """Libera parciales y presupuestos sin vaciarlos hacia la salida."""
+        if self._cerrado:
+            return
+        if self._emitiendo:
+            raise RuntimeError('No se puede cerrar durante una emisión')
+        self._cerrado = True
+        self._acumulador.cerrar()
+        self._presupuestos.clear()
+
     def _validar_disponible(self) -> None:
+        if self._cerrado:
+            raise RuntimeError('El emisor de parciales está cerrado')
         if self._emitiendo:
             raise RuntimeError('No se pueden modificar parciales durante su emisión')

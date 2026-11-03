@@ -1,4 +1,5 @@
 import logging
+from src.middleware.interfaz import OperacionInterrumpida
 from typing import Optional
 
 from src.workers.base_worker import WorkerBase
@@ -36,6 +37,7 @@ class DateRouter(WorkerBase):
 
         total_articulos = len(datos.contenido.registros)
         for articulo in datos.contenido.registros:
+            self.comprobar_detencion()
 
             anio = _extraer_anio(articulo.fecha)
             if anio is not None and anio <= 2020:
@@ -91,6 +93,8 @@ class DateRouter(WorkerBase):
                 entrada_hist = Entrada(id_ejecucion, "textos_historicos")
                 lote_hist = Lote(Esquema.TEXTO_ARTICULO, tuple(textos_historicos))
                 self.middleware.publicar("word_occurrences", Datos(entrada_hist, lote_hist))
+            except OperacionInterrumpida:
+                raise
             except Exception as error:
                 logger.debug("date_router: no se publicó en word_occurrences (historicos): %s", error)
 
@@ -100,6 +104,8 @@ class DateRouter(WorkerBase):
                 entrada_rec = Entrada(id_ejecucion, "textos_recientes")
                 lote_rec = Lote(Esquema.TEXTO_ARTICULO, tuple(textos_recientes))
                 self.middleware.publicar("word_occurrences", Datos(entrada_rec, lote_rec))
+            except OperacionInterrumpida:
+                raise
             except Exception as error:
                 logger.debug("date_router: no se publicó en word_occurrences (recientes): %s", error)
 
@@ -119,6 +125,8 @@ class DateRouter(WorkerBase):
         try:
             self.middleware.finalizar_entrada("word_occurrences", Entrada(id_ejecucion, "textos_historicos"))
             self.middleware.finalizar_entrada("word_occurrences", Entrada(id_ejecucion, "textos_recientes"))
+        except OperacionInterrumpida:
+            raise
         except Exception as error:
             logger.debug("date_router: no se propagó EOF a word_occurrences: %s", error)
 

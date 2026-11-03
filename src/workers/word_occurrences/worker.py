@@ -1,4 +1,5 @@
 import logging
+from src.middleware.interfaz import OperacionInterrumpida
 import zlib
 from typing import List
 
@@ -31,14 +32,20 @@ class WordOccurrencesWorker(WorkerBase):
         pares_q3 = [set() for _ in range(self._particiones_q3)]  # (palabra, idioma) sin repetir, por partición
 
         for articulo in registros:
+            self.comprobar_detencion()
             if not isinstance(articulo, TextoArticulo):
                 continue
             
-            palabras_no_stop = extract_non_stopwords_from_abstract(articulo.abstract)
+            palabras_no_stop = extract_non_stopwords_from_abstract(articulo.abstract, self.comprobar_detencion)
             cantidad_total = len(palabras_no_stop)
 
             # datos para Q4 (palabras únicas por abstract sin stopwords)
-            for pal in set(palabras_no_stop):
+            unicas = set()
+            for pal in palabras_no_stop:
+                self.comprobar_detencion()
+                unicas.add(pal)
+            for pal in unicas:
+                self.comprobar_detencion()
                 palabras_q4.append(Palabra(palabra=pal))
                 # dato para Q3: la misma palabra siempre va a la misma partición
                 pares_q3[zlib.crc32(pal.encode("utf-8")) % self._particiones_q3].add((pal, articulo.idioma))
@@ -82,6 +89,7 @@ class WordOccurrencesWorker(WorkerBase):
         pendientes: list = []
         presupuesto = self.middleware.crear_presupuesto_lote(entrada, esquema)
         for registro in registros:
+            self.comprobar_detencion()
             if not presupuesto.admitir(registro):
                 self.middleware.publicar(grupo, Datos(entrada, Lote(esquema, tuple(pendientes))),
                                          clave_afinidad=clave_afinidad)
@@ -101,12 +109,16 @@ class WordOccurrencesWorker(WorkerBase):
         if entrada.nombre == "textos_historicos":
             try:
                 self.middleware.finalizar_entrada("q5_average", Entrada(id_ejecucion, "cantidades_historicas"))
+            except OperacionInterrumpida:
+                raise
             except Exception as error:
                 logger.debug("word_occurrences: error al finalizar en q5_average: %s", error)
 
         elif entrada.nombre == "textos_recientes":
             try:
                 self.middleware.finalizar_entrada("q5_comparator", Entrada(id_ejecucion, "candidatos"))
+            except OperacionInterrumpida:
+                raise
             except Exception as error:
                 logger.debug("word_occurrences: error al finalizar en q5_comparator: %s", error)
 
@@ -114,6 +126,8 @@ class WordOccurrencesWorker(WorkerBase):
         if not self.middleware.entradas_pendientes(id_ejecucion):
             try:
                 self.middleware.finalizar_entrada("frecuencias", Entrada(id_ejecucion, "palabras"))
+            except OperacionInterrumpida:
+                raise
             except Exception as error:
                 logger.debug("word_occurrences: error al finalizar en frecuencias: %s", error)
             # Q3 necesita el cierre de todas sus particiones: lo coordina el middleware

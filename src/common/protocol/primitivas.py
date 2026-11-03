@@ -21,7 +21,8 @@ def validar_entero(valor, ancho):
 class EscritorBinario:
     """Mide o construye un cuerpo sin superar el máximo de bytes admitido."""
 
-    def __init__(self, max_bytes: int, *, medir: bool = False):
+    def __init__(self, max_bytes: int, *, medir: bool = False, comprobar_detencion=None):
+        self._comprobar_detencion = comprobar_detencion
         if type(max_bytes) is not int or max_bytes <= 0:
             raise ErrorSerializacion("El límite de bytes debe ser un entero positivo")
         self._max_bytes = max_bytes
@@ -30,6 +31,8 @@ class EscritorBinario:
 
     def agregar(self, datos):
         """Agrega bytes después de comprobar el espacio disponible."""
+        if self._comprobar_detencion is not None:
+            self._comprobar_detencion()
         if self.posicion + len(datos) > self._max_bytes:
             raise ErrorSerializacion("El cuerpo supera el límite de bytes")
         self.posicion += len(datos)
@@ -83,7 +86,8 @@ class EscritorBinario:
 class LectorBinario:
     """Recorre una vista del cuerpo comprobando cada frontera antes de leer."""
 
-    def __init__(self, cuerpo):
+    def __init__(self, cuerpo, *, comprobar_detencion=None):
+        self.comprobar_detencion = comprobar_detencion
         self._cuerpo = memoryview(cuerpo)
         self.posicion = 0
 
@@ -92,6 +96,8 @@ class LectorBinario:
         return len(self._cuerpo) - self.posicion
 
     def tomar(self, cantidad):
+        if self.comprobar_detencion is not None:
+            self.comprobar_detencion()
         if type(cantidad) is not int or cantidad < 0 or cantidad > self.restantes:
             raise ErrorSerializacion("Campo incompleto o longitud inválida")
         inicio = self.posicion

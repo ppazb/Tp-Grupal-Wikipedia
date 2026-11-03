@@ -5,7 +5,7 @@ from src.workers.q3.intersection.worker import IntersectionQ3
 def main():
     logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
     ruta_configuracion = sys.argv[1] if len(sys.argv) > 1 else "config/config.json"
-    
+
     worker = IntersectionQ3(ruta_configuracion)
     worker.iniciar()
 

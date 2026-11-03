@@ -18,7 +18,10 @@ class WorkerFrecuencia(Worker):
         self._entrada = entrada
         self._grupo_salida = grupo_salida
         self._entrada_salida = entrada_salida
-        self._parciales = EmisorParciales(self._emitir, self._crear_presupuesto)
+        self._parciales = EmisorParciales(
+            self._emitir, self._crear_presupuesto, comprobar_detencion=self.comprobar_detencion,
+        )
+        self.registrar_limpieza(self._parciales.cerrar)
 
     def procesar(self, datos):
         """Suma cada presencia recibida, sin deduplicar palabras entre abstracts."""
@@ -26,6 +29,7 @@ class WorkerFrecuencia(Worker):
         if datos.contenido.esquema is not Esquema.PALABRA:
             raise ValueError('Frecuencia requiere lotes con esquema PALABRA')
         for aporte in datos.contenido.registros:
+            self.comprobar_detencion()
             self._parciales.acumular(datos.entrada.id_ejecucion, aporte)
 
     def finalizar_entrada(self, entrada):

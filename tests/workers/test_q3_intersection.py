@@ -33,6 +33,7 @@ class TestIntersectionQ3(unittest.TestCase):
         # Se evita __init__ para no abrir conexión con RabbitMQ
         self.worker = object.__new__(IntersectionQ3)
         self.worker.middleware = _MiddlewareFalso()
+        self.worker._apagado = None
         self.worker._ejecuciones = {}
         self.worker._clientes_vistos = set()
         self.entrada = Entrada("ej1", "q3_entrada")

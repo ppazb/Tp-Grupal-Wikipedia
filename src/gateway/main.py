@@ -1,12 +1,12 @@
 import logging
 import os
-import signal
 import sys
-import threading
 
 from src.middleware.configuracion import ErrorConfiguracion
 from src.middleware.interfaz import ErrorMiddleware
 from src.gateway.src.gateway import ejecutar_gateway
+from src.common.runtime.apagado import Apagado
+from src.gateway.src.apagado import DetencionGateway
 
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 
@@ -14,14 +14,12 @@ LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 def main() -> int:
     logging.basicConfig(level=LOG_LEVEL, format="%(asctime)s %(levelname)s %(name)s: %(message)s",)
     
-    stop = threading.Event()
-    
-    signal.signal(signal.SIGTERM, lambda signum, frame: stop.set())
-    signal.signal(signal.SIGINT, lambda signum, frame: stop.set())
-    
     try:
-        return ejecutar_gateway(stop)
-    
+        with Apagado() as apagado:
+            detener = DetencionGateway()
+            apagado.registrar_limpieza(detener.set)
+            return ejecutar_gateway(detener, apagado)
+
     except (ErrorMiddleware, ErrorConfiguracion) as error:
         logging.getLogger('gateway').error("No se pudo iniciar o ejecutar el gateway: %s", error)
         return 1

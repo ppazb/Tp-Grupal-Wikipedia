@@ -12,7 +12,7 @@ from .broker_connection import ConexionBroker
 from .capacidad import CapacidadDatos
 from .codificacion import CodificadorMensajes
 from .configuracion import ConfiguracionComunicacion, ErrorConfiguracion
-from .interfaz import ErrorConexion, ErrorMensajeInvalido, ErrorRecepcion
+from .interfaz import ErrorConexion, ErrorMensajeInvalido, ErrorRecepcion, OperacionInterrumpida
 from .rechazos import ENTRADA_ERRORES, notificacion_rechazo
 from .topologia import TopologiaGrupos
 
@@ -39,7 +39,10 @@ class ReceptorDatos:
         self._conexion = conexion
         self._informar_error = informar_error
         self._coordinacion = coordinacion
-        self._codificador = CodificadorMensajes(configuracion.limites.max_bytes_por_mensaje)
+        self._codificador = CodificadorMensajes(
+            configuracion.limites.max_bytes_por_mensaje,
+            comprobar_detencion=conexion.comprobar_apagado,
+        )
         if topologia is None:
             topologia = TopologiaGrupos(configuracion)
             topologia.declarar(conexion)
@@ -80,6 +83,7 @@ class ReceptorDatos:
                 self._entrega = None
                 self._esperar(canal)
                 entregado = False
+                self._conexion.comprobar_apagado()
                 if self._entrega is not None and not self._detenido:
                     if self._cola_pendiente == self._colas.control:
                         entregado = self._procesar_control(canal, self._entrega, procesar, al_finalizar)
@@ -205,6 +209,7 @@ class ReceptorDatos:
         return evento is not None
 
     def _resolver(self, canal, *, rechazar):
+        self._conexion.comprobar_apagado()
         if rechazar:
             canal.basic_reject(delivery_tag=self._pendiente, requeue=False)
         else:
@@ -260,6 +265,8 @@ class ReceptorDatos:
                 if canal.is_open:
                     canal.basic_cancel(consumer_tag=consumidor)
                 self._consumidores.remove(consumidor)
+            except OperacionInterrumpida:
+                raise
             except Exception as error:
                 REGISTRO.exception("No se pudo cancelar el consumidor")
                 errores.append(error)
@@ -268,6 +275,7 @@ class ReceptorDatos:
 
     def _liberar_consumidores(self, canal):
         """Reencola una entrega interrumpida sin devolver su permiso asociado."""
+        self._conexion.preparar_limpieza()
         try:
             if self._pendiente is not None and not self._retener_pendiente and canal.is_open:
                 canal.basic_nack(delivery_tag=self._pendiente, requeue=True)

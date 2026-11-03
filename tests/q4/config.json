@@ -1,0 +1,56 @@
+{
+  "broker": {
+    "host": "rabbitmq",
+    "puerto": 5672,
+    "usuario": "prueba",
+    "contrasena": "prueba",
+    "virtual_host": "/wikipedia",
+    "latido_segundos": 60,
+    "timeout_conexion_segundos": 10,
+    "timeout_bloqueo_segundos": 30
+  },
+  "proceso": {
+    "grupo": "productores",
+    "instancia": 0
+  },
+  "limites": {
+    "mensajes_sin_confirmar": 4,
+    "max_mensajes_por_cola": 1,
+    "max_bytes_por_mensaje": 180
+  },
+  "grupos": {
+    "productores": 2,
+    "frecuencias": 1,
+    "top_n": 2,
+    "sumidero": 1
+  },
+  "rutas": [
+    {
+      "nombre": "palabras",
+      "origen": "productores",
+      "destino": "frecuencias",
+      "entrada": "palabras",
+      "esquemas": [
+        "PALABRA"
+      ]
+    },
+    {
+      "nombre": "conteos",
+      "origen": "frecuencias",
+      "destino": "top_n",
+      "entrada": "conteos",
+      "esquemas": [
+        "CONTEO_PALABRA"
+      ]
+    },
+    {
+      "nombre": "resultado",
+      "origen": "top_n",
+      "destino": "sumidero",
+      "entrada": "q4",
+      "esquemas": [
+        "CONTEO_PALABRA"
+      ]
+    }
+  ]
+}

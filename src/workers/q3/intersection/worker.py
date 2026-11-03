@@ -37,6 +37,7 @@ class IntersectionQ3(WorkerBase):
     def __init__(self, ruta_configuracion: str):
         super().__init__(ruta_configuracion)
         self._ejecuciones = {}
+        self.registrar_limpieza(self._ejecuciones.clear)
 
     def procesar(self, datos: Datos) -> None:
         id_ejecucion = datos.entrada.id_ejecucion
@@ -44,6 +45,7 @@ class IntersectionQ3(WorkerBase):
         ejecucion = self._ejecuciones.setdefault(id_ejecucion, _Ejecucion())
 
         for registro in datos.contenido.registros:
+            self.comprobar_detencion()
             bit = _BIT_IDIOMA[registro.idioma]
             estado = ejecucion.estado.get(registro.palabra, 0)
             if estado & bit:

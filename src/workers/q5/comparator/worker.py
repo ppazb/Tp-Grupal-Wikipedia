@@ -18,14 +18,19 @@ class ComparatorQ5Worker(WorkerBase):
     def __init__(self, ruta_configuracion: str):
         super().__init__(ruta_configuracion)
         directorio_temp = os.environ.get("TEMP_DIR", "data/temp")
-        self._storage = AlmacenamientoCandidatos(directorio_temp)
+        self._storage = AlmacenamientoCandidatos(
+            directorio_temp, comprobar_detencion=self.comprobar_detencion,
+        )
+        self.registrar_limpieza(self._storage.cerrar)
         # Resumen histórico por ejecución: id_ejecucion -> (suma, articulos)
         self._resumenes: Dict[str, Tuple[int, int]] = {}
+        self.registrar_limpieza(self._resumenes.clear)
         # Tamaño de lote para escrituras agrupadas en disco
         self._batch_size_q5 = int(os.environ.get("BATCH_SIZE_Q5", os.environ.get("batch_size_q5", "1000")))
         logger.info("q5_comparator: configurado batch_size_q5=%d", self._batch_size_q5)
         # Buffer de candidatos en memoria antes de persistir a disco: id_ejecucion -> List[Candidato]
         self._buffer_candidatos: Dict[str, List[Candidato]] = {}
+        self.registrar_limpieza(self._buffer_candidatos.clear)
 
     def _volcar_buffer(self, id_ejecucion: str) -> None:
         """Escribe los candidatos acumulados en memoria al archivo temporal de la ejecución."""
@@ -42,7 +47,11 @@ class ComparatorQ5Worker(WorkerBase):
         entrada_nombre = datos.entrada.nombre
 
         if entrada_nombre == "candidatos":
-            candidatos = [r for r in datos.contenido.registros if isinstance(r, Candidato)]
+            candidatos = []
+            for registro in datos.contenido.registros:
+                self.comprobar_detencion()
+                if isinstance(registro, Candidato):
+                    candidatos.append(registro)
             if candidatos:
                 if id_ejecucion not in self._buffer_candidatos:
                     self._buffer_candidatos[id_ejecucion] = []
@@ -53,6 +62,7 @@ class ComparatorQ5Worker(WorkerBase):
 
         elif entrada_nombre == "resumen_historico":
             for reg in datos.contenido.registros:
+                self.comprobar_detencion()
                 if isinstance(reg, ResumenHistorico):
                     self._resumenes[id_ejecucion] = (reg.suma, reg.articulos)
                     promedio = (reg.suma / reg.articulos) if reg.articulos > 0 else 0.0
@@ -92,6 +102,7 @@ class ComparatorQ5Worker(WorkerBase):
 
         try:
             for candidato in self._storage.iterar_candidatos(id_ejecucion):
+                self.comprobar_detencion()
                 total_evaluados += 1
                 if candidato.cantidad > promedio:
                     total_superaron += 1
@@ -125,4 +136,3 @@ class ComparatorQ5Worker(WorkerBase):
             return
         datos = Datos(entrada, Lote(Esquema.CANDIDATO, tuple(registros)))
         self.middleware.publicar("gateway_resultados", datos)
-

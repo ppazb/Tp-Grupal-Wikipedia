@@ -1,4 +1,4 @@
-.PHONY: test test-middleware test-eof up up-quiet down
+.PHONY: test test-middleware test-eof test-q4 test-sigterm test-sigterm-despliegue up up-quiet down
 test:
 	bash scripts/probar_escenarios.sh todos
 
@@ -7,6 +7,15 @@ test-middleware:
 
 test-eof:
 	bash scripts/probar_escenarios.sh eof
+
+test-q4:
+	bash scripts/probar_escenarios.sh q4
+
+test-sigterm:
+	bash scripts/probar_escenarios.sh sigterm
+
+test-sigterm-despliegue:
+	bash scripts/probar_escenarios.sh despliegue
 
 # Levanta todo el sistema (workers, gateway y clientes) y muestra los logs.
 up:

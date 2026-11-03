@@ -37,11 +37,12 @@ def _abrir(ruta):
     archivo = parquet.ParquetFile(ruta)
     faltantes = set(COLUMNAS_PARQUET) - set(archivo.schema_arrow.names)
     if faltantes:
+        archivo.close()
         raise ValueError(f"Faltan columnas en {ruta.name}: {', '.join(sorted(faltantes))}")
     return archivo
 
 
-def iterar_lotes(ruta_directorio, lote_size):
+def iterar_lotes(ruta_directorio, lote_size, comprobar_detencion=None):
     """
     Recorre todos los Parquet del directorio y entrega listas de filas (dicts) de a lote_size
     lee de a un lote por vez, así que no carga los archivos enteros en memoria
@@ -49,10 +50,18 @@ def iterar_lotes(ruta_directorio, lote_size):
     """
     archivos = listar_parquets(ruta_directorio)
     for numero, ruta in enumerate(archivos, start=1):
+        if comprobar_detencion is not None:
+            comprobar_detencion()
         archivo = _abrir(ruta)
-        LOG.info("Leyendo %s (%d/%d)", ruta.name, numero, len(archivos))
-        
-        for lote_arrow in archivo.iter_batches(batch_size=lote_size, columns=list(COLUMNAS_PARQUET)):
-            filas = lote_arrow.to_pylist()
-            if filas:
-                yield filas
+        try:
+            LOG.info("Leyendo %s (%d/%d)", ruta.name, numero, len(archivos))
+            for lote_arrow in archivo.iter_batches(batch_size=lote_size, columns=list(COLUMNAS_PARQUET)):
+                if comprobar_detencion is not None:
+                    comprobar_detencion()
+                filas = lote_arrow.to_pylist()
+                if comprobar_detencion is not None:
+                    comprobar_detencion()
+                if filas:
+                    yield filas
+        finally:
+            archivo.close()
