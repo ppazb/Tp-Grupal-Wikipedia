@@ -1,6 +1,8 @@
 """Escenarios de reparto, presión de carga, rechazos y recursos con RabbitMQ real."""
 
 from unittest.mock import patch
+from dataclasses import replace
+import time
 
 from src.common.protocol.dto import CierreProductor, EnvioDatos, SobreMensaje, TipoMensaje
 from src.common.protocol.registros import CodigoError
@@ -256,3 +258,16 @@ class EscenariosMiddleware(EscenarioRabbitMQ):
         self.assertEqual(conexion._canales_adicionales, [])
         with self.assertRaises(MiddlewareCerrado):
             conexion.abrir()
+
+    def test_espera_larga_conserva_latidos_y_permite_seguir_publicando(self):
+        """Una pausa mayor que el heartbeat mantiene utilizable la conexión."""
+        configuracion = replace(self.configuracion, broker=replace(self.configuracion.broker, latido_segundos=2))
+        with MiddlewareRabbitMQ(configuracion) as productor:
+            inicio = time.monotonic()
+            productor.esperar(5)
+            self.assertGreaterEqual(time.monotonic() - inicio, 5)
+            datos = palabras('cliente', 'despues_de_esperar')
+            productor.publicar('frecuencias', datos)
+            self.assertTrue(productor._conexion._conexion.is_open)
+        consumidor = self.abrir('frecuencias')
+        self.assertEqual(self.recibir(consumidor), datos)

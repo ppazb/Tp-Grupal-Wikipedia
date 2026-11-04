@@ -92,6 +92,10 @@ class MiddlewareRabbitMQ(Middleware[Lote]):
             return None
         return lambda datos: self.publicar(rutas[0].destino, datos)
 
+    def esperar(self, segundos):
+        """Mantiene la conexión y la detección de SIGTERM durante una pausa del worker."""
+        self._conexion.esperar(segundos)
+
     def publicar(self, grupo, datos, *, clave_afinidad=None):
         """Publica un lote tras obtener capacidad en su destino."""
         self.publicar_en_ramas((EnvioDatos(grupo, datos, clave_afinidad),))

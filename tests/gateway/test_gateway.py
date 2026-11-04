@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 CONFIG = Path(__file__).parents[2] / "config" / "config.json"
-COMPOSE = Path(__file__).parents[2] / "docker-compose.yml"
+COMPOSE = Path(__file__).parents[2] / "config" / "compose.plantilla.yml"
 
 
 def _entorno_del_gateway_en_el_compose():

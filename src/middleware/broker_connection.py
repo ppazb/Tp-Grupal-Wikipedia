@@ -2,6 +2,7 @@
 
 import logging
 import os
+import time
 
 import pika
 
@@ -133,6 +134,19 @@ class ConexionBroker:
         if self._apagado is not None and self._apagado.solicitado:
             if self._enlace_apagado is not None:
                 self._enlace_apagado.cerrar()
+
+    def esperar(self, segundos):
+        """Espera un plazo atendiendo latidos y apagado, sin despachar negocio anidado."""
+        self._validar_proceso()
+        self._validar_abierta()
+        self.comprobar_apagado()
+        limite = time.monotonic() + segundos
+        try:
+            while (restante := limite - time.monotonic()) > 0:
+                self._conexion.process_data_events(time_limit=restante)
+                self.comprobar_apagado()
+        except (pika.exceptions.AMQPError, OSError) as error:
+            raise ErrorConexion('Falló la conexión durante la espera') from error
 
     def programar(self, operacion) -> None:
         """Notifica al bucle de E/S para ejecutar una operación al despachar eventos.
