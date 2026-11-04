@@ -8,14 +8,14 @@ import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pandas as pd
 import requests
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'scripts'))
 from comparar_serial import main
-from serial.comparacion import comparar, exportar
+from serial.comparacion import comparar, descargar_imagen, exportar
 from serial.notebook import ejecutar_notebook
 
 RAIZ = Path(__file__).resolve().parents[2]
@@ -93,8 +93,19 @@ class ComparacionSerial(unittest.TestCase):
                     self.assertEqual(main(), 2)
                 with requests.Session() as sesion:
                     resultados['q2'].iloc[0, 2] = f'http://127.0.0.1:{servidor.server_port}/error'
-                    with self.assertRaises(requests.HTTPError):
-                        exportar(resultados, raiz / 'referencia_fallida', sesion, 5)
+                    parcial = raiz / 'referencia_con_descarte'
+                    self.assertEqual(exportar(resultados, parcial, sesion, 5), 1)
+                    self.assertTrue((parcial / 'q5.csv').exists())
+                    self.assertFalse((parcial / 'imagenes/0.img').exists())
+                    self.assertIn('404', (parcial / 'descargas_fallidas_q2.csv').read_text())
+                    self.assertNotIn('uno', (parcial / 'q2.csv').read_text())
+                    # Un cliente que sí recibió la imagen debe seguir mostrando una diferencia.
+                    self.assertFalse(comparar(parcial, [clientes[1]], raiz / 'diferencias.csv'))
+                    self.assertIn('q2,sobrante', (raiz / 'diferencias.csv').read_text())
+                    import shutil
+                    sin_imagen = raiz / 'client_sin_imagen'
+                    shutil.copytree(parcial, sin_imagen)
+                    self.assertTrue(comparar(parcial, [sin_imagen], raiz / 'diferencias.csv'))
         finally:
             servidor.shutdown()
             servidor.server_close()
@@ -112,3 +123,32 @@ class ComparacionSerial(unittest.TestCase):
             (cliente / 'q1.csv').write_text('columnas,incorrectas\n')
             with self.assertRaises(ValueError):
                 comparar(referencia, [cliente], raiz / 'diferencias.csv')
+
+    def test_descarga_interrumpida_reintenta_sin_conservar_bytes_parciales(self):
+        def fragmentos_interrumpidos(_):
+            yield b'parcial'
+            raise requests.ConnectionError('conexión cortada durante la imagen')
+
+        respuesta_fallida = MagicMock()
+        respuesta_fallida.__enter__.return_value = respuesta_fallida
+        respuesta_fallida.iter_content.side_effect = fragmentos_interrumpidos
+        respuesta_correcta = MagicMock()
+        respuesta_correcta.__enter__.return_value = respuesta_correcta
+        respuesta_correcta.iter_content.return_value = [b'imagen completa']
+        sesion = MagicMock()
+        with tempfile.TemporaryDirectory() as temporal:
+            destino = Path(temporal) / 'imagen'
+            sesion.get.side_effect = [respuesta_fallida, respuesta_correcta]
+            descargar_imagen('http://local/imagen', destino, sesion, 5)
+            self.assertEqual(destino.read_bytes(), b'imagen completa')
+            self.assertEqual(sesion.get.call_count, 2)
+            sesion.get.side_effect = [respuesta_fallida, respuesta_fallida]
+            with self.assertRaises(requests.ConnectionError):
+                descargar_imagen('http://local/imagen', destino, sesion, 5)
+            self.assertFalse(destino.exists())
+            # Un fallo local de disco no es un descarte por indisponibilidad de Wikimedia.
+            sesion.get.side_effect = None
+            sesion.get.return_value = respuesta_correcta
+            with patch.object(Path, 'open', side_effect=OSError('sin espacio')):
+                with self.assertRaises(OSError):
+                    descargar_imagen('http://local/imagen', destino, sesion, 5)

@@ -38,7 +38,11 @@ def main():
         with requests.Session() as sesion:
             sesion.headers['User-Agent'] = os.environ.get(
                 'IMAGE_USER_AGENT', 'TpGrupalWikipedia/1.0 (https://github.com/ppazb/Tp-Grupal-Wikipedia) python-requests')
-            exportar(resultados, destino / 'referencia', sesion, args.timeout_http)
+            descartadas = exportar(resultados, destino / 'referencia', sesion, args.timeout_http)
+            informe['descargas_fallidas_q2'] = descartadas
+            if descartadas:
+                print(f'ADVERTENCIA: la referencia omitió {descartadas} artículos de Q2 por errores de descarga; '
+                      'consultar referencia/descargas_fallidas_q2.csv.', flush=True)
         del resultados
         for dato in informe['entrada']:
             estado = Path(dato['archivo']).stat()

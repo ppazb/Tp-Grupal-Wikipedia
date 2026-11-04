@@ -5,9 +5,12 @@ import hashlib
 from collections import Counter
 from pathlib import Path
 
+import requests
+
 COLUMNAS = {'q1': ('url', 'fecha'), 'q2': ('nombre', 'url', 'archivo'),
             'q3': ('palabra',), 'q4': ('palabra', 'cantidad'), 'q5': ('url', 'cantidad')}
 BLOQUE_BYTES = 64 * 1024
+MAX_INTENTOS_IMAGEN = 2
 
 
 def huella(ruta):
@@ -20,41 +23,71 @@ def huella(ruta):
 
 
 def descargar_imagen(url, destino, sesion, timeout):
-    """Guarda una imagen completa; un fallo HTTP invalida la referencia."""
-    with sesion.get(url, stream=True, timeout=timeout) as respuesta:
-        respuesta.raise_for_status()
-        with destino.open('wb') as archivo:
-            for bloque in respuesta.iter_content(BLOQUE_BYTES):
-                if archivo.write(bloque) != len(bloque):
-                    raise OSError(f'Escritura incompleta de {destino}')
-    if destino.stat().st_size == 0:
-        raise ValueError(f'Imagen vacía: {url}')
+    """Reintenta errores de descarga y elimina los archivos incompletos."""
+    for intento in range(1, MAX_INTENTOS_IMAGEN + 1):
+        try:
+            with sesion.get(url, stream=True, timeout=timeout) as respuesta:
+                respuesta.raise_for_status()
+                with destino.open('wb') as archivo:
+                    for bloque in respuesta.iter_content(BLOQUE_BYTES):
+                        if archivo.write(bloque) != len(bloque):
+                            raise OSError(f'Escritura incompleta de {destino}')
+            return
+        except requests.RequestException:
+            destino.unlink(missing_ok=True)
+            if intento == MAX_INTENTOS_IMAGEN:
+                raise
+
+
+def exportar_imagenes(tabla, destino, escritor, sesion, timeout):
+    """Omite las descargas fallidas de Q2 y deja un registro de cada descarte."""
+    descartadas = 0
+    with (destino / 'descargas_fallidas_q2.csv').open('w', encoding='utf-8', newline='') as archivo:
+        fallos = csv.writer(archivo)
+        fallos.writerow(('nombre', 'url', 'url_imagen', 'estado_http', 'intentos', 'error'))
+        for numero, (nombre, url, imagen) in enumerate(tabla.itertuples(index=False, name=None)):
+            relativa = ''
+            if isinstance(imagen, str) and imagen:
+                relativa = f'imagenes/{numero}.img'
+                ruta = destino / relativa
+                try:
+                    descargar_imagen(imagen, ruta, sesion, timeout)
+                except requests.RequestException as error:
+                    estado = error.response.status_code if error.response is not None else ''
+                    fallos.writerow((nombre, url, imagen, estado, MAX_INTENTOS_IMAGEN, str(error)))
+                    descartadas += 1
+                    print(f'Q2: se omite {url}; falló la descarga de {imagen}: {error}', flush=True)
+                    continue
+                # El worker informa una respuesta HTTP vacía como artículo sin imagen.
+                if ruta.stat().st_size == 0:
+                    ruta.unlink()
+                    relativa = ''
+            escritor.writerow((nombre, url, relativa))
+    return descartadas
 
 
 def exportar(resultados, destino, sesion, timeout):
     """Exporta las consultas y descarga las imágenes seleccionadas por Q2."""
     destino = Path(destino)
     (destino / 'imagenes').mkdir(parents=True)
+    descartadas = 0
     for consulta, tabla in resultados.items():
         with (destino / f'{consulta}.csv').open('w', encoding='utf-8', newline='') as archivo:
             escritor = csv.writer(archivo)
             escritor.writerow(COLUMNAS[consulta])
+            if consulta == 'q2':
+                descartadas = exportar_imagenes(tabla, destino, escritor, sesion, timeout)
+                continue
             if consulta == 'q3':
                 escritor.writerows((palabra,) for palabra in tabla)
                 continue
-            for numero, fila in enumerate(tabla.itertuples(index=False, name=None)):
+            for fila in tabla.itertuples(index=False, name=None):
                 if consulta == 'q1':
                     fecha, url = fila
                     escritor.writerow((url, fecha.isoformat()))
-                elif consulta == 'q2':
-                    nombre, url, imagen = fila
-                    relativa = ''
-                    if isinstance(imagen, str) and imagen:
-                        relativa = f'imagenes/{numero}.img'
-                        descargar_imagen(imagen, destino / relativa, sesion, timeout)
-                    escritor.writerow((nombre, url, relativa))
                 else:
                     escritor.writerow(fila)
+    return descartadas
 
 
 def leer_filas(directorio, consulta):
