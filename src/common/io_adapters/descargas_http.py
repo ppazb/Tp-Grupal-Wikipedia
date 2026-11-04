@@ -20,6 +20,21 @@ BYTES_POR_SEGUNDO = 1_000_000
 MAX_REPLICAS_DESCARGA = 2
 
 
+class DescargaAgotada(Exception):
+    """Se agotaron los reintentos permitidos de una descarga."""
+
+
+def maximo_reintentos():
+    """Lee IMAGE_MAX_RETRIES; sin definir, los reintentos no tienen tope."""
+    valor = os.environ.get('IMAGE_MAX_RETRIES')
+    if valor is None:
+        return None
+    reintentos = int(valor)
+    if reintentos < 0:
+        raise ValueError('IMAGE_MAX_RETRIES no puede ser negativo')
+    return reintentos
+
+
 def positivo(nombre, defecto):
     """Lee una duración o tasa positiva y finita del entorno."""
     valor = float(os.environ.get(nombre, defecto))
@@ -62,6 +77,7 @@ class DescargadorHTTP:
         self._reintento = positivo('IMAGE_RETRY_SECONDS', REINTENTO_SEGUNDOS)
         self._max_retroceso = max(self._reintento, positivo('IMAGE_MAX_BACKOFF_SECONDS', MAX_RETROCESO_SEGUNDOS))
         self._tasa = positivo('IMAGE_BYTES_PER_SECOND', BYTES_POR_SEGUNDO) / replicas
+        self._max_reintentos = maximo_reintentos()
         self._proxima = 0.0
 
     def esperar(self, segundos):
@@ -78,13 +94,16 @@ class DescargadorHTTP:
             yield bloque
 
     def descargar(self, sesion, url, timeout, consumir):
-        """Reintenta sin descartar 429, fallos transitorios HTTP y cortes de conexión."""
+        """Reintenta 429, fallos transitorios HTTP y cortes de conexión, hasta IMAGE_MAX_RETRIES si está definido."""
         retroceso = self._reintento
         intento = 0
         while True:
             self.esperar(max(0.0, self._proxima - time.monotonic()))
             intento += 1
             demora = 0.0
+            # El intervalo se cuenta desde el inicio del pedido, no desde el fin de la descarga,
+            # así la lectura del cuerpo no suma tiempo extra entre pedidos.
+            self._proxima = time.monotonic() + self._intervalo
             try:
                 with sesion.get(url, stream=True, timeout=timeout) as respuesta:
                     self._comprobar()
@@ -99,8 +118,8 @@ class DescargadorHTTP:
                 LOG.warning('HTTP %s en %s (intento %d)', estado, url, intento)
             except (requests.ConnectionError, requests.Timeout, requests.exceptions.ChunkedEncodingError) as error:
                 LOG.warning('Descarga interrumpida de %s (intento %d): %s', url, intento, error)
-            finally:
-                self._proxima = time.monotonic() + self._intervalo
+            if self._max_reintentos is not None and intento > self._max_reintentos:
+                raise DescargaAgotada(f'{url}: {self._max_reintentos} reintentos agotados')
             demora = max(demora, retroceso, self._intervalo)
             LOG.warning('Se conserva la imagen pendiente; reintento en %.1f segundos: %s', demora, url)
             self.esperar(demora)

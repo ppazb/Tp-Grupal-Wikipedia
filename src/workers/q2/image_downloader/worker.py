@@ -5,7 +5,7 @@ import os
 import requests
 
 from src.workers.base_worker import WorkerBase
-from src.common.io_adapters.descargas_http import DescargadorHTTP, ESTADOS_AUSENTES
+from src.common.io_adapters.descargas_http import DescargadorHTTP, DescargaAgotada, ESTADOS_AUSENTES
 from src.common.protocol.dto import Datos, Entrada
 from src.common.protocol.registros import Esquema, FragmentoImagen, Lote
 
@@ -57,7 +57,8 @@ class ImageDownloaderQ2(WorkerBase):
     Descarga la imagen de cada artículo biográfico y la envía al gateway en fragmentos,
     para respetar limites.max_bytes_por_mensaje. Un artículo sin imagen se informa igual,
     con un único fragmento vacío (total_bytes = 0). Reintenta errores temporales
-    hasta obtener la imagen o recibir una solicitud de apagado. Omite HTTP 404/410.
+    hasta IMAGE_MAX_RETRIES veces (sin tope si no se define) o hasta recibir una solicitud de apagado;
+    si se agotan, el artículo se publica sin imagen. Omite HTTP 404/410.
     """
 
     def __init__(self, ruta_configuracion):
@@ -98,6 +99,9 @@ class ImageDownloaderQ2(WorkerBase):
         """Descarga con ritmo acotado; solo omite imágenes inexistentes o eliminadas."""
         try:
             return self._descargador.descargar(self._sesion, url_imagen, TIMEOUT_SEGUNDOS, self._leer_imagen)
+        except DescargaAgotada as error:
+            logger.warning("Se agotaron los reintentos, el artículo se publica sin imagen: %s", error)
+            return b""
         except requests.HTTPError as error:
             if error.response is not None and error.response.status_code in ESTADOS_AUSENTES:
                 logger.info("Imagen inexistente: %s (%s)", url_imagen, error.response.status_code)

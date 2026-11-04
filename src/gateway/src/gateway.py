@@ -276,15 +276,16 @@ class ServidorGateway:
     def _procesar_cliente(self, cliente):
         # El gateway asigna la ejecución: un uuid nuevo por conexion para no repetir
         id_ejecucion = str(uuid.uuid4())
+        inicio = time.monotonic()
         # Se registra antes de publicar: los resultados pueden llegar mientras el cliente sigue enviando
         sesion = SesionCliente(cliente, self._max_bytes)
         self._sesiones.registrar(id_ejecucion, sesion)
         try:
-            self._atender_ejecucion(cliente, sesion, id_ejecucion)
+            self._atender_ejecucion(cliente, sesion, id_ejecucion, inicio)
         finally:
             self._sesiones.quitar(id_ejecucion)
 
-    def _atender_ejecucion(self, cliente, sesion, id_ejecucion):
+    def _atender_ejecucion(self, cliente, sesion, id_ejecucion, inicio):
         cantidad_lotes = 0
         filas_descartadas = 0
         filas_totales = 0
@@ -333,21 +334,23 @@ class ServidorGateway:
             
             sesion.enviar(TipoFrame.ACK, cantidad_lotes.to_bytes(BYTE_8, "big"))
             
-            LOG.info("Ejecución %s admitida: %d lotes, %d filas (%d descartadas), publicados en %s",
-                id_ejecucion, cantidad_lotes, filas_totales, filas_descartadas,", ".join(ruta.destino for ruta in self._rutas),
+            LOG.info("Ejecución %s admitida en %.1f s: %d lotes, %d filas (%d descartadas), publicados en %s",
+                id_ejecucion, time.monotonic() - inicio, cantidad_lotes, filas_totales, filas_descartadas,
+                ", ".join(ruta.destino for ruta in self._rutas),
             )
-            self._esperar_resultados(sesion, id_ejecucion)
+            self._esperar_resultados(sesion, id_ejecucion, inicio)
             return
 
     # La conexión sigue abierta hasta que el cliente recibió todos los resultados
-    def _esperar_resultados(self, sesion, id_ejecucion):
+    def _esperar_resultados(self, sesion, id_ejecucion, inicio):
         sesion.completa.wait()
         if sesion.rota:
             LOG.warning("Ejecución %s: se corta la espera de resultados", id_ejecucion)
             return
         self._comprobar_detencion()
         sesion.enviar(TipoFrame.FIN, b"")
-        LOG.info("Ejecución %s: resultados entregados al cliente", id_ejecucion)
+        LOG.info("Ejecución %s: resultados entregados al cliente. Ejecución de inicio a fin: %.1f s",
+                 id_ejecucion, time.monotonic() - inicio)
 
     # Si el cliente se cayo sin eof, cierra la entrada para que los workers no esperen mas datos
     def _cerrar_por_desconexion(self, id_ejecucion, cantidad_lotes):
