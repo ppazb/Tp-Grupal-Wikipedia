@@ -30,6 +30,7 @@ class WorkerTopN(Worker):
     def procesar(self, datos):
         """Consolida los parciales de la ejecución sin esperar su EOF para consumir."""
         self._validar_entrada(datos.entrada)
+        self.anunciar_cliente("q4_top_n", datos.entrada.id_ejecucion)
         if datos.contenido.esquema is not Esquema.CONTEO_PALABRA:
             raise ValueError('Top N requiere lotes con esquema CONTEO_PALABRA')
         for parcial in datos.contenido.registros:

@@ -49,12 +49,11 @@ def iterar_lotes(ruta_directorio, lote_size, comprobar_detencion=None):
     Valida las columnas de cada archivo antes de empezar a leerlo
     """
     archivos = listar_parquets(ruta_directorio)
-    for numero, ruta in enumerate(archivos, start=1):
+    for ruta in archivos:
         if comprobar_detencion is not None:
             comprobar_detencion()
         archivo = _abrir(ruta)
         try:
-            LOG.info("Leyendo %s (%d/%d)", ruta.name, numero, len(archivos))
             for lote_arrow in archivo.iter_batches(batch_size=lote_size, columns=list(COLUMNAS_PARQUET)):
                 if comprobar_detencion is not None:
                     comprobar_detencion()

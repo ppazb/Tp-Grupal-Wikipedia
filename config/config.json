@@ -16,18 +16,18 @@
   "limites": {
     "mensajes_sin_confirmar": 4,
     "max_mensajes_por_cola": 1000,
-    "max_bytes_por_mensaje": 350000
+    "max_bytes_por_mensaje": 1000000
   },
   "grupos": {
     "gateway_resultados": 1,
-    "date_router": 1,
+    "date_router": 4,
     "q1_filter_lang": 1,
     "q1_formatter": 1,
     "q2_filter_bio": 1,
-    "q2_image_downloader": 1,
-    "q3_intersection": 1,
-    "word_occurrences": 1,
-    "frecuencias": 1,
+    "q2_image_downloader": 2,
+    "q3_intersection": 2,
+    "word_occurrences": 4,
+    "frecuencias": 2,
     "gateway": 1,
     "top_n": 1,
     "q5_average": 1,
