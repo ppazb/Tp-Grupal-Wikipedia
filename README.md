@@ -23,13 +23,22 @@ una instancia.
 
 ```bash
 make generar-compose CLIENTES=3  # Genera docker-compose.yaml con tres clientes
-make up CLIENTES=3               # Regenera, construye y levanta el sistema
+make up CLIENTES=3               # Levanta el sistema y espera a los tres clientes
 make up-quiet         # Ejecuta con el cliente 0 y limpia el despliegue al terminar
 make down             # Elimina contenedores, red y volumen del broker
 ```
 
 `CLIENTES` puede ser cualquier entero positivo; si se omite, se levanta un cliente.
 `make up-quiet` ejecuta solamente el cliente 0 sobre la misma carpeta `input/`.
+`make up` termina cuando todos los clientes salieron y muestra un resumen por cliente.
+Solo informa éxito si todos terminaron con código 0, después de recibir el FIN del
+gateway y cerrar los archivos. Si alguno falla, devuelve error.
+Workers y RabbitMQ quedan levantados para inspeccionarlos; ejecutar `make down`
+para eliminarlos. Si se interrumpe la espera con Ctrl+C, el despliegue también
+permanece levantado y no se informa una ejecución exitosa.
+Para seguir los logs desde otra terminal:
+`docker compose -f docker-compose.yaml --profile clientes logs -f`.
+
 Los clientes comienzan a enviar sus datos al arrancar. El servicio `inicializador` prepara automáticamente
 los permisos del middleware antes de iniciar los workers; no hay que ejecutarlo
 manualmente con este despliegue.
@@ -76,3 +85,37 @@ Los escenarios de comunicación usan proyectos Compose aislados, sin puertos
 publicados, y eliminan sus contenedores y volúmenes al terminar. Usan datos
 sintéticos y no necesitan los Parquet de `input`. Un fallo devuelve un código de
 salida distinto de cero.
+
+## Comparación con el notebook serial
+
+Secuencia completa (ajustar `CLIENTES` según la ejecución):
+
+```bash
+make up CLIENTES=3  # Esperar el resumen de finalización exitosa de todos los clientes
+make down          # Conserva output/
+make comparar-serial
+```
+
+Lee todos los Parquet de `input/`, ordenados por nombre, y compara la referencia
+con cada directorio `output/client_*`. No cambiar la entrada entre la ejecución
+distribuida y la serial, ni dejar directorios de clientes de ejecuciones anteriores.
+El comando no levanta el sistema: compara sus resultados ya guardados.
+
+Usa `version-secuencial.ipynb` de la raíz sin modificarlo: reemplaza su carga de
+Kaggle por los archivos locales y ejecuta sus celdas de cálculo. La referencia
+conserva el uso de memoria de pandas del notebook: necesita memoria para el conjunto
+completo de entrada. Sus dependencias y las stopwords se instalan en una imagen
+Docker separada. No es necesario instalar Jupyter en el host.
+
+Los CSV seriales, las imágenes descargadas para Q2, el informe y las diferencias
+quedan en `registros/comparacion-serial/<ejecución>/`. Las imágenes se comparan por
+contenido; un error HTTP impide completar la referencia y una imagen cambiada en
+el servidor puede generar una discrepancia. No se descartan esos errores.
+Se ignora el orden de las filas pero se conservan sus repeticiones. Q4 se compara
+estrictamente, incluyendo las palabras elegidas en empates del puesto veinte.
+
+El comando devuelve 0 si todos coinciden, 1 si hay diferencias y 2 si no pudo
+completar la verificación. La ausencia de un CSV representa una consulta vacía,
+como en el cliente; ejecutar únicamente después de recibir todos los cierres.
+`make test-serial` verifica el adaptador y comparador con datos sintéticos, sin
+acceder a Wikimedia. Para otras rutas u opciones: `bash scripts/comparar_serial.sh --help`.

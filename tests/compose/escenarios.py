@@ -109,5 +109,65 @@ class EscenariosCompose(unittest.TestCase):
                 self.config['grupos'] = original
 
 
+
+class EscenariosEsperaClientes(unittest.TestCase):
+    """Verifica la espera y el resumen con una interfaz Docker simulada."""
+
+    def ejecutar(self, codigos, fallo_espera=False):
+        import os
+        with TemporaryDirectory(prefix='prueba-espera-clientes-') as temporal:
+            raiz = Path(temporal)
+            docker = raiz / 'docker'
+            docker.write_text('''#!/usr/bin/env python3
+import json
+import os
+import sys
+from pathlib import Path
+args = sys.argv[1:]
+with open(os.environ['REGISTRO_DOCKER'], 'a') as archivo:
+    archivo.write(json.dumps(args) + '\\n')
+if args[0] == 'wait':
+    if os.environ['FALLO_ESPERA'] == '1':
+        sys.exit(1)
+    indice = int(args[1].removeprefix('contenedor-'))
+    print(json.loads(os.environ['CODIGOS_CLIENTES'])[indice])
+elif 'ps' in args:
+    servicio = args[-1]
+    print('contenedor-' + ('0' if servicio == 'client' else servicio.split('-')[1]))
+''')
+            docker.chmod(0o755)
+            registro = raiz / 'llamadas.jsonl'
+            entorno = dict(os.environ, PATH=f'{raiz}:{os.environ["PATH"]}',
+                           REGISTRO_DOCKER=str(registro), CODIGOS_CLIENTES=json.dumps(codigos),
+                           FALLO_ESPERA=str(int(fallo_espera)))
+            resultado = subprocess.run(
+                ['bash', str(RAIZ / 'scripts/ejecutar_sistema.sh'), str(len(codigos))],
+                env=entorno, capture_output=True, text=True, timeout=10,
+            )
+            llamadas = [json.loads(linea) for linea in registro.read_text().splitlines()]
+            return resultado, llamadas
+
+    def test_espera_todos_los_clientes_y_conserva_el_despliegue(self):
+        resultado, llamadas = self.ejecutar([0, 0, 0])
+        self.assertEqual(resultado.returncode, 0, resultado.stderr)
+        self.assertEqual([c for c in llamadas if c[0] == 'wait'],
+                         [['wait', f'contenedor-{i}'] for i in range(3)])
+        self.assertIn('Todos los clientes terminaron correctamente', resultado.stdout)
+        for indice in range(3):
+            self.assertIn(f'client_{indice}: resultados completos', resultado.stdout)
+        self.assertFalse(any('down' in c or 'stop' in c for c in llamadas))
+
+    def test_un_cliente_fallido_no_oculta_los_demas_y_docker_fallido_no_da_exito(self):
+        resultado, llamadas = self.ejecutar([1, 0, 143])
+        self.assertNotEqual(resultado.returncode, 0)
+        self.assertEqual(len([c for c in llamadas if c[0] == 'wait']), 3)
+        self.assertIn('client_0: ERROR', resultado.stderr)
+        self.assertIn('client_2: ERROR', resultado.stderr)
+        self.assertNotIn('Todos los clientes terminaron correctamente', resultado.stdout)
+        resultado, _ = self.ejecutar([0], fallo_espera=True)
+        self.assertNotEqual(resultado.returncode, 0)
+        self.assertNotIn('Todos los clientes terminaron correctamente', resultado.stdout)
+
+
 if __name__ == '__main__':
     unittest.main()

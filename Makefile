@@ -11,6 +11,7 @@ test-compose:
 
 test:
 	bash scripts/probar_escenarios.sh todos
+	$(MAKE) test-serial
 
 test-middleware:
 	bash scripts/probar_escenarios.sh middleware
@@ -30,9 +31,9 @@ test-sigterm:
 test-sigterm-despliegue:
 	bash scripts/probar_escenarios.sh despliegue
 
-# Levanta todo el sistema (workers, gateway y clientes) y muestra los logs.
+# Levanta el sistema y espera la finalización de todos los clientes.
 up: generar-compose
-	$(COMPOSE) --profile clientes up --build
+	bash scripts/ejecutar_sistema.sh $(CLIENTES)
 
 # Pipeline completo con un solo cliente, mostrando solo los logs del cliente (EOF y tiempo total).
 # Los resultados quedan en output/client_0. Falla si el cliente no termina bien;
@@ -46,3 +47,11 @@ up-quiet: generar-compose
 # Baja el despliegue y borra los volúmenes.
 down:
 	$(COMPOSE) --profile clientes down -v --remove-orphans
+
+.PHONY: comparar-serial test-serial
+comparar-serial:
+	bash scripts/comparar_serial.sh
+
+test-serial:
+	docker build -f scripts/serial/Dockerfile -t wikipedia-comparacion-serial .
+	docker run --rm --entrypoint python -v "$(CURDIR):/proyecto:ro" wikipedia-comparacion-serial -m unittest discover -s tests/serial -v
