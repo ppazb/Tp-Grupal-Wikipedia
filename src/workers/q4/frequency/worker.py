@@ -1,9 +1,14 @@
 """Worker de Frecuencia: aportes por abstract, parciales y cierre de cada ejecución."""
 
+import logging
+
 from src.common.protocol.dto import Datos, Entrada
 from src.common.protocol.registros import Esquema
 from src.workers.base_worker import Worker
 from .parciales import EmisorParciales
+
+
+REGISTRO = logging.getLogger(__name__)
 
 
 class WorkerFrecuencia(Worker):
@@ -28,6 +33,8 @@ class WorkerFrecuencia(Worker):
         self._validar_entrada(datos.entrada)
         if datos.contenido.esquema is not Esquema.PALABRA:
             raise ValueError('Frecuencia requiere lotes con esquema PALABRA')
+        REGISTRO.debug('Frecuencia: ejecución %s, lote recibido con %d aportes',
+                       datos.entrada.id_ejecucion, len(datos.contenido.registros))
         for aporte in datos.contenido.registros:
             self.comprobar_detencion()
             self._parciales.acumular(datos.entrada.id_ejecucion, aporte)
@@ -35,10 +42,14 @@ class WorkerFrecuencia(Worker):
     def finalizar_entrada(self, entrada):
         """Vacía el último parcial antes de publicar el EOF, incluso sin aportes."""
         self._validar_entrada(entrada)
+        REGISTRO.info('Frecuencia: ejecución %s, entrada completa; emitiendo pendientes',
+                      entrada.id_ejecucion)
         self._parciales.finalizar_entrada(entrada.id_ejecucion)
         self._middleware.finalizar_entrada(
             self._grupo_salida, Entrada(entrada.id_ejecucion, self._entrada_salida),
         )
+        REGISTRO.info('Frecuencia: ejecución %s, parciales enviados y cierre publicado hacia %s/%s',
+                      entrada.id_ejecucion, self._grupo_salida, self._entrada_salida)
 
     def _crear_presupuesto(self, id_ejecucion):
         return self._middleware.crear_presupuesto_lote(
@@ -50,6 +61,8 @@ class WorkerFrecuencia(Worker):
         self._middleware.publicar(
             self._grupo_salida, datos, clave_afinidad=id_ejecucion,
         )
+        REGISTRO.debug('Frecuencia: ejecución %s, parcial publicado con %d conteos',
+                       id_ejecucion, len(lote.registros))
 
     def _validar_entrada(self, entrada):
         if entrada.nombre != self._entrada:

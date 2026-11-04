@@ -1,6 +1,7 @@
 """Arranque de Top N con presupuesto explícito y almacenamiento temporal propio."""
 
 import argparse
+import logging
 from functools import partial
 
 from src.common.protocol.registros import Esquema
@@ -11,6 +12,9 @@ from .consolidador import ConsolidadorFrecuencias
 from .worker import WorkerTopN
 
 
+REGISTRO = logging.getLogger(__name__)
+
+
 ENTRADA_CONTEOS = 'conteos'
 GRUPO_RESULTADOS = 'gateway_resultados'
 ENTRADA_RESULTADOS = 'q4'
@@ -18,6 +22,8 @@ ENTRADA_RESULTADOS = 'q4'
 
 def ejecutar():
     """Valida el despliegue y ejecuta Top N liberando archivos y conexión al salir."""
+    logging.basicConfig(level=logging.INFO,
+                        format='%(asctime)s [%(levelname)s] %(name)s: %(message)s')
     parser = argparse.ArgumentParser(description='Worker de Top 20 global de Q4')
     agregar_argumentos_comunicacion(
         parser, entrada=ENTRADA_CONTEOS, grupo_salida=GRUPO_RESULTADOS,
@@ -34,6 +40,7 @@ def ejecutar():
     validar_rutas(configuracion, argumentos.entrada, argumentos.grupo_salida,
                   argumentos.entrada_salida, esquema_entrada=Esquema.CONTEO_PALABRA,
                   esquema_salida=Esquema.CONTEO_PALABRA)
+    REGISTRO.info('Top N: iniciando proceso %s', configuracion.proceso)
     with entorno_worker(configuracion) as (middleware, apagado):
         consolidador = ConsolidadorFrecuencias(
             argumentos.presupuesto_memoria_bytes, argumentos.directorio_temporal,
@@ -46,8 +53,15 @@ def ejecutar():
         )
         worker.destinos_errores = destinos_errores(configuracion)
         apagado.registrar_limpieza(worker.cerrar)
+        REGISTRO.info('Top N: listo para recibir %s; salida %s/%s',
+                      argumentos.entrada, argumentos.grupo_salida, argumentos.entrada_salida)
         worker.ejecutar(apagado)
+    REGISTRO.info('Top N: proceso detenido y recursos liberados')
 
 
 if __name__ == '__main__':
-    ejecutar()
+    try:
+        ejecutar()
+    except Exception:
+        REGISTRO.exception('Top N: el proceso terminó con un error')
+        raise

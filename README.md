@@ -66,7 +66,26 @@ Para detener el despliegue mediante SIGTERM, sin eliminar todavía sus recursos:
 docker compose -f docker-compose.yaml --profile clientes stop --timeout 30
 ```
 
-Después, ejecutar `make down` para limpiar antes de una nueva ejecución.
+Para guardar los logs actuales por servicio (incluidos clientes terminados y
+RabbitMQ), ejecutar antes de eliminar los contenedores:
+
+```bash
+make exportar-logs
+make down
+```
+
+Cada servicio se guarda en `registros/logs/<servicio>.log`, usando su nombre en
+Compose, incluidas las réplicas. Cada exportación exitosa reemplaza el archivo
+anterior de ese servicio. Conserva stdout/stderr,
+prefijos y timestamps de Docker. No cambia el nivel ni los mensajes
+de logging y no carga los logs completos en memoria. Si falla un servicio, devuelve
+error y conserva su salida con extensión `.log.incompleto`.
+
+Se puede exportar durante la ejecución o después de `stop`; para incluir los logs
+de apagado, usar `stop`, exportar y luego `make down`. Solo se exporta lo que Docker
+aún conserva (la rotación puede haber eliminado registros anteriores).
+`make up-quiet` elimina automáticamente sus contenedores al terminar: esta secuencia
+de exportación posterior corresponde a `make up`, que los conserva.
 
 ## Pruebas
 
@@ -92,7 +111,8 @@ Secuencia completa (ajustar `CLIENTES` según la ejecución):
 
 ```bash
 make up CLIENTES=3  # Esperar el resumen de finalización exitosa de todos los clientes
-make down          # Conserva output/
+make exportar-logs # Opcional: guardar logs antes de eliminar contenedores
+make down          # Conserva output/ y registros/
 make comparar-serial
 ```
 

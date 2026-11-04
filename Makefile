@@ -49,10 +49,14 @@ up-quiet:
 down:
 	$(COMPOSE) --profile clientes down -v --remove-orphans
 
-.PHONY: comparar-serial test-serial
+.PHONY: comparar-serial test-serial exportar-logs
 comparar-serial:
 	bash scripts/comparar_serial.sh
 
 test-serial:
 	docker build -f scripts/serial/Dockerfile -t wikipedia-comparacion-serial .
 	docker run --rm --entrypoint python -v "$(CURDIR):/proyecto:ro" wikipedia-comparacion-serial -m unittest discover -s tests/serial -v
+
+# Guarda logs de servicios activos y terminados antes de eliminar sus contenedores.
+exportar-logs:
+	bash scripts/exportar_logs.sh

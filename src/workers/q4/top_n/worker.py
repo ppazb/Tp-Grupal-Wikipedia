@@ -1,9 +1,14 @@
 """Worker de Top N: consolidación completa, resultado definitivo y cierre de Q4."""
 
+import logging
+
 from src.common.protocol.dto import Datos, Entrada
 from src.common.protocol.registros import Esquema, Lote
 from src.workers.base_worker import Worker
 from .seleccion import seleccionar_top
+
+
+REGISTRO = logging.getLogger(__name__)
 
 
 RECURSO_CONTEOS = 'conteos_q4'
@@ -32,6 +37,8 @@ class WorkerTopN(Worker):
         self._validar_entrada(datos.entrada)
         if datos.contenido.esquema is not Esquema.CONTEO_PALABRA:
             raise ValueError('Top N requiere lotes con esquema CONTEO_PALABRA')
+        REGISTRO.debug('Top N: ejecución %s, lote recibido con %d conteos parciales',
+                       datos.entrada.id_ejecucion, len(datos.contenido.registros))
         for parcial in datos.contenido.registros:
             self.comprobar_detencion()
             self._consolidador.acumular(datos.entrada.id_ejecucion, parcial)
@@ -40,6 +47,8 @@ class WorkerTopN(Worker):
         """Publica el resultado completo y después el cierre de Q4 de esta instancia."""
         self._validar_entrada(entrada)
         ejecucion = entrada.id_ejecucion
+        REGISTRO.info('Top N: ejecución %s, entrada completa; consolidando y seleccionando el top',
+                      ejecucion)
         self._consolidador.finalizar_entrada(ejecucion)
         self._middleware.registrar_recurso(
             ejecucion, RECURSO_CONTEOS,
@@ -50,6 +59,9 @@ class WorkerTopN(Worker):
         salida = Entrada(ejecucion, self._entrada_salida)
         self._publicar_resultado(salida, resultado)
         self._middleware.finalizar_entrada(self._grupo_salida, salida)
+        REGISTRO.info('Top N: ejecución %s, resultado de %d palabras enviado y cierre publicado '
+                      'hacia %s/%s', ejecucion, len(resultado),
+                      self._grupo_salida, self._entrada_salida)
 
     def _publicar_resultado(self, entrada, resultado):
         if not resultado:
@@ -74,6 +86,8 @@ class WorkerTopN(Worker):
         self._middleware.publicar(
             self._grupo_salida, datos, clave_afinidad=entrada.id_ejecucion,
         )
+        REGISTRO.debug('Top N: ejecución %s, lote de resultado publicado con %d palabras',
+                       entrada.id_ejecucion, len(registros))
 
     def _validar_entrada(self, entrada):
         if entrada.nombre != self._entrada:
