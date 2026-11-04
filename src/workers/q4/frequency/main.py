@@ -1,6 +1,7 @@
 """Arranque del proceso de Frecuencia con configuración de comunicación y parciales."""
 
 import argparse
+import logging
 
 from src.common.protocol.registros import Esquema
 from src.middleware.cargador_configuracion import cargar_configuracion
@@ -16,6 +17,7 @@ ENTRADA_CONTEOS = 'conteos'
 
 def ejecutar():
     """Valida las rutas y ejecuta el worker con una conexión propia del proceso."""
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
     parser = argparse.ArgumentParser(description='Worker de frecuencias parciales de Q4')
     agregar_argumentos_comunicacion(
         parser, entrada=ENTRADA_PALABRAS, grupo_salida=GRUPO_CONTEOS,

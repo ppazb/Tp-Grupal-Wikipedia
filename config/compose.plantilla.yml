@@ -80,9 +80,13 @@ services:
       - LOG_LEVEL=INFO
     healthcheck:
       test: ["CMD", "python3", "-c", "import socket; socket.create_connection(('localhost', 5555), 2).close()"]
-      interval: 3s
+      # Durante el arranque se sondea cada 2 s para que los clientes empiecen en cuanto el gateway acepta
+      # conexiones; después, cada 30 s. Requiere Docker Engine 25 o superior (start_interval).
+      start_period: 30s
+      start_interval: 2s
+      interval: 30s
       timeout: 3s
-      retries: 20
+      retries: 3
     deploy:
       replicas: 1
 

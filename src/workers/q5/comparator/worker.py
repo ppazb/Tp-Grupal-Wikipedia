@@ -28,7 +28,6 @@ class ComparatorQ5Worker(WorkerBase):
         self.registrar_limpieza(self._resumenes.clear)
         # Tamaño de lote para escrituras agrupadas en disco
         self._batch_size_q5 = int(os.environ.get("BATCH_SIZE_Q5", os.environ.get("batch_size_q5", "1000")))
-        logger.info("q5_comparator: configurado batch_size_q5=%d", self._batch_size_q5)
         # Buffer de candidatos en memoria antes de persistir a disco: id_ejecucion -> List[Candidato]
         self._buffer_candidatos: Dict[str, List[Candidato]] = {}
         self.registrar_limpieza(self._buffer_candidatos.clear)
@@ -45,6 +44,7 @@ class ComparatorQ5Worker(WorkerBase):
 
     def procesar(self, datos: Datos) -> None:
         id_ejecucion = datos.entrada.id_ejecucion
+        self.anunciar_cliente("q5_comparator", id_ejecucion)
         entrada_nombre = datos.entrada.nombre
 
         if entrada_nombre == "candidatos":
@@ -66,26 +66,17 @@ class ComparatorQ5Worker(WorkerBase):
                 self.comprobar_detencion()
                 if isinstance(reg, ResumenHistorico):
                     self._resumenes[id_ejecucion] = (reg.suma, reg.articulos)
-                    promedio = (reg.suma / reg.articulos) if reg.articulos > 0 else 0.0
-                    logger.info(
-                        "q5_comparator: recibido resumen histórico para '%s': suma=%d, articulos=%d, promedio=%.2f",
-                        id_ejecucion, reg.suma, reg.articulos, promedio
-                    )
 
     def al_finalizar(self, entrada: Entrada) -> None:
         """Verifica si ambas entradas (candidatos y resumen) cerraron para esta ejecución."""
         id_ejecucion = entrada.id_ejecucion
-        logger.info("q5_comparator: cierre recibido para entrada '%s' de '%s'", entrada.nombre, id_ejecucion)
-
         if entrada.nombre == "candidatos":
             self._volcar_buffer(id_ejecucion)
 
         # Si aún quedan entradas pendientes, no procesamos aún (esperamos la barrera completa)
         if self.middleware.entradas_pendientes(id_ejecucion):
-            logger.info("q5_comparator: '%s' aún tiene entradas pendientes. Esperando barrera...", id_ejecucion)
             return
 
-        logger.info("q5_comparator: todas las entradas cerradas para '%s'. Iniciando comparación y emisión.", id_ejecucion)
         self._filtrar_y_publicar_resultados(id_ejecucion)
 
     def _filtrar_y_publicar_resultados(self, id_ejecucion: str) -> None:
@@ -93,21 +84,15 @@ class ComparatorQ5Worker(WorkerBase):
         suma, articulos = self._resumenes.pop(id_ejecucion, (0, 0))
         promedio = (suma / articulos) if articulos > 0 else 0.0
 
-        logger.info("q5_comparator: evaluando candidatos de '%s' contra promedio histórico de %.4f", id_ejecucion, promedio)
-
         entrada_salida = Entrada(id_ejecucion, "q5")
         presupuesto = self.middleware.crear_presupuesto_lote(entrada_salida, Esquema.CANDIDATO)
         lote_actual: List[Candidato] = []
-        total_evaluados = 0
-        total_superaron = 0
 
         try:
             with closing(self._storage.iterar_candidatos(id_ejecucion)) as candidatos:
                 for candidato in candidatos:
                     self.comprobar_detencion()
-                    total_evaluados += 1
                     if candidato.cantidad > promedio:
-                        total_superaron += 1
                         if not presupuesto.admitir(candidato):
                             self._publicar_lote(entrada_salida, lote_actual)
                             lote_actual.clear()
@@ -119,11 +104,6 @@ class ComparatorQ5Worker(WorkerBase):
             # Publicar último lote remanente
             if lote_actual:
                 self._publicar_lote(entrada_salida, lote_actual)
-
-            logger.info(
-                "q5_comparator: ejecución '%s' completada. Evaluados: %d | Superaron promedio: %d",
-                id_ejecucion, total_evaluados, total_superaron
-            )
 
         except BaseException:
             try:

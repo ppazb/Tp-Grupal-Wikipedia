@@ -57,6 +57,8 @@ class Worker(ABC):
         self._apagado = None
         self._limpiezas = []
         self._cerrado = False
+        self._clientes_vistos = set()
+        self.registrar_limpieza(self._clientes_vistos.clear)
 
     def ejecutar(self, apagado=None):
         """Consume entradas y libera recursos al terminar, fallar o recibir una señal."""
@@ -89,6 +91,12 @@ class Worker(ABC):
             raise TypeError("La limpieza debe ser invocable")
         self._limpiezas.append(operacion)
 
+    def anunciar_cliente(self, nombre, id_ejecucion):
+        """Registra en el log la primera vez que llegan datos de una ejecución a este worker."""
+        if id_ejecucion not in self._clientes_vistos:
+            self._clientes_vistos.add(id_ejecucion)
+            REGISTRO.info("%s: llegó un nuevo cliente (ejecución '%s')", nombre, id_ejecucion)
+
     def cerrar(self):
         """Libera todos los recursos locales una sola vez, sin emitir EOF."""
         if self._cerrado:
@@ -119,6 +127,7 @@ class Worker(ABC):
         self.finalizar_entrada(entrada)
         self.comprobar_detencion()
         if not self._middleware.entradas_pendientes(entrada.id_ejecucion):
+            self._clientes_vistos.discard(entrada.id_ejecucion)
             for destino in self.destinos_errores:
                 self._middleware.finalizar_entrada(destino, Entrada(entrada.id_ejecucion, ENTRADA_ERRORES))
             self._completada = entrada.id_ejecucion
@@ -150,8 +159,6 @@ class WorkerBase(Worker):
         self.configuracion = cargar_configuracion(ruta_configuracion)
         self.middleware = None
         super().__init__(self.middleware)
-        self._clientes_vistos = set()
-        self.registrar_limpieza(self._clientes_vistos.clear)
         self.destinos_errores = destinos_errores(self.configuracion)
 
     def iniciar(self):
@@ -160,16 +167,9 @@ class WorkerBase(Worker):
             self.middleware = self._middleware = middleware
             self.ejecutar(apagado)
 
-    def anunciar_cliente(self, nombre, id_ejecucion):
-        """Registra en el log la primera vez que llegan datos de una ejecución a este worker."""
-        if id_ejecucion not in self._clientes_vistos:
-            self._clientes_vistos.add(id_ejecucion)
-            REGISTRO.info("%s: llegó un nuevo cliente (ejecución '%s')", nombre, id_ejecucion)
-
     def finalizar_entrada(self, entrada):
         """Delega la finalización de negocio al callback del nodo."""
         self.al_finalizar(entrada)
-        self._clientes_vistos.discard(entrada.id_ejecucion)
 
     @abstractmethod
     def al_finalizar(self, entrada):

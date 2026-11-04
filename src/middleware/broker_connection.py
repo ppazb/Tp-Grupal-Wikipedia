@@ -12,6 +12,7 @@ from .interfaz import ErrorCierre, ErrorConexion, MiddlewareCerrado, OperacionIn
 
 
 REGISTRO = logging.getLogger(__name__)
+logging.getLogger("pika").setLevel(logging.WARNING)
 INTENTOS_CONEXION = 1
 
 

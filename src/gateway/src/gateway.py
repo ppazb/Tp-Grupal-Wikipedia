@@ -289,6 +289,9 @@ class ServidorGateway:
         cantidad_lotes = 0
         filas_descartadas = 0
         filas_totales = 0
+        # Un cliente real se anuncia con su primer frame: el healthcheck abren y cierran
+        # el socket sin enviar nada y no deben contarse como clientes
+        anunciado = False
         
         # El socket es bloqueante y sin timeout: se duerme en recv hasta que llega
         # el siguiente frame. El apagado despierta este recv cerrando el socket.
@@ -308,6 +311,10 @@ class ServidorGateway:
                 return
 
             tipo, cuerpo = frame
+
+            if not anunciado:
+                anunciado = True
+                LOG.info("Ejecución %s: llegó un cliente", id_ejecucion)
 
             # Es dato
             if tipo is TipoFrame.DATOS:
@@ -334,7 +341,7 @@ class ServidorGateway:
             
             sesion.enviar(TipoFrame.ACK, cantidad_lotes.to_bytes(BYTE_8, "big"))
             
-            LOG.info("Ejecución %s admitida en %.1f s: %d lotes, %d filas (%d descartadas), publicados en %s",
+            LOG.info("Ejecución %s: EOF recibido a los %.1f s; %d lotes, %d filas (%d descartadas), publicados en %s",
                 id_ejecucion, time.monotonic() - inicio, cantidad_lotes, filas_totales, filas_descartadas,
                 ", ".join(ruta.destino for ruta in self._rutas),
             )

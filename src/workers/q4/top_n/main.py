@@ -2,6 +2,7 @@
 
 import argparse
 from functools import partial
+import logging
 
 from src.common.protocol.registros import Esquema
 from src.middleware.cargador_configuracion import cargar_configuracion
@@ -18,6 +19,7 @@ ENTRADA_RESULTADOS = 'q4'
 
 def ejecutar():
     """Valida el despliegue y ejecuta Top N liberando archivos y conexión al salir."""
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
     parser = argparse.ArgumentParser(description='Worker de Top 20 global de Q4')
     agregar_argumentos_comunicacion(
         parser, entrada=ENTRADA_CONTEOS, grupo_salida=GRUPO_RESULTADOS,

@@ -23,6 +23,7 @@ class WordOccurrencesWorker(WorkerBase):
 
     def procesar(self, datos: Datos) -> None:
         id_ejecucion = datos.entrada.id_ejecucion
+        self.anunciar_cliente("word_occurrences", id_ejecucion)
         entrada_nombre = datos.entrada.nombre
         registros = datos.contenido.registros
 
@@ -55,13 +56,6 @@ class WordOccurrencesWorker(WorkerBase):
                 cantidades_q5.append(CantidadPalabras(cantidad=cantidad_total))
             elif entrada_nombre == "textos_recientes":
                 candidatos_q5.append(Candidato(url=articulo.url, cantidad=cantidad_total))
-
-        logger.info(
-            "word_occurrences: procesados %d abstracts de '%s' para '%s'. "
-            "Palabras Q4: %d | Cantidades Q5: %d | Candidatos Q5: %d",
-            len(registros), entrada_nombre, id_ejecucion,
-            len(palabras_q4), len(cantidades_q5), len(candidatos_q5)
-        )
 
         # Hacia Q5 Average (históricos), Q5 Comparator (candidatos), Q4 Frecuencias (palabras únicas por
         # abstract) y Q3 Intersección (pares palabra-idioma). Cada salida se parte en los mensajes que
@@ -104,7 +98,6 @@ class WordOccurrencesWorker(WorkerBase):
     def al_finalizar(self, entrada: Entrada) -> None:
         """Propaga el cierre correspondiente al tramo completado."""
         id_ejecucion = entrada.id_ejecucion
-        logger.info("word_occurrences: cierre recibido para entrada '%s' de '%s'", entrada.nombre, id_ejecucion)
 
         if entrada.nombre == "textos_historicos":
             try:

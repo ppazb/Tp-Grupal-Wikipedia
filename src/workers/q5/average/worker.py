@@ -20,6 +20,7 @@ class AverageQ5Worker(WorkerBase):
 
     def procesar(self, datos: Datos) -> None:
         id_ejecucion = datos.entrada.id_ejecucion
+        self.anunciar_cliente("q5_average", id_ejecucion)
         if id_ejecucion not in self._acumuladores:
             self._acumuladores[id_ejecucion] = {"suma": 0, "articulos": 0}
 
@@ -48,12 +49,6 @@ class AverageQ5Worker(WorkerBase):
         totales = self._acumuladores.pop(id_ejecucion, {"suma": 0, "articulos": 0})
         suma = totales["suma"]
         articulos = totales["articulos"]
-        promedio = (suma / articulos) if articulos > 0 else 0.0
-
-        logger.info(
-            "q5_average: cierre para '%s'. Total suma=%d, total articulos=%d (promedio histórico: %.2f)",
-            id_ejecucion, suma, articulos, promedio
-        )
 
         resumen = ResumenHistorico(suma=suma, articulos=articulos)
         entrada_resumen = Entrada(id_ejecucion, "resumen_historico")

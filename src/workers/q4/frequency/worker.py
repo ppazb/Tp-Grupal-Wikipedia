@@ -26,6 +26,7 @@ class WorkerFrecuencia(Worker):
     def procesar(self, datos):
         """Suma cada presencia recibida, sin deduplicar palabras entre abstracts."""
         self._validar_entrada(datos.entrada)
+        self.anunciar_cliente("q4_frequency", datos.entrada.id_ejecucion)
         if datos.contenido.esquema is not Esquema.PALABRA:
             raise ValueError('Frecuencia requiere lotes con esquema PALABRA')
         for aporte in datos.contenido.registros:
