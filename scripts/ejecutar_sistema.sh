@@ -11,6 +11,7 @@ compose=(docker compose -f docker-compose.yaml --profile clientes)
 trap 'echo "Espera interrumpida. El despliegue sigue levantado; usar make down para detenerlo." >&2; exit 130' INT
 trap 'echo "Espera interrumpida. El despliegue sigue levantado; usar make down para detenerlo." >&2; exit 143' TERM
 
+inicio=$SECONDS
 "${compose[@]}" up -d --build
 contenedores=()
 for ((indice=0; indice<clientes; indice++)); do
@@ -32,6 +33,7 @@ for contenedor in "${contenedores[@]}"; do
     codigos+=("$(docker wait "$contenedor")")
 done
 
+total=$((SECONDS - inicio))
 resultado=0
 echo 'Resumen final de clientes:'
 for ((indice=0; indice<clientes; indice++)); do
@@ -43,6 +45,7 @@ for ((indice=0; indice<clientes; indice++)); do
         resultado=1
     fi
 done
+printf 'Tiempo total de punta a punta (build y arranque incluidos): %d min %d s (%d s)\n' $((total / 60)) $((total % 60)) "$total"
 if ((resultado == 0)); then
     echo 'Todos los clientes terminaron correctamente. Ya se puede ejecutar make down y make comparar-serial.'
 else
