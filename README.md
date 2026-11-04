@@ -97,8 +97,11 @@ make comparar-serial
 ```
 
 Lee todos los Parquet de `input/`, ordenados por nombre, y compara la referencia
-con cada directorio `output/client_*`. No cambiar la entrada entre la ejecución
-distribuida y la serial, ni dejar directorios de clientes de ejecuciones anteriores.
+con los clientes definidos en el `docker-compose.yaml` generado. Solo se comparan sus clientes,
+aunque `output/` conserve directorios adicionales de ejecuciones anteriores.
+No cambiar la entrada ni regenerar el Compose para otro despliegue antes de comparar.
+Se exige que existan todos los directorios seleccionados; la selección no verifica
+por sí sola que hayan terminado.
 El comando no levanta el sistema: compara sus resultados ya guardados.
 
 Usa `version-secuencial.ipynb` de la raíz sin modificarlo: reemplaza su carga de

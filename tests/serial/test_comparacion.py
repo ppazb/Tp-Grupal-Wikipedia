@@ -1,6 +1,7 @@
 """Escenarios de referencia intacta, comparación por cliente e imágenes diferentes."""
 
 import hashlib
+from io import StringIO
 import json
 import os
 import sys
@@ -15,7 +16,7 @@ import pandas as pd
 import requests
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'scripts'))
-from comparar_serial import main
+from comparar_serial import main, seleccionar_clientes
 from serial.comparacion import comparar, descargar_imagen, exportar
 from serial.notebook import ejecutar_notebook
 from src.common.io_adapters.descargas_http import DescargadorHTTP
@@ -91,9 +92,11 @@ class ComparacionSerial(unittest.TestCase):
                 for cliente in clientes:
                     shutil.copytree(referencia, cliente)
                 self.assertTrue(comparar(referencia, clientes, raiz / 'diferencias.csv'))
+                compose = json.dumps({'services': {f'client-{i}': {'environment': {'CLIENT_ID': str(i)}}
+                                                   for i in range(2)}})
                 argumentos = ['comparar_serial', '--entrada', str(entrada), '--salidas', str(raiz),
                               '--notebook', str(notebook), '--registros', str(raiz / 'registros')]
-                with patch.object(sys, 'argv', argumentos):
+                with patch.object(sys, 'argv', argumentos), patch.object(sys, 'stdin', StringIO(compose)):
                     self.assertEqual(main(), 0)
                 # Una fila duplicada debe detectarse aunque el conjunto de valores coincida.
                 with (clientes[0] / 'q4.csv').open('a') as archivo:
@@ -103,9 +106,9 @@ class ComparacionSerial(unittest.TestCase):
                 diferencias = (raiz / 'diferencias.csv').read_text()
                 self.assertIn('client_0,q4,sobrante', diferencias)
                 self.assertIn('client_1,q2,faltante', diferencias)
-                with patch.object(sys, 'argv', argumentos):
+                with patch.object(sys, 'argv', argumentos), patch.object(sys, 'stdin', StringIO(compose)):
                     self.assertEqual(main(), 1)
-                with patch.object(sys, 'argv', argumentos + ['--notebook', str(raiz / 'ausente.ipynb')]):
+                with patch.object(sys, 'argv', argumentos + ['--notebook', str(raiz / 'ausente.ipynb')]), patch.object(sys, 'stdin', StringIO(compose)):
                     self.assertEqual(main(), 2)
                 with requests.Session() as sesion:
                     resultados['q2'].iloc[0, 2] = f'http://127.0.0.1:{servidor.server_port}/error'
@@ -211,3 +214,23 @@ class ComparacionSerial(unittest.TestCase):
         self.assertGreater(demora_servidor(fecha), 88)
         self.assertEqual(demora_servidor('inválido'), 0)
         self.assertEqual(demora_servidor(None), 0)
+
+    def test_reducir_clientes_no_compara_resultados_de_la_ejecucion_anterior(self):
+        with tempfile.TemporaryDirectory() as temporal:
+            raiz = Path(temporal)
+            for indice in range(3):
+                (raiz / f'client_{indice}').mkdir()
+            compose = {'services': {f'client-{i}': {'environment': {'CLIENT_ID': str(i)}}
+                                    for i in range(3)}}
+            self.assertEqual(seleccionar_clientes(raiz, compose),
+                             [raiz / f'client_{i}' for i in range(3)])
+            compose['services'] = {'client': {'environment': {'CLIENT_ID': '0'}}}
+            with patch('builtins.print') as imprimir:
+                self.assertEqual(seleccionar_clientes(raiz, compose), [raiz / 'client_0'])
+                imprimir.assert_not_called()
+            self.assertTrue((raiz / 'client_2').is_dir())
+            (raiz / 'client_0').rmdir()
+            with self.assertRaisesRegex(ValueError, 'Faltan resultados'):
+                seleccionar_clientes(raiz, compose)
+            with self.assertRaises(ValueError):
+                seleccionar_clientes(raiz, {'services': {}})

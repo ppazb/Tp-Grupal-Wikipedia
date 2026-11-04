@@ -16,6 +16,20 @@ from serial.comparacion import comparar, exportar, huella
 from serial.notebook import ejecutar_notebook
 
 
+def seleccionar_clientes(salidas, compose):
+    """Selecciona los clientes del Compose y exige que sus resultados existan."""
+    identidades = sorted(int(servicio['environment']['CLIENT_ID'])
+                         for servicio in compose['services'].values()
+                         if 'CLIENT_ID' in servicio.get('environment', {}))
+    if not identidades or identidades != list(range(len(identidades))):
+        raise ValueError('El Compose debe definir clientes con identidades consecutivas desde cero')
+    clientes = [salidas / f'client_{indice}' for indice in identidades]
+    faltantes = [str(ruta) for ruta in clientes if not ruta.is_dir()]
+    if faltantes:
+        raise ValueError(f'Faltan resultados de clientes: {", ".join(faltantes)}')
+    return clientes
+
+
 def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     parser = argparse.ArgumentParser(description=__doc__)
@@ -27,9 +41,10 @@ def main():
     args = parser.parse_args()
     if args.timeout_http <= 0:
         parser.error('--timeout-http debe ser positivo')
-    clientes = sorted(ruta for ruta in args.salidas.glob('client_*') if ruta.is_dir())
-    if not clientes:
-        parser.error(f'No hay resultados de clientes en {args.salidas}')
+    try:
+        clientes = seleccionar_clientes(args.salidas, json.load(sys.stdin))
+    except (ValueError, KeyError, TypeError) as error:
+        parser.error(f'No se pudieron seleccionar los clientes del Compose: {error}')
     destino = args.registros / datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S.%fZ')
     destino.mkdir(parents=True)
     informe = {'estado': 'incompleto',

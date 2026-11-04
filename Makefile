@@ -38,7 +38,8 @@ up: generar-compose
 # Pipeline completo con un solo cliente, mostrando solo los logs del cliente (EOF y tiempo total).
 # Los resultados quedan en output/client_0. Falla si el cliente no termina bien;
 # siempre baja el despliegue al terminar.
-up-quiet: generar-compose
+up-quiet:
+	python3 scripts/generar_compose.py --clientes 1
 	$(COMPOSE) --profile clientes down -v --remove-orphans
 	$(COMPOSE) up -d --build --wait
 	$(COMPOSE) build client

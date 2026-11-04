@@ -5,7 +5,6 @@ from dataclasses import dataclass, field
 from itertools import groupby
 from functools import cmp_to_key
 from pathlib import Path
-from struct import calcsize
 from sys import getsizeof
 from tempfile import TemporaryDirectory
 
@@ -17,7 +16,8 @@ from .archivos import (
 
 
 # Reserva conservadora para referencias de la lista y espacio auxiliar de sort.
-BYTES_REFERENCIAS_POR_APORTE = 3 * calcsize('P')
+BYTES_POR_REFERENCIA = getsizeof((None,)) - getsizeof(())
+BYTES_REFERENCIAS_POR_APORTE = 3 * BYTES_POR_REFERENCIA
 BYTES_LISTA_VACIA = getsizeof([])
 
 
