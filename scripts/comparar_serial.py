@@ -2,17 +2,22 @@
 
 import argparse
 import json
+import logging
+import sys
 import os
 from datetime import datetime, timezone
 from pathlib import Path
 
 import requests
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 from serial.comparacion import comparar, exportar, huella
 from serial.notebook import ejecutar_notebook
 
 
 def main():
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--entrada', type=Path, default=Path('input'), help='Parquet locales (por defecto: input)')
     parser.add_argument('--salidas', type=Path, default=Path('output'), help='Resultados client_* (por defecto: output)')

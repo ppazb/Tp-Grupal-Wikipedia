@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import requests
 
-from src.common.runtime.apagado import Apagado
+from src.middleware.rabbitmq import MiddlewareRabbitMQ
 from tests.soporte import PLAZO_ESCENARIO, PLAZO_PROCESO
 
 
@@ -52,7 +52,7 @@ class ObservadorHTTP:
     def instalar(self, recursos):
         obtener = requests.Session.get
         cerrar = requests.Session.close
-        esperar = Apagado.esperar
+        esperar = MiddlewareRabbitMQ.esperar
 
         def obtener_observado(sesion, *argumentos, **opciones):
             self.intentos += 1
@@ -72,15 +72,15 @@ class ObservadorHTTP:
             cerrar(sesion)
             self.sesiones_cerradas.append(sesion)
 
-        def esperar_observado(apagado, segundos):
+        def esperar_observado(middleware, segundos):
             self.eventos.put('reintentando')
             # Una espera larga demuestra que el descriptor la despierta antes de vencer.
-            return esperar(apagado, PLAZO_ESCENARIO)
+            return esperar(middleware, PLAZO_ESCENARIO)
 
         recursos.enter_context(patch.object(requests.Session, 'get', obtener_observado))
         recursos.enter_context(patch.object(requests.Session, 'close', cerrar_observado))
         if self.modo == 'http_reintento':
-            recursos.enter_context(patch.object(Apagado, 'esperar', esperar_observado))
+            recursos.enter_context(patch.object(MiddlewareRabbitMQ, 'esperar', esperar_observado))
 
     def comprobar(self, worker):
         assert self.sesiones_cerradas == [worker._sesion], 'No se cerró la sesión HTTP una sola vez'

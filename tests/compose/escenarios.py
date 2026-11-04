@@ -98,7 +98,7 @@ class EscenariosCompose(unittest.TestCase):
         anterior = self.salida.read_bytes()
         for grupo, cantidad in [('frecuencias', 0), ('frecuencias', True), ('frecuencias', 1.5),
                                 ('desconocido', 1), ('gateway', 2), ('q5_average', 2),
-                                ('q5_comparator', 2), ('gateway_resultados', 2)]:
+                                ('q5_comparator', 2), ('gateway_resultados', 2), ('q2_image_downloader', 3)]:
             with self.subTest(grupo=grupo, cantidad=cantidad):
                 original = dict(self.config['grupos'])
                 self.config['grupos'][grupo] = cantidad

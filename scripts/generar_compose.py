@@ -47,6 +47,8 @@ def validar_grupos(configuracion, servicios):
     for grupo, cantidad in grupos.items():
         if type(cantidad) is not int or cantidad < 1:
             raise ValueError(f'La cantidad de instancias de {grupo} debe ser un entero positivo')
+        if grupo == 'q2_image_downloader' and cantidad > 2:
+            raise ValueError('q2_image_downloader admite hasta 2 réplicas por la concurrencia permitida por Wikimedia')
         if grupo in GRUPOS_UNICOS and cantidad != 1:
             raise ValueError(f'{grupo} solo admite una instancia con la implementación actual')
     return workers

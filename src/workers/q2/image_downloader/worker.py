@@ -5,6 +5,7 @@ import os
 import requests
 
 from src.workers.base_worker import WorkerBase
+from src.common.io_adapters.descargas_http import DescargadorHTTP, ESTADOS_AUSENTES
 from src.common.protocol.dto import Datos, Entrada
 from src.common.protocol.registros import Esquema, FragmentoImagen, Lote
 
@@ -17,8 +18,6 @@ ENTRADA_RESULTADOS = "resultados_finales_q2"
 # sin ellos responde 429 a las descargas. Se puede sobrescribir con IMAGE_USER_AGENT.
 USER_AGENT = os.environ.get("IMAGE_USER_AGENT","TpGrupalWikipedia/1.0 (https://github.com/ppazb/Tp-Grupal-Wikipedia) python-requests")
 TIMEOUT_SEGUNDOS = 15
-MAX_INTENTOS = 2
-ESPERA_ENTRE_INTENTOS_SEGUNDOS = 1.0
 
 
 class _LoteFragmentos:
@@ -57,8 +56,8 @@ class ImageDownloaderQ2(WorkerBase):
     """
     Descarga la imagen de cada artículo biográfico y la envía al gateway en fragmentos,
     para respetar limites.max_bytes_por_mensaje. Un artículo sin imagen se informa igual,
-    con un único fragmento vacío (total_bytes = 0). Si la descarga falla tras MAX_INTENTOS,
-    se descarta y se sigue con el siguiente.
+    con un único fragmento vacío (total_bytes = 0). Reintenta errores temporales
+    hasta obtener la imagen o recibir una solicitud de apagado. Omite HTTP 404/410.
     """
 
     def __init__(self, ruta_configuracion):
@@ -66,6 +65,11 @@ class ImageDownloaderQ2(WorkerBase):
         self._sesion = requests.Session()
         self.registrar_limpieza(self._sesion.close)
         self._sesion.headers["User-Agent"] = USER_AGENT
+        replicas = self.configuracion.obtener_grupo('q2_image_downloader').instancias
+        self._descargador = DescargadorHTTP(
+            esperar=lambda segundos: self.middleware.esperar(segundos),
+            comprobar=self.comprobar_detencion, replicas=replicas,
+        )
         # Deja margen para el sobre y los campos de texto del fragmento
         self._bytes_fragmento = self.configuracion.limites.max_bytes_por_mensaje // 4
 
@@ -80,7 +84,7 @@ class ImageDownloaderQ2(WorkerBase):
             # Sin imagen el artículo igual forma parte de la respuesta
             imagen = self._descargar(solicitud.url_imagen) if solicitud.url_imagen else b""
             if imagen is None:
-                logger.info("q2_image_downloader: no se pudo descargar la imagen de '%s', se descarta",
+                logger.info("q2_image_downloader: imagen inexistente para '%s', se descarta",
                             solicitud.url)
                 continue
             self._publicar_imagen(lote, solicitud, imagen)
@@ -91,27 +95,19 @@ class ImageDownloaderQ2(WorkerBase):
                     publicadas, len(datos.contenido.registros), id_ejecucion)
 
     def _descargar(self, url_imagen: str):
-        """Intenta hasta MAX_INTENTOS veces; devuelve None si todos fallan."""
-        for intento in range(1, MAX_INTENTOS + 1):
-            self.comprobar_detencion()
-            try:
-                with self._sesion.get(url_imagen, timeout=TIMEOUT_SEGUNDOS, stream=True) as respuesta:
-                    self.comprobar_detencion()
-                    respuesta.raise_for_status()
-                    return self._leer_imagen(respuesta)
-            except requests.RequestException as error:
-                self.comprobar_detencion()
-                logger.info("q2_image_downloader: intento %d/%d falló para %s: %s",
-                            intento, MAX_INTENTOS, url_imagen, error)
-                if intento < MAX_INTENTOS and not self._detenido:
-                    self._apagado.esperar(ESPERA_ENTRE_INTENTOS_SEGUNDOS)
-                    self.comprobar_detencion()
-        return None
+        """Descarga con ritmo acotado; solo omite imágenes inexistentes o eliminadas."""
+        try:
+            return self._descargador.descargar(self._sesion, url_imagen, TIMEOUT_SEGUNDOS, self._leer_imagen)
+        except requests.HTTPError as error:
+            if error.response is not None and error.response.status_code in ESTADOS_AUSENTES:
+                logger.info("Imagen inexistente: %s (%s)", url_imagen, error.response.status_code)
+                return None
+            raise
 
     def _leer_imagen(self, respuesta):
         """Lee por bloques y cancela la descarga antes de publicar una imagen incompleta."""
         imagen = bytearray()
-        for bloque in respuesta.iter_content(chunk_size=self._bytes_fragmento):
+        for bloque in self._descargador.bloques(respuesta, self._bytes_fragmento):
             self.comprobar_detencion()
             imagen.extend(bloque)
         self.comprobar_detencion()

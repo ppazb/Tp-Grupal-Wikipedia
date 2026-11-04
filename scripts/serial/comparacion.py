@@ -7,10 +7,11 @@ from pathlib import Path
 
 import requests
 
+from src.common.io_adapters.descargas_http import DescargadorHTTP, ESTADOS_AUSENTES
+
 COLUMNAS = {'q1': ('url', 'fecha'), 'q2': ('nombre', 'url', 'archivo'),
             'q3': ('palabra',), 'q4': ('palabra', 'cantidad'), 'q5': ('url', 'cantidad')}
 BLOQUE_BYTES = 64 * 1024
-MAX_INTENTOS_IMAGEN = 2
 
 
 def huella(ruta):
@@ -22,39 +23,42 @@ def huella(ruta):
     return resumen.hexdigest()
 
 
-def descargar_imagen(url, destino, sesion, timeout):
-    """Reintenta errores de descarga y elimina los archivos incompletos."""
-    for intento in range(1, MAX_INTENTOS_IMAGEN + 1):
+def descargar_imagen(url, destino, sesion, timeout, descargador=None):
+    """Guarda una imagen completa, reintentando fallos temporales sin conservar parciales."""
+    descargador = descargador or DescargadorHTTP()
+
+    def guardar(respuesta):
         try:
-            with sesion.get(url, stream=True, timeout=timeout) as respuesta:
-                respuesta.raise_for_status()
-                with destino.open('wb') as archivo:
-                    for bloque in respuesta.iter_content(BLOQUE_BYTES):
-                        if archivo.write(bloque) != len(bloque):
-                            raise OSError(f'Escritura incompleta de {destino}')
-            return
-        except requests.RequestException:
+            with destino.open('wb') as archivo:
+                for bloque in descargador.bloques(respuesta, BLOQUE_BYTES):
+                    if archivo.write(bloque) != len(bloque):
+                        raise OSError(f'Escritura incompleta de {destino}')
+        except BaseException:
             destino.unlink(missing_ok=True)
-            if intento == MAX_INTENTOS_IMAGEN:
-                raise
+            raise
+
+    descargador.descargar(sesion, url, timeout, guardar)
 
 
 def exportar_imagenes(tabla, destino, escritor, sesion, timeout):
-    """Omite las descargas fallidas de Q2 y deja un registro de cada descarte."""
+    """Exporta Q2 y registra únicamente las imágenes inexistentes o eliminadas."""
     descartadas = 0
+    descargador = DescargadorHTTP()
     with (destino / 'descargas_fallidas_q2.csv').open('w', encoding='utf-8', newline='') as archivo:
         fallos = csv.writer(archivo)
-        fallos.writerow(('nombre', 'url', 'url_imagen', 'estado_http', 'intentos', 'error'))
+        fallos.writerow(('nombre', 'url', 'url_imagen', 'estado_http', 'error'))
         for numero, (nombre, url, imagen) in enumerate(tabla.itertuples(index=False, name=None)):
             relativa = ''
             if isinstance(imagen, str) and imagen:
                 relativa = f'imagenes/{numero}.img'
                 ruta = destino / relativa
                 try:
-                    descargar_imagen(imagen, ruta, sesion, timeout)
-                except requests.RequestException as error:
+                    descargar_imagen(imagen, ruta, sesion, timeout, descargador)
+                except requests.HTTPError as error:
                     estado = error.response.status_code if error.response is not None else ''
-                    fallos.writerow((nombre, url, imagen, estado, MAX_INTENTOS_IMAGEN, str(error)))
+                    if estado not in ESTADOS_AUSENTES:
+                        raise
+                    fallos.writerow((nombre, url, imagen, estado, str(error)))
                     descartadas += 1
                     print(f'Q2: se omite {url}; falló la descarga de {imagen}: {error}', flush=True)
                     continue

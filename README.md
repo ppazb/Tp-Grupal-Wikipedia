@@ -109,8 +109,8 @@ Docker separada. No es necesario instalar Jupyter en el host.
 
 Los CSV seriales, las imágenes descargadas para Q2, el informe y las diferencias
 quedan en `registros/comparacion-serial/<ejecución>/`. Las imágenes se comparan por
-contenido. Si una descarga falla en ambos intentos, la referencia omite ese artículo,
-como el worker de Q2, y registra el motivo en `referencia/descargas_fallidas_q2.csv`.
+contenido. Solo se omiten las imágenes inexistentes (HTTP 404/410), como en el worker de Q2,
+y se registra el motivo en `referencia/descargas_fallidas_q2.csv`.
 El informe incluye la cantidad de descartes. Las demás consultas se comparan igualmente.
 Si solo una ejecución consiguió una imagen, o sus bytes cambiaron entre descargas,
 se informa una diferencia; no se elimina esa fila de la comparación.
