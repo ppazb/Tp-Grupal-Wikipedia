@@ -12,6 +12,7 @@ import requests
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from src.common.io_adapters.descargas_http import TIMEOUT_SEGUNDOS
 from serial.comparacion import comparar, exportar, huella
 from serial.notebook import ejecutar_notebook
 
@@ -23,7 +24,8 @@ def main():
     parser.add_argument('--salidas', type=Path, default=Path('output'), help='Resultados client_* (por defecto: output)')
     parser.add_argument('--notebook', type=Path, default=Path('version-secuencial.ipynb'), help='Notebook original')
     parser.add_argument('--registros', type=Path, default=Path('registros/comparacion-serial'), help='Referencias e informes')
-    parser.add_argument('--timeout-http', type=float, default=30, help='Timeout de conexión/lectura de imágenes, en segundos (30)')
+    parser.add_argument('--timeout-http', type=float, default=TIMEOUT_SEGUNDOS,
+                        help='Timeout de conexión/lectura de imágenes, en segundos (%(default)s, el mismo que el worker de Q2)')
     args = parser.parse_args()
     if args.timeout_http <= 0:
         parser.error('--timeout-http debe ser positivo')

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import requests
 
-from src.common.io_adapters.descargas_http import DescargadorHTTP, ESTADOS_AUSENTES
+from src.common.io_adapters.descargas_http import DescargadorHTTP, DescargaAgotada, ESTADOS_AUSENTES
 
 COLUMNAS = {'q1': ('url', 'fecha'), 'q2': ('nombre', 'url', 'archivo'),
             'q3': ('palabra',), 'q4': ('palabra', 'cantidad'), 'q5': ('url', 'cantidad')}
@@ -54,6 +54,11 @@ def exportar_imagenes(tabla, destino, escritor, sesion, timeout):
                 ruta = destino / relativa
                 try:
                     descargar_imagen(imagen, ruta, sesion, timeout, descargador)
+                except DescargaAgotada as error:
+                    # Igual que el worker: tras agotar los reintentos el artículo queda sin imagen.
+                    ruta.unlink(missing_ok=True)
+                    relativa = ''
+                    print(f'Q2: sin imagen para {url}; {error}', flush=True)
                 except requests.HTTPError as error:
                     estado = error.response.status_code if error.response is not None else ''
                     if estado not in ESTADOS_AUSENTES:
@@ -63,7 +68,7 @@ def exportar_imagenes(tabla, destino, escritor, sesion, timeout):
                     print(f'Q2: se omite {url}; falló la descarga de {imagen}: {error}', flush=True)
                     continue
                 # El worker informa una respuesta HTTP vacía como artículo sin imagen.
-                if ruta.stat().st_size == 0:
+                if relativa and ruta.stat().st_size == 0:
                     ruta.unlink()
                     relativa = ''
             escritor.writerow((nombre, url, relativa))

@@ -107,6 +107,12 @@ conserva el uso de memoria de pandas del notebook: necesita memoria para el conj
 completo de entrada. Sus dependencias y las stopwords se instalan en una imagen
 Docker separada. No es necesario instalar Jupyter en el host.
 
+La descarga de imágenes sigue la misma política que el worker de Q2 (definida en
+`src/common/io_adapters/descargas_http.py`): hasta 3 reintentos con esperas de 10, 20 y 30 s,
+pausa mínima de 0,2 s entre pedidos, 2,5 MB/s de ancho de banda y 15 s de timeout. Si tras los
+reintentos no se obtiene una imagen, el artículo queda sin ella, igual que en el worker. Se
+puede ajustar con las variables `IMAGE_*` (por ejemplo `IMAGE_MAX_RETRIES`).
+
 Los CSV seriales, las imágenes descargadas para Q2, el informe y las diferencias
 quedan en `registros/comparacion-serial/<ejecución>/`. Las imágenes se comparan por
 contenido. Solo se omiten las imágenes inexistentes (HTTP 404/410), como en el worker de Q2,
