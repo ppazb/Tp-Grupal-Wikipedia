@@ -4,3 +4,4 @@ pyarrow>=14.0.0
 kagglehub
 nltk
 requests
+pyyaml

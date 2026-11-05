@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+FROM python:3.11-slim
 WORKDIR /proyecto
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 NLTK_DATA=/opt/nltk_data
 COPY scripts/serial/requirements.txt /tmp/requirements-serial.txt

@@ -1,11 +1,11 @@
 """Ejecuta los cálculos del notebook con los Parquet locales, sin editarlo."""
 
 import ast
+import collections
 import json
 from pathlib import Path
 
 COLUMNAS = ('abstract', 'date_modified', 'image', 'in_language', 'name', 'sections', 'url')
-CELDAS_RESULTADO = {6: 'q1', 7: 'q2', 8: 'q4', 9: 'q3', 12: 'q5'}
 
 
 def ejecutar_celda(fuente, contexto, nombre):
@@ -19,8 +19,24 @@ def ejecutar_celda(fuente, contexto, nombre):
         return eval(compile(expresion, nombre, 'eval'), contexto)
 
 
-def ejecutar_notebook(ruta, entrada):
-    """Sustituye la celda de carga por los archivos locales y ejecuta las consultas originales."""
+def lotes(archivos, filas_por_lote):
+    """Entrega los Parquet en orden, en DataFrames chicos, sin cargar nunca el conjunto completo."""
+    import pandas as pd
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    for ruta in archivos:
+        for lote in pq.ParquetFile(ruta).iter_batches(batch_size=filas_por_lote, columns=list(COLUMNAS)):
+            yield pd.DataFrame(pa.Table.from_batches([lote]).to_pandas())
+
+
+def ejecutar_notebook(ruta, entrada, filas_por_lote=100_000):
+    """Ejecuta las celdas originales del notebook lote a lote, en un único proceso y con memoria acotada.
+
+    Cada lote hace el papel de `wiki_entry_df` y las celdas 4 a 9 y 10 se ejecutan tal cual sobre él.
+    Los aportes de cada lote se combinan de forma exacta: concatenación (Q1, Q2), suma de contadores
+    (Q4), unión de conjuntos (Q3) y suma/cantidad para el promedio de Q5.
+    """
     import pandas as pd
 
     documento = json.loads(Path(ruta).read_text(encoding='utf-8'))
@@ -35,23 +51,56 @@ def ejecutar_notebook(ruta, entrada):
     archivos = sorted(Path(entrada).glob('*.parquet'))
     if not archivos:
         raise ValueError(f'No hay Parquet en {entrada}')
+    fuentes = {i: ''.join(c['source']) for i, c in enumerate(celdas) if c['cell_type'] == 'code'}
+
+    def correr(indice, contexto):
+        return ejecutar_celda(fuentes[indice], contexto, f'{ruta}:celda-{indice}')
+
     contexto = {'__name__': '__referencia_serial__'}
-    resultados = {}
-    for indice, celda in enumerate(celdas):
-        if celda['cell_type'] != 'code':
-            continue
-        print(f'Ejecutando celda {indice} del notebook', flush=True)
-        if indice == 2:
-            # El notebook trabaja con un DataFrame completo; conservamos ese comportamiento.
-            contexto['wiki_entry_df'] = pd.concat(
-                [pd.read_parquet(ruta, columns=list(COLUMNAS)) for ruta in archivos],
-                ignore_index=True,
-            )
-            continue
-        resultado = ejecutar_celda(''.join(celda['source']), contexto, f'{ruta}:celda-{indice}')
-        if indice in CELDAS_RESULTADO:
-            resultados[CELDAS_RESULTADO[indice]] = resultado
-    # Q2 añade la identidad URL a las filas ya seleccionadas por el notebook.
-    resultados['q2'] = contexto['wiki_entry_before_2020_df'].loc[
-        resultados['q2'].index, ['name', 'url', 'image']]
+    # kagglehub no hace falta: los datos son locales.
+    exec(compile(fuentes[0].replace('import kagglehub\n', ''), f'{ruta}:celda-0', 'exec'), contexto)
+    q1, q2, q5 = [], [], []
+    contador, ingles, frances = collections.Counter(), set(), set()
+    total_antes = cantidad_antes = 0
+    print(f'Ejecutando celdas 4 a 10 del notebook por lotes de {filas_por_lote} filas', flush=True)
+    procesadas = 0
+    for lote in lotes(archivos, filas_por_lote):
+        contexto['wiki_entry_df'] = lote
+        for indice in (4, 5):
+            correr(indice, contexto)
+        antes = contexto['wiki_entry_before_2020_df']
+        q1.append(correr(6, contexto))
+        correr(7, contexto)
+        q2.append(antes.loc[antes['has_biography_section'], ['name', 'url', 'image']])
+        correr(8, contexto)  # Reinicia words_counter: queda el contador de este lote.
+        contador.update(contexto['words_counter'])
+        correr(9, contexto)
+        ingles |= contexto['english_words']
+        frances |= contexto['french_words']
+        correr(10, contexto)
+        # Mismo cálculo que la celda 11, acumulando total y cantidad en vez de dividir por lote.
+        extraer = contexto['extract_non_stopwords_from_abstract']
+        for abstract in antes['abstract'].dropna():
+            total_antes += len(extraer(abstract))
+            cantidad_antes += 1
+        # Celda 12 sin el filtro final, que necesita el promedio global; se descartan los conteos
+        # en cero porque nunca pueden superar un promedio (>= 0).
+        despues = contexto['wiki_entry_after_2020_df']
+        despues['abstract_word_count'] = despues['abstract'].apply(
+            lambda abstract: len(extraer(abstract)))
+        q5.append(despues.loc[despues['abstract_word_count'] > 0, ['url', 'abstract_word_count']])
+        procesadas += len(lote)
+    promedio = total_antes / cantidad_antes
+    print('Before 2020 abstract average:', promedio, flush=True)
+    vacio = {'q1': ['date_modified', 'url'], 'q2': ['name', 'url', 'image'],
+             'q5': ['url', 'abstract_word_count']}
+
+    def unir(partes, clave):
+        return pd.concat(partes, ignore_index=True) if partes else pd.DataFrame(columns=vacio[clave])
+
+    resultados = {'q1': unir(q1, 'q1'), 'q2': unir(q2, 'q2')}
+    resultados['q4'] = pd.DataFrame(contador.most_common(20), columns=['word', 'count'])
+    resultados['q3'] = pd.Series(data=list(ingles & frances))
+    q5 = unir(q5, 'q5')
+    resultados['q5'] = q5[q5['abstract_word_count'] > promedio]
     return resultados, archivos

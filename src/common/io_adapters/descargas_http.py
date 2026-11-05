@@ -18,7 +18,7 @@ ESTADOS_AUSENTES = {404, 410}
 INTERVALO_SEGUNDOS = 0.2        # IMAGE_INTERVAL_SECONDS: pausa mínima entre pedidos (por réplica)
 REINTENTO_SEGUNDOS = 10.0       # IMAGE_RETRY_SECONDS: primera espera tras un fallo temporal
 MAX_RETROCESO_SEGUNDOS = 30.0   # IMAGE_MAX_BACKOFF_SECONDS: tope de la espera creciente
-BYTES_POR_SEGUNDO = 2_500_000   # IMAGE_BYTES_PER_SECOND: total entre réplicas (Wikimedia pide <= 25 Mbps)
+BYTES_POR_SEGUNDO = 2_800_000   # IMAGE_BYTES_PER_SECOND: total entre réplicas (Wikimedia pide <= 25 Mbps)
 MAX_REINTENTOS = 3              # IMAGE_MAX_RETRIES: reintentos después del primer intento
 TIMEOUT_SEGUNDOS = 15           # timeout de conexión y lectura de cada pedido
 MAX_REPLICAS_DESCARGA = 2
