@@ -16,9 +16,9 @@ import requests
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'scripts'))
 from comparar_serial import main
-from serial.comparacion import comparar, descargar_imagen, exportar
+from serial.comparacion import comparar, descargar_imagen, exportar, exportar_imagenes
 from serial.notebook import ejecutar_notebook
-from src.common.io_adapters.descargas_http import DescargadorHTTP
+from src.common.io_adapters.descargas_http import DescargadorHTTP, DescargaAgotada
 
 RAIZ = Path(__file__).resolve().parents[2]
 
@@ -181,6 +181,43 @@ class ComparacionSerial(unittest.TestCase):
             with patch.object(Path, 'open', side_effect=OSError('sin espacio')):
                 with self.assertRaises(OSError):
                     descargar_imagen('http://local/imagen', destino, sesion, 5)
+
+    def _respuesta_siempre_limitada(self):
+        respuesta = MagicMock()
+        respuesta.__enter__.return_value = respuesta
+        respuesta.status_code = 429
+        respuesta.headers = {}
+        respuesta.raise_for_status.side_effect = requests.HTTPError(response=respuesta)
+        sesion = MagicMock()
+        sesion.get.return_value = respuesta
+        return sesion
+
+    def test_politica_por_defecto_son_tres_reintentos_con_esperas_crecientes(self):
+        """Worker y referencia comparten estos valores: se ven en el primer pedido fallido."""
+        with patch.dict(os.environ):
+            for nombre in [n for n in os.environ if n.startswith('IMAGE_')]:
+                del os.environ[nombre]
+            pausas = []
+            sesion = self._respuesta_siempre_limitada()
+            with self.assertRaises(DescargaAgotada):
+                DescargadorHTTP(esperar=pausas.append).descargar(sesion, 'http://local/i', 5, lambda r: b'')
+        self.assertEqual(sesion.get.call_count, 4)  # el intento inicial y tres reintentos
+        self.assertEqual([p for p in pausas if p >= 5], [10.0, 20.0, 30.0])  # espera creciente con tope de 30 s
+
+    def test_reintentos_agotados_dejan_el_articulo_sin_imagen_como_el_worker(self):
+        tabla = pd.DataFrame([('uno', 'http://x/uno', 'http://local/imagen')], columns=['nombre', 'url', 'imagen'])
+        sesion = self._respuesta_siempre_limitada()
+        with patch.dict(os.environ), tempfile.TemporaryDirectory() as temporal:
+            os.environ.pop('IMAGE_MAX_RETRIES', None)
+            destino = Path(temporal)
+            (destino / 'imagenes').mkdir()
+            filas = []
+            escritor = MagicMock()
+            escritor.writerow.side_effect = filas.append
+            self.assertEqual(exportar_imagenes(tabla, destino, escritor, sesion, 5), 0)
+            self.assertEqual(filas, [('uno', 'http://x/uno', '')])
+            self.assertFalse((destino / 'imagenes/0.img').exists())
+        self.assertEqual(sesion.get.call_count, 4)
 
     def test_429_conserva_la_imagen_respeta_retry_after_y_se_recupera(self):
         from src.common.io_adapters.descargas_http import demora_servidor

@@ -13,10 +13,14 @@ import requests
 LOG = logging.getLogger(__name__)
 ESTADOS_TEMPORALES = {408, 425, 429, 500, 502, 503, 504}
 ESTADOS_AUSENTES = {404, 410}
-INTERVALO_SEGUNDOS = 2.0
-REINTENTO_SEGUNDOS = 60.0
-MAX_RETROCESO_SEGUNDOS = 600.0
-BYTES_POR_SEGUNDO = 1_000_000
+# Política de descarga única: la usan el worker de Q2 y la referencia serial, para que
+# reintenten y esperen igual. Cada valor se puede cambiar con su variable IMAGE_*.
+INTERVALO_SEGUNDOS = 0.2        # IMAGE_INTERVAL_SECONDS: pausa mínima entre pedidos (por réplica)
+REINTENTO_SEGUNDOS = 10.0       # IMAGE_RETRY_SECONDS: primera espera tras un fallo temporal
+MAX_RETROCESO_SEGUNDOS = 30.0   # IMAGE_MAX_BACKOFF_SECONDS: tope de la espera creciente
+BYTES_POR_SEGUNDO = 2_500_000   # IMAGE_BYTES_PER_SECOND: total entre réplicas (Wikimedia pide <= 25 Mbps)
+MAX_REINTENTOS = 3              # IMAGE_MAX_RETRIES: reintentos después del primer intento
+TIMEOUT_SEGUNDOS = 15           # timeout de conexión y lectura de cada pedido
 MAX_REPLICAS_DESCARGA = 2
 
 
@@ -25,10 +29,10 @@ class DescargaAgotada(Exception):
 
 
 def maximo_reintentos():
-    """Lee IMAGE_MAX_RETRIES; sin definir, los reintentos no tienen tope."""
+    """Lee IMAGE_MAX_RETRIES; sin definir, usa MAX_REINTENTOS."""
     valor = os.environ.get('IMAGE_MAX_RETRIES')
     if valor is None:
-        return None
+        return MAX_REINTENTOS
     reintentos = int(valor)
     if reintentos < 0:
         raise ValueError('IMAGE_MAX_RETRIES no puede ser negativo')
@@ -94,7 +98,7 @@ class DescargadorHTTP:
             yield bloque
 
     def descargar(self, sesion, url, timeout, consumir):
-        """Reintenta 429, fallos transitorios HTTP y cortes de conexión, hasta IMAGE_MAX_RETRIES si está definido."""
+        """Reintenta 429, fallos transitorios HTTP y cortes de conexión; tras el tope lanza DescargaAgotada."""
         retroceso = self._reintento
         intento = 0
         while True:
@@ -118,7 +122,7 @@ class DescargadorHTTP:
                 LOG.warning('HTTP %s en %s (intento %d)', estado, url, intento)
             except (requests.ConnectionError, requests.Timeout, requests.exceptions.ChunkedEncodingError) as error:
                 LOG.warning('Descarga interrumpida de %s (intento %d): %s', url, intento, error)
-            if self._max_reintentos is not None and intento > self._max_reintentos:
+            if intento > self._max_reintentos:
                 raise DescargaAgotada(f'{url}: {self._max_reintentos} reintentos agotados')
             demora = max(demora, retroceso, self._intervalo)
             LOG.warning('Se conserva la imagen pendiente; reintento en %.1f segundos: %s', demora, url)

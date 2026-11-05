@@ -32,17 +32,8 @@ test-sigterm-despliegue:
 	bash scripts/probar_escenarios.sh despliegue
 
 # Levanta el sistema y espera la finalización de todos los clientes.
-up: generar-compose
+up: 
 	bash scripts/ejecutar_sistema.sh $(CLIENTES)
-
-# Pipeline completo con un solo cliente, mostrando solo los logs del cliente (EOF y tiempo total).
-# Los resultados quedan en output/client_0. Falla si el cliente no termina bien;
-# siempre baja el despliegue al terminar.
-up-quiet: generar-compose
-	$(COMPOSE) --profile clientes down -v --remove-orphans
-	$(COMPOSE) up -d --build --wait
-	$(COMPOSE) build client
-	$(COMPOSE) run --no-deps --rm client; status=$$?; $(COMPOSE) --profile clientes down -v --remove-orphans; exit $$status
 
 # Baja el despliegue y borra los volúmenes.
 down:

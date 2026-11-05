@@ -5,7 +5,7 @@ import os
 import requests
 
 from src.workers.base_worker import WorkerBase
-from src.common.io_adapters.descargas_http import DescargadorHTTP, DescargaAgotada, ESTADOS_AUSENTES
+from src.common.io_adapters.descargas_http import DescargadorHTTP, DescargaAgotada, ESTADOS_AUSENTES, TIMEOUT_SEGUNDOS
 from src.common.protocol.dto import Datos, Entrada
 from src.common.protocol.registros import Esquema, FragmentoImagen, Lote
 
@@ -17,7 +17,6 @@ ENTRADA_RESULTADOS = "resultados_finales_q2"
 # La política de Wikimedia pide un User-Agent con datos de contacto (por ejemplo la URL del proyecto);
 # sin ellos responde 429 a las descargas. Se puede sobrescribir con IMAGE_USER_AGENT.
 USER_AGENT = os.environ.get("IMAGE_USER_AGENT","TpGrupalWikipedia/1.0 (https://github.com/ppazb/Tp-Grupal-Wikipedia) python-requests")
-TIMEOUT_SEGUNDOS = 15
 
 
 class _LoteFragmentos:
@@ -57,8 +56,8 @@ class ImageDownloaderQ2(WorkerBase):
     Descarga la imagen de cada artículo biográfico y la envía al gateway en fragmentos,
     para respetar limites.max_bytes_por_mensaje. Un artículo sin imagen se informa igual,
     con un único fragmento vacío (total_bytes = 0). Reintenta errores temporales
-    hasta IMAGE_MAX_RETRIES veces (sin tope si no se define) o hasta recibir una solicitud de apagado;
-    si se agotan, el artículo se publica sin imagen. Omite HTTP 404/410.
+    hasta el tope de reintentos de descargas_http (IMAGE_MAX_RETRIES) o hasta recibir una solicitud de
+    apagado; si se agota, el artículo se publica sin imagen, igual que en la referencia serial. Omite HTTP 404/410.
     """
 
     def __init__(self, ruta_configuracion):
