@@ -1,10 +1,7 @@
-import logging
-
 from src.workers.base_worker import WorkerBase
 from src.common.protocol.dto import Datos, Entrada
 from src.common.protocol.registros import Esquema, Idioma, Lote, Palabra
 
-logger = logging.getLogger(__name__)
 
 GRUPO_RESULTADOS = "gateway_resultados"
 ENTRADA_RESULTADOS = "q3"
@@ -80,9 +77,5 @@ class IntersectionQ3(WorkerBase):
         """Publica lo que quedó pendiente y cierra la salida hacia el gateway."""
         id_ejecucion = entrada.id_ejecucion
         ejecucion = self._ejecuciones.pop(id_ejecucion, _Ejecucion())
-        logger.info(
-            "q3_intersection: cierre (EOF) recibido para '%s'. Palabras vistas en esta instancia: %d",
-            id_ejecucion, len(ejecucion.estado),
-        )
         self._publicar_pendientes(id_ejecucion, ejecucion)
         self.middleware.finalizar_entrada(GRUPO_RESULTADOS, Entrada(id_ejecucion, ENTRADA_RESULTADOS))

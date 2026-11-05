@@ -30,12 +30,12 @@ class DateRouter(WorkerBase):
     """
 
     def procesar(self, datos: Datos) -> None:
+        self.anunciar_cliente("date_router", datos.entrada.id_ejecucion)
         historicos_q1 = []
         biograficos_q2 = []
         textos_historicos = []
         textos_recientes = []
 
-        total_articulos = len(datos.contenido.registros)
         for articulo in datos.contenido.registros:
             self.comprobar_detencion()
 
@@ -69,11 +69,6 @@ class DateRouter(WorkerBase):
                 )
 
         id_ejecucion = datos.entrada.id_ejecucion
-        logger.info(
-            "date_router: procesado lote de %d artículos para ejecución '%s'. "
-            "Candidatos Q1 (<=2020): %d, Históricos NLP: %d, Recientes NLP: %d",
-            total_articulos, id_ejecucion, len(historicos_q1), len(textos_historicos), len(textos_recientes)
-        )
 
         # Envio hacia nodo de la rama Query 1
         if historicos_q1:
@@ -116,7 +111,6 @@ class DateRouter(WorkerBase):
         para habilitar la consolidación de resultados en nodos subsiguientes.
         """
         id_ejecucion = entrada.id_ejecucion
-        logger.info("date_router: cierre (EOF) recibido para '%s'. Propagando a ramas.", id_ejecucion)
 
         # Rama Query 1 obligatoria
         self.middleware.finalizar_entrada("q1_filter_lang", Entrada(id_ejecucion, "historicos_q1"))

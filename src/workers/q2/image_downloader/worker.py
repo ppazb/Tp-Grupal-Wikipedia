@@ -5,7 +5,7 @@ import os
 import requests
 
 from src.workers.base_worker import WorkerBase
-from src.common.io_adapters.descargas_http import DescargadorHTTP, ESTADOS_AUSENTES
+from src.common.io_adapters.descargas_http import DescargadorHTTP, DescargaAgotada, ESTADOS_AUSENTES
 from src.common.protocol.dto import Datos, Entrada
 from src.common.protocol.registros import Esquema, FragmentoImagen, Lote
 
@@ -57,7 +57,8 @@ class ImageDownloaderQ2(WorkerBase):
     Descarga la imagen de cada artículo biográfico y la envía al gateway en fragmentos,
     para respetar limites.max_bytes_por_mensaje. Un artículo sin imagen se informa igual,
     con un único fragmento vacío (total_bytes = 0). Reintenta errores temporales
-    hasta obtener la imagen o recibir una solicitud de apagado. Omite HTTP 404/410.
+    hasta IMAGE_MAX_RETRIES veces (sin tope si no se define) o hasta recibir una solicitud de apagado;
+    si se agotan, el artículo se publica sin imagen. Omite HTTP 404/410.
     """
 
     def __init__(self, ruta_configuracion):
@@ -77,27 +78,23 @@ class ImageDownloaderQ2(WorkerBase):
         self.anunciar_cliente("q2_image_downloader", datos.entrada.id_ejecucion)
         id_ejecucion = datos.entrada.id_ejecucion
         lote = _LoteFragmentos(self.middleware, Entrada(id_ejecucion, ENTRADA_RESULTADOS))
-        publicadas = 0
 
         for solicitud in datos.contenido.registros:
             self.comprobar_detencion()
             # Sin imagen el artículo igual forma parte de la respuesta
             imagen = self._descargar(solicitud.url_imagen) if solicitud.url_imagen else b""
             if imagen is None:
-                logger.info("q2_image_downloader: imagen inexistente para '%s', se descarta",
-                            solicitud.url)
                 continue
             self._publicar_imagen(lote, solicitud, imagen)
-            publicadas += 1
         lote.publicar()
-
-        logger.info("q2_image_downloader: %d/%d artículos publicados para ejecución '%s'",
-                    publicadas, len(datos.contenido.registros), id_ejecucion)
 
     def _descargar(self, url_imagen: str):
         """Descarga con ritmo acotado; solo omite imágenes inexistentes o eliminadas."""
         try:
             return self._descargador.descargar(self._sesion, url_imagen, TIMEOUT_SEGUNDOS, self._leer_imagen)
+        except DescargaAgotada as error:
+            logger.warning("Se agotaron los reintentos, el artículo se publica sin imagen: %s", error)
+            return b""
         except requests.HTTPError as error:
             if error.response is not None and error.response.status_code in ESTADOS_AUSENTES:
                 logger.info("Imagen inexistente: %s (%s)", url_imagen, error.response.status_code)
@@ -131,7 +128,5 @@ class ImageDownloaderQ2(WorkerBase):
 
     def al_finalizar(self, entrada: Entrada) -> None:
         """Indica al gateway (EOF) de la Query 2."""
-
-        logger.info("q2_image_downloader: cierre (EOF) recibido para '%s'. Notificando a gateway_resultados.", entrada.id_ejecucion)
 
         self.middleware.finalizar_entrada(GRUPO_RESULTADOS, Entrada(entrada.id_ejecucion, ENTRADA_RESULTADOS))

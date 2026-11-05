@@ -1,10 +1,7 @@
-import logging
-
 from src.workers.base_worker import WorkerBase
 from src.common.protocol.dto import Datos, Entrada
 from src.common.protocol.registros import Esquema, Lote, SolicitudImagen
 
-logger = logging.getLogger(__name__)
 
 SECCIONES_BIOGRAFICAS = frozenset({"biography", "biographie"})
 
@@ -25,7 +22,7 @@ class FilterBioQ2(WorkerBase):
     """
 
     def procesar(self, datos: Datos) -> None:
-        self.anunciar_cliente("q2_filter_bio", datos.entrada.id_ejecucion) #aviso que llego cliente
+        self.anunciar_cliente("q2_filter_bio", datos.entrada.id_ejecucion)
 
         solicitudes = []
         for ref in datos.contenido.registros:
@@ -35,8 +32,6 @@ class FilterBioQ2(WorkerBase):
 
         id_ejecucion = datos.entrada.id_ejecucion
 
-        logger.info("q2_filter_bio: %d/%d artículos bibliografia para ejecución '%s'",len(solicitudes), len(datos.contenido.registros), id_ejecucion)
-
         if solicitudes:
             entrada = Entrada(id_ejecucion, "biografias_q2")
             lote = Lote(Esquema.SOLICITUD_IMAGEN, tuple(solicitudes))
@@ -44,5 +39,4 @@ class FilterBioQ2(WorkerBase):
 
     def al_finalizar(self, entrada: Entrada) -> None:
         """Propaga (EOF) hacia el descargador de imágenes."""
-        logger.info("q2_filter_bio: cierre (EOF) recibido para '%s'. Propagando a q2_image_downloader.",entrada.id_ejecucion)
         self.middleware.finalizar_entrada("q2_image_downloader", Entrada(entrada.id_ejecucion, "biografias_q2"))

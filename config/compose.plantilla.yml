@@ -80,9 +80,13 @@ services:
       - LOG_LEVEL=INFO
     healthcheck:
       test: ["CMD", "python3", "-c", "import socket; socket.create_connection(('localhost', 5555), 2).close()"]
-      interval: 3s
+      # Durante el arranque se sondea cada 2 s para que los clientes empiecen en cuanto el gateway acepta
+      # conexiones; después, cada 30 s. Requiere Docker Engine 25 o superior (start_interval).
+      start_period: 30s
+      start_interval: 2s
+      interval: 30s
       timeout: 3s
-      retries: 20
+      retries: 3
     deploy:
       replicas: 1
 
@@ -102,7 +106,7 @@ services:
       - OUTPUT_DIR=/app/output
       - CLIENT_ID=0
       # filas por lote
-      - BATCH_SIZE=64
+      - BATCH_SIZE=512
       # debe coincidir con limites.max_bytes_por_mensaje de config/config.json (lo usa el gateway)
       - MAX_FRAME_BYTES=350000
       - SERVER_HOST=gateway
@@ -185,10 +189,13 @@ services:
       - WIKI_MW_BROKER_HOST=rabbitmq
       - WIKI_MW_PROCESO_GRUPO=q2_image_downloader
       - WIKI_MW_PROCESO_INSTANCIA=0
-      - IMAGE_INTERVAL_SECONDS=${IMAGE_INTERVAL_SECONDS:-2}
-      - IMAGE_RETRY_SECONDS=${IMAGE_RETRY_SECONDS:-60}
-      - IMAGE_MAX_BACKOFF_SECONDS=${IMAGE_MAX_BACKOFF_SECONDS:-600}
-      - IMAGE_BYTES_PER_SECOND=${IMAGE_BYTES_PER_SECOND:-1000000}
+      # Wikimedia limita la concurrencia total a 2 y el ancho de banda total a 25 Mbps (unos 3,1 MB/s);
+      # IMAGE_BYTES_PER_SECOND es el total entre réplicas y deja margen. El intervalo es solo una pausa mínima entre pedidos.
+      - IMAGE_INTERVAL_SECONDS=${IMAGE_INTERVAL_SECONDS:-0.2}
+      - IMAGE_MAX_RETRIES=${IMAGE_MAX_RETRIES:-2}
+      - IMAGE_RETRY_SECONDS=${IMAGE_RETRY_SECONDS:-10}
+      - IMAGE_MAX_BACKOFF_SECONDS=${IMAGE_MAX_BACKOFF_SECONDS:-30}
+      - IMAGE_BYTES_PER_SECOND=${IMAGE_BYTES_PER_SECOND:-2500000}
     deploy:
       replicas: 1
 
