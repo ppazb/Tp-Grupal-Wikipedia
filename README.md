@@ -102,9 +102,12 @@ distribuida y la serial, ni dejar directorios de clientes de ejecuciones anterio
 El comando no levanta el sistema: compara sus resultados ya guardados.
 
 Usa `version-secuencial.ipynb` de la raíz sin modificarlo: reemplaza su carga de
-Kaggle por los archivos locales y ejecuta sus celdas de cálculo. La referencia
-conserva el uso de memoria de pandas del notebook: necesita memoria para el conjunto
-completo de entrada. Sus dependencias y las stopwords se instalan en una imagen
+Kaggle por los archivos locales y ejecuta sus celdas de cálculo. La ejecución sigue
+siendo serial (un solo proceso e hilo), pero lee los Parquet en lotes de 20 000 filas y
+corre las celdas originales sobre cada lote, combinando los aportes de forma exacta
+(concatenación, suma de contadores, unión de conjuntos, suma y cantidad para el promedio
+de Q5). Así la memoria depende del tamaño del lote y del vocabulario, no del tamaño de
+la entrada. Sus dependencias y las stopwords se instalan en una imagen
 Docker separada. No es necesario instalar Jupyter en el host.
 
 La descarga de imágenes sigue la misma política que el worker de Q2 (definida en
@@ -112,6 +115,11 @@ La descarga de imágenes sigue la misma política que el worker de Q2 (definida 
 pausa mínima de 0,2 s entre pedidos, 2,5 MB/s de ancho de banda y 15 s de timeout. Si tras los
 reintentos no se obtiene una imagen, el artículo queda sin ella, igual que en el worker. Se
 puede ajustar con las variables `IMAGE_*` (por ejemplo `IMAGE_MAX_RETRIES`).
+
+El comparador lee de `docker-compose.yaml` el `INPUT_DIR` de cada cliente (servicios con
+`CLIENT_ID`), calcula una referencia por cada directorio de entrada distinto y compara cada
+`output/client_<id>` con la suya (con varios directorios, `referencia_<n>/` y `diferencias_<n>.csv`).
+`--compose` elige otro archivo; `--entrada` ignora el compose y usa un único directorio para todos.
 
 Los CSV seriales, las imágenes descargadas para Q2, el informe y las diferencias
 quedan en `registros/comparacion-serial/<ejecución>/`. Las imágenes se comparan por

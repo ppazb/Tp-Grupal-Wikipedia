@@ -32,7 +32,8 @@ test-sigterm-despliegue:
 	bash scripts/probar_escenarios.sh despliegue
 
 # Levanta el sistema y espera la finalización de todos los clientes.
-up: 
+up:
+	$(MAKE) down
 	bash scripts/ejecutar_sistema.sh $(CLIENTES)
 
 # Baja el despliegue y borra los volúmenes.
