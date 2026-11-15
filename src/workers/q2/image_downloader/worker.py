@@ -6,7 +6,7 @@ import requests
 
 from src.workers.base_worker import WorkerBase
 from src.common.io_adapters.descargas_http import DescargadorHTTP, DescargaAgotada, ESTADOS_AUSENTES, TIMEOUT_SEGUNDOS
-from src.common.protocol.dto import Datos, Entrada
+from src.common.protocol.dto import EnvioDatos, Datos, Entrada
 from src.common.protocol.registros import Esquema, FragmentoImagen, Lote
 
 logger = logging.getLogger(__name__)
@@ -45,7 +45,7 @@ class _LoteFragmentos:
 
     def publicar(self):
         if self._registros:
-            self._middleware.publicar(GRUPO_RESULTADOS, Datos(self._entrada, Lote(Esquema.FRAGMENTO_IMAGEN, tuple(self._registros))))
+            self._middleware.publicar(EnvioDatos.nuevo(GRUPO_RESULTADOS, Datos(self._entrada, Lote(Esquema.FRAGMENTO_IMAGEN, tuple(self._registros)))))
 
         self._registros = []
         self._presupuesto = None

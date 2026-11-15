@@ -1,5 +1,7 @@
 """Codificación del sobre binario y separación de rechazos por registro."""
 
+from uuid import UUID
+
 from ..common.protocol.dto import (
     AvanceReplica, CierreProductor, Entrada, IdentidadProceso, PrepararCierre,
     ResultadoDecodificacion, SobreMensaje, TipoMensaje,
@@ -12,6 +14,9 @@ from ..common.protocol.serializer import escribir_cabecera_lote, escribir_lote, 
 from .configuracion import ErrorConfiguracion
 from .interfaz import ErrorMensaje, ErrorMensajeInvalido
 from .presupuesto_lote import PresupuestoLote
+
+
+BYTES_ID_MENSAJE = 16
 
 
 class CodificadorMensajes:
@@ -51,6 +56,7 @@ class CodificadorMensajes:
 
     def _escribir_cabecera(self, escritor, sobre):
         escritor.entero(sobre.tipo.value, BYTES_U8)
+        escritor.entero(sobre.id_mensaje.int, BYTES_ID_MENSAJE)
         escritor.texto(sobre.entrada.id_ejecucion)
         escritor.texto(sobre.entrada.nombre)
         escritor.texto(sobre.origen.grupo)
@@ -59,7 +65,8 @@ class CodificadorMensajes:
 
     def crear_presupuesto_lote(self, entrada, origen, esquema):
         """Reserva el tamaño del sobre y la cabecera para construir un lote por bytes."""
-        sobre = SobreMensaje(entrada, TipoMensaje.DATOS, origen, Lote(esquema, ()))
+        # Solo se mide el ancho fijo del ID; este sobre no se publica.
+        sobre = SobreMensaje(entrada, TipoMensaje.DATOS, origen, Lote(esquema, ()), UUID(int=1))
         _validar_sobre(sobre)
         try:
             escritor = EscritorBinario(
@@ -82,6 +89,9 @@ class CodificadorMensajes:
         try:
             lector = LectorBinario(cuerpo, comprobar_detencion=self._comprobar_detencion)
             tipo = TipoMensaje(lector.entero(BYTES_U8))
+            id_mensaje = UUID(int=lector.entero(BYTES_ID_MENSAJE))
+            if id_mensaje.int == 0:
+                raise ErrorSerializacion("El identificador del mensaje no puede ser nulo")
             id_ejecucion = lector.texto()
             nombre = lector.texto()
             grupo = lector.texto()
@@ -107,7 +117,7 @@ class CodificadorMensajes:
                 )
                 contenido.finalizar()
                 errores = ()
-            sobre = SobreMensaje(entrada, tipo, origen, lote)
+            sobre = SobreMensaje(entrada, tipo, origen, lote, id_mensaje)
             return ResultadoDecodificacion(sobre, errores)
         except (ErrorSerializacion, ValueError) as error:
             detalle = str(error) if isinstance(error, ErrorSerializacion) else "Tipo o esquema desconocido"
@@ -139,6 +149,8 @@ def _validar_sobre(sobre):
         raise ErrorMensaje("Se esperaba un SobreMensaje con Entrada")
     if type(sobre.origen) is not IdentidadProceso or type(sobre.tipo) is not TipoMensaje:
         raise ErrorMensaje("El sobre debe identificar origen y tipo de mensaje")
+    if type(sobre.id_mensaje) is not UUID or sobre.id_mensaje.int == 0:
+        raise ErrorMensaje("El mensaje debe tener un UUID no nulo")
     for texto in (sobre.entrada.id_ejecucion, sobre.entrada.nombre, sobre.origen.grupo):
         _validar_texto(texto)
     contenidos = {

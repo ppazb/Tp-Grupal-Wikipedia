@@ -4,7 +4,7 @@ import zlib
 from typing import List
 
 from src.workers.base_worker import WorkerBase
-from src.common.protocol.dto import Datos, Entrada
+from src.common.protocol.dto import EnvioDatos, Datos, Entrada
 from src.common.protocol.registros import (
     Esquema, Lote, Palabra, PalabraIdioma, CantidadPalabras, Candidato, TextoArticulo
 )
@@ -85,15 +85,15 @@ class WordOccurrencesWorker(WorkerBase):
         for registro in registros:
             self.comprobar_detencion()
             if not presupuesto.admitir(registro):
-                self.middleware.publicar(grupo, Datos(entrada, Lote(esquema, tuple(pendientes))),
-                                         clave_afinidad=clave_afinidad)
+                self.middleware.publicar(EnvioDatos.nuevo(grupo, Datos(entrada, Lote(esquema, tuple(pendientes))),
+                                         clave_afinidad=clave_afinidad))
                 pendientes = []
                 presupuesto = self.middleware.crear_presupuesto_lote(entrada, esquema)
                 if not presupuesto.admitir(registro):
                     raise ValueError(f"Un registro de {esquema.name} no cabe en un lote vacío")
             pendientes.append(registro)
-        self.middleware.publicar(grupo, Datos(entrada, Lote(esquema, tuple(pendientes))),
-                                 clave_afinidad=clave_afinidad)
+        self.middleware.publicar(EnvioDatos.nuevo(grupo, Datos(entrada, Lote(esquema, tuple(pendientes))),
+                                 clave_afinidad=clave_afinidad))
 
     def al_finalizar(self, entrada: Entrada) -> None:
         """Propaga el cierre correspondiente al tramo completado."""

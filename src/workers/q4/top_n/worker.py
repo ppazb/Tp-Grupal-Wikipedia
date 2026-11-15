@@ -1,6 +1,6 @@
 """Worker de Top N: consolidación completa, resultado definitivo y cierre de Q4."""
 
-from src.common.protocol.dto import Datos, Entrada
+from src.common.protocol.dto import EnvioDatos, Datos, Entrada
 from src.common.protocol.registros import Esquema, Lote
 from src.workers.base_worker import Worker
 from .seleccion import seleccionar_top
@@ -72,9 +72,9 @@ class WorkerTopN(Worker):
 
     def _publicar_lote(self, entrada, registros):
         datos = Datos(entrada, Lote(Esquema.CONTEO_PALABRA, tuple(registros)))
-        self._middleware.publicar(
+        self._middleware.publicar(EnvioDatos.nuevo(
             self._grupo_salida, datos, clave_afinidad=entrada.id_ejecucion,
-        )
+        ))
 
     def _validar_entrada(self, entrada):
         if entrada.nombre != self._entrada:

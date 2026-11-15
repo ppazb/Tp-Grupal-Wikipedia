@@ -2,8 +2,8 @@
 
 import hashlib
 from collections.abc import Sequence
-from dataclasses import dataclass
-from typing import Optional
+from dataclasses import dataclass, field
+from uuid import UUID, uuid4
 
 import pika
 
@@ -28,6 +28,7 @@ class _EstadoSalida:
     total: int = 0
     cierre_iniciado: bool = False
     cierre_confirmado: bool = False
+    id_cierre: UUID = field(default_factory=uuid4)
 
 
 class PublicadorDatos:
@@ -61,16 +62,9 @@ class PublicadorDatos:
         except pika.exceptions.AMQPError as error:
             raise ErrorMensaje("No se pudieron habilitar las confirmaciones") from error
 
-    def publicar(
-        self, grupo: str, datos: Datos, *, clave_afinidad: Optional[str] = None,
-    ) -> None:
-        """Envía a reparto o a la instancia correspondiente a la clave de afinidad.
-
-        La afinidad usa la ejecución y la clave lógica; todos los registros de
-        un lote con afinidad deben pertenecer a esa misma clave. Sin afinidad,
-        la cola compartida reparte lotes completos entre los consumidores.
-        """
-        self.publicar_en_ramas((EnvioDatos(grupo, datos, clave_afinidad),))
+    def publicar(self, envio: EnvioDatos) -> None:
+        """Publica un envío identificado conservando su destino, contenido e ID."""
+        self.publicar_en_ramas((envio,))
 
     def publicar_en_ramas(self, envios: Sequence[EnvioDatos]) -> None:
         """Valida y publica una secuencia de salidas, en el orden recibido.
@@ -79,7 +73,8 @@ class PublicadorDatos:
         Codifica todas las salidas antes de enviar la primera; una secuencia vacía
         no publica nada. Si un envío falla después de otros confirmados, eleva
         ErrorPublicacionParcial con esas salidas y la causa del fallo.
-        Repetir el conjunto puede duplicar las salidas confirmadas.
+        Reutilizar los mismos EnvioDatos conserva sus IDs. Repetir el conjunto
+        puede duplicar las salidas confirmadas; identificar no deduplica.
         """
         if self._publicando:
             raise ErrorMiddleware("La publicación no admite llamadas reentrantes")
@@ -101,7 +96,7 @@ class PublicadorDatos:
         if self._publicando:
             raise ErrorMiddleware("No se puede cerrar una entrada durante una publicación")
         # Codificar primero valida la identidad incluso cuando no hubo datos.
-        sobre = SobreMensaje(entrada, TipoMensaje.EOF, self._configuracion.proceso, CierreProductor(0))
+        sobre = SobreMensaje.nuevo(entrada, TipoMensaje.EOF, self._configuracion.proceso, CierreProductor(0))
         self._codificador.codificar(sobre)
         instancia = self._topologia.instancia_coordinadora(grupo, entrada)
         destino = self._topologia.destino_control(grupo, entrada.nombre, instancia)
@@ -110,6 +105,7 @@ class PublicadorDatos:
             return
         cuerpo = self._codificador.codificar(SobreMensaje(
             entrada, TipoMensaje.EOF, self._configuracion.proceso, CierreProductor(estado.total),
+            estado.id_cierre,
         ))
         estado.cierre_iniciado = True
         self._publicando = True
@@ -126,16 +122,16 @@ class PublicadorDatos:
             if identidad[1].id_ejecucion != id_ejecucion
         }
 
-    def publicar_control(self, tipo, entrada, contenido, instancia=None):
-        """Publica coordinación del grupo local sin reservar capacidad de datos."""
-        if tipo not in (TipoMensaje.PREPARAR_CIERRE, TipoMensaje.AVANCE_REPLICA, TipoMensaje.FIN_ENTRADA):
+    def publicar_control(self, sobre, instancia=None):
+        """Publica un control identificado sin reservar capacidad ni cambiar su ID."""
+        if not isinstance(sobre, SobreMensaje) or sobre.tipo not in (
+            TipoMensaje.PREPARAR_CIERRE, TipoMensaje.AVANCE_REPLICA, TipoMensaje.FIN_ENTRADA,
+        ):
             raise ErrorMensaje("El tipo no corresponde a coordinación entre réplicas")
         if self._publicando:
             raise ErrorMiddleware("La publicación no admite llamadas reentrantes")
-        cuerpo = self._codificador.codificar(SobreMensaje(
-            entrada, tipo, self._configuracion.proceso, contenido,
-        ))
-        destino = self._topologia.destino_coordinacion(entrada.nombre, instancia)
+        cuerpo = self._codificador.codificar(sobre)
+        destino = self._topologia.destino_coordinacion(sobre.entrada.nombre, instancia)
         self._publicando = True
         try:
             self._publicar_cuerpo(destino, cuerpo, reservar_capacidad=False)
@@ -173,6 +169,7 @@ class PublicadorDatos:
             tipo=TipoMensaje.DATOS,
             origen=self._configuracion.proceso,
             contenido=envio.datos.contenido,
+            id_mensaje=envio.id_mensaje,
         )
         cuerpo = self._codificador.codificar(sobre)
         estado = self._salidas.get((envio.grupo, sobre.entrada))

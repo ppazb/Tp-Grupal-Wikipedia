@@ -4,7 +4,7 @@ import os
 from typing import Dict, List, Tuple
 
 from src.workers.base_worker import WorkerBase
-from src.common.protocol.dto import Datos, Entrada
+from src.common.protocol.dto import EnvioDatos, Datos, Entrada
 from src.common.protocol.registros import (
     Esquema, Lote, Candidato, ResumenHistorico
 )
@@ -124,4 +124,4 @@ class ComparatorQ5Worker(WorkerBase):
         if not registros:
             return
         datos = Datos(entrada, Lote(Esquema.CANDIDATO, tuple(registros)))
-        self.middleware.publicar("gateway_resultados", datos)
+        self.middleware.publicar(EnvioDatos.nuevo("gateway_resultados", datos))

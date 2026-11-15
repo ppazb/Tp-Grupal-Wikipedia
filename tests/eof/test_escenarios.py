@@ -77,7 +77,7 @@ class EscenariosEOF(EscenarioRabbitMQ):
         fuentes, esperados = [], []
         for instancia in range(2):
             envios = tuple(
-                EnvioDatos('consumidores', palabras(cliente, f'{instancia}-{numero}', 'été'))
+                EnvioDatos.nuevo('consumidores', palabras(cliente, f'{instancia}-{numero}', 'été'))
                 for numero in range(3) for cliente in ('A', 'B')
             )
             esperados.extend(envio.datos for envio in envios)
@@ -105,7 +105,7 @@ class EscenariosEOF(EscenarioRabbitMQ):
         coordinadora = self.topologia.instancia_coordinadora('consumidores', entrada)
         # Una réplica distinta conserva datos mientras la coordinadora tramita el EOF.
         for numero in range(100):
-            envio = EnvioDatos('consumidores', datos, f'destino_{numero}')
+            envio = EnvioDatos.nuevo('consumidores', datos, f'destino_{numero}')
             elegida = fuentes[0]._publicador._instancia_destinataria(envio)
             if elegida != coordinadora:
                 break
@@ -148,18 +148,18 @@ class EscenariosEOF(EscenarioRabbitMQ):
         combinadores = self.iniciar_consumidores('combinadores', entradas)
         inicial = palabras('A', 'compartido')
         fuentes[0].publicar_en_ramas(tuple(
-            EnvioDatos(grupo, inicial) for grupo in ('consumidores', 'combinadores')
+            EnvioDatos.nuevo(grupo, inicial) for grupo in ('consumidores', 'combinadores')
         ))
         self.cerrar_productores(fuentes, 'consumidores', (palabras_a,))
         self.assertEqual(self.resultados(rama, (palabras_a,)), [inicial])
         adicional = palabras('A', 'solo otra rama')
-        fuentes[1].publicar('combinadores', adicional)
+        fuentes[1].publicar(EnvioDatos.nuevo('combinadores', adicional))
         self.cerrar_productores(fuentes, 'combinadores', (palabras_a,))
         for _, eventos in combinadores:
             self.assertEqual(self.esperar_tipo(eventos, 'fin'), ('fin', palabras_a, frozenset({'referencias'})))
             self.assertEqual(self.esperar_tipo(eventos, 'limpieza_pendiente')[1], 'A')
         referencia = palabras('B', 'referencia', entrada='referencias')
-        fuentes[0].publicar('combinadores', referencia)
+        fuentes[0].publicar(EnvioDatos.nuevo('combinadores', referencia))
         self.cerrar_productores(fuentes, 'combinadores', (referencias_b, palabras_b, referencias_a))
         self.assertCountEqual(self.resultados(combinadores, entradas), [inicial, adicional, referencia])
         self.comprobar_capacidad_recuperada()
@@ -172,11 +172,11 @@ class EscenariosEOF(EscenarioRabbitMQ):
         fuentes = [self.abrir('productores', indice) for indice in range(2)]
         consumidores = self.iniciar_consumidores('consumidores', entradas, acumular=True)
         lote = palabras('A', 'uno', 'dos', 'uno')
-        envio = EnvioDatos('consumidores', lote, 'acumular_juntos')
+        envio = EnvioDatos.nuevo('consumidores', lote, 'acumular_juntos')
         elegida = fuentes[0]._publicador._instancia_destinataria(envio)
         fuentes[0].publicar_en_ramas((envio,))
         descartados = palabras('sin_resultados', 'omitir este registro')
-        fuentes[1].publicar('consumidores', descartados)
+        fuentes[1].publicar(EnvioDatos.nuevo('consumidores', descartados))
         self.cerrar_productores(fuentes, 'consumidores', entradas)
         self.esperar_tipo(consumidores[elegida][1], 'esperando')
         with self.assertRaises(Empty):
@@ -200,11 +200,11 @@ class EscenariosEOF(EscenarioRabbitMQ):
         indice = self.topologia.instancia_coordinadora('consumidores', entrada)
         destino = self.topologia.destino_control('consumidores', 'palabras', indice)
         datos = palabras('A', 'aporte único')
-        fuentes[0].publicar('consumidores', datos)
+        fuentes[0].publicar(EnvioDatos.nuevo('consumidores', datos))
         fuentes[0].finalizar_entrada('consumidores', entrada)
         with self.assertRaises(EntradaFinalizada):
-            fuentes[0].publicar('consumidores', datos)
-        self.inyectar_control(destino, SobreMensaje(
+            fuentes[0].publicar(EnvioDatos.nuevo('consumidores', datos))
+        self.inyectar_control(destino, SobreMensaje.nuevo(
             entrada, TipoMensaje.EOF, IdentidadProceso('productores', 0), CierreProductor(1),
         ))
         fuentes[1].finalizar_entrada('consumidores', entrada)
@@ -213,14 +213,14 @@ class EscenariosEOF(EscenarioRabbitMQ):
         topologia = TopologiaGrupos(self.configurar('consumidores', indice))
         destino = topologia.destino_coordinacion('palabras')
         for _ in range(2):
-            self.inyectar_control(destino, SobreMensaje(
+            self.inyectar_control(destino, SobreMensaje.nuevo(
                 entrada, TipoMensaje.FIN_ENTRADA, IdentidadProceso('consumidores', indice), None,
             ))
         # El testigo se publica después de los duplicados sobre el mismo canal de prueba.
         indice_testigo = self.topologia.instancia_coordinadora('consumidores', testigo)
         destino = self.topologia.destino_control('consumidores', 'palabras', indice_testigo)
         for indice in range(2):
-            self.inyectar_control(destino, SobreMensaje(
+            self.inyectar_control(destino, SobreMensaje.nuevo(
                 testigo, TipoMensaje.EOF, IdentidadProceso('productores', indice), CierreProductor(0),
             ))
         self.assertEqual(self.resultados(consumidores, (entrada, testigo)), [datos])
@@ -238,7 +238,7 @@ class EscenariosEOF(EscenarioRabbitMQ):
         self.inspector.canal.confirm_delivery()
         for palabras_lote in (('válido', 'corromper'), ('corromper',)):
             lote = Lote(Esquema.CONTEO_PALABRA, tuple(ConteoPalabra(p, 1) for p in palabras_lote))
-            cuerpo = bytearray(codificador.codificar(SobreMensaje(
+            cuerpo = bytearray(codificador.codificar(SobreMensaje.nuevo(
                 entrada, TipoMensaje.DATOS, IdentidadProceso('consumidores', 0), lote,
             )))
             cuerpo[cuerpo.index(b'corromper')] = 255
@@ -256,7 +256,7 @@ class EscenariosEOF(EscenarioRabbitMQ):
         ))])
         destino = topologia.destino_control('sumidero', 'conteos', 0)
         for indice in range(3):
-            self.inyectar_control(destino, SobreMensaje(
+            self.inyectar_control(destino, SobreMensaje.nuevo(
                 entrada, TipoMensaje.EOF, IdentidadProceso('consumidores', indice),
                 CierreProductor(2 if indice == 0 else 0),
             ))
