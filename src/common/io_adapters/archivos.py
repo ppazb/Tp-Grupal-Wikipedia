@@ -4,6 +4,10 @@
 BYTES_POR_LECTURA = 64 * 1024
 
 
+class ArchivoTruncado(ValueError):
+    """El archivo terminó antes de completar el campo solicitado."""
+
+
 def escribir_completo(archivo, datos, comprobar_detencion=None):
     """Completa escrituras parciales y rechaza operaciones sin avance."""
     vista = memoryview(datos)
@@ -26,6 +30,6 @@ def leer_completo(archivo, cantidad, *, admitir_fin=False, comprobar_detencion=N
         if not parte:
             if admitir_fin and not datos:
                 return None
-            raise ValueError('Archivo binario truncado')
+            raise ArchivoTruncado('Archivo binario truncado')
         datos.extend(parte)
     return datos
