@@ -63,7 +63,7 @@ class EscenariosMiddleware(EscenarioRabbitMQ):
             self.assertEqual(self.esperar(eventos), 'listo')
         esperados = [palabras('cliente_A', 'uno'), palabras('cliente_B', 'dos')]
         for datos in esperados:
-            productor.publicar('frecuencias', datos)
+            productor.publicar(EnvioDatos.nuevo('frecuencias', datos))
         recibidos = []
         for proceso, eventos in consumidores:
             recibidos.append(self.esperar(eventos))
@@ -74,7 +74,7 @@ class EscenariosMiddleware(EscenarioRabbitMQ):
         elegido = None
         for palabra in ('primero', 'segundo'):
             datos = palabras('cliente_A', palabra)
-            productor.publicar('frecuencias', datos, clave_afinidad='misma_palabra')
+            productor.publicar(EnvioDatos.nuevo('frecuencias', datos, clave_afinidad='misma_palabra'))
             pendientes = []
             for instancia in range(2):
                 topologia = TopologiaGrupos(configurar(self.virtual_host, 'frecuencias', instancia))
@@ -92,9 +92,9 @@ class EscenariosMiddleware(EscenarioRabbitMQ):
         productor = self.abrir('ocurrencias')
         frecuencia = self.abrir('frecuencias')
         top = self.abrir('top_n')
-        frecuencia.publicar('top_n', conteo('primero'))
+        frecuencia.publicar(EnvioDatos.nuevo('top_n', conteo('primero')))
         entrada = palabras('cliente_A', 'trabajo')
-        productor.publicar('frecuencias', entrada)
+        productor.publicar(EnvioDatos.nuevo('frecuencias', entrada))
         proceso, eventos = self.lanzar(consumir_en_proceso, 'frecuencias', True)
         self.assertEqual(self.esperar(eventos), 'listo')
         self.assertEqual(self.esperar(eventos), entrada)
@@ -103,7 +103,7 @@ class EscenariosMiddleware(EscenarioRabbitMQ):
         self.assertEqual(self.estado(self.topologia.cola_capacidad(cola)).message_count, 0)
         siguiente = palabras('cliente_B', 'siguiente')
         fuente, publicaciones = self.lanzar(
-            publicar_en_proceso, 'ocurrencias', (EnvioDatos('frecuencias', siguiente),), 1,
+            publicar_en_proceso, 'ocurrencias', (EnvioDatos.nuevo('frecuencias', siguiente),), 1,
         )
         self.comprobar_bloqueado(publicaciones)
         self.assertEqual(self.recibir(top), conteo('primero'))
@@ -120,12 +120,12 @@ class EscenariosMiddleware(EscenarioRabbitMQ):
         productor = self.abrir('ocurrencias')
         frecuencia = self.abrir('frecuencias')
         gateway = self.abrir('gateway_resultados')
-        productor.publicar('gateway_resultados', aviso('anterior'))
+        productor.publicar(EnvioDatos.nuevo('gateway_resultados', aviso('anterior')))
         datos = palabras('cliente_A', 'rama')
         nuevo = aviso('nuevo')
         proceso, eventos = self.lanzar(
             publicar_en_proceso, 'ocurrencias',
-            (EnvioDatos('frecuencias', datos), EnvioDatos('gateway_resultados', nuevo)), 2,
+            (EnvioDatos.nuevo('frecuencias', datos), EnvioDatos.nuevo('gateway_resultados', nuevo)), 2,
         )
         self.comprobar_bloqueado(eventos)
         cola = self.topologia.destino_datos('frecuencias', 'palabras').cola
@@ -142,10 +142,10 @@ class EscenariosMiddleware(EscenarioRabbitMQ):
         """Un aviso espera capacidad y luego entrega solo los registros válidos."""
         productor = self.abrir('ocurrencias')
         gateway = self.abrir('gateway_resultados')
-        productor.publicar('gateway_resultados', aviso('ocupar'))
+        productor.publicar(EnvioDatos.nuevo('gateway_resultados', aviso('ocupar')))
         datos = palabras('cliente_A', 'uno', 'corromper', 'tres')
         codificador = CodificadorMensajes(self.configuracion.limites.max_bytes_por_mensaje)
-        sobre = SobreMensaje(datos.entrada, TipoMensaje.DATOS, self.configuracion.proceso, datos.contenido)
+        sobre = SobreMensaje.nuevo(datos.entrada, TipoMensaje.DATOS, self.configuracion.proceso, datos.contenido)
         cuerpo = bytearray(codificador.codificar(sobre))
         # Se altera solo un texto delimitado, conservando las longitudes del lote.
         cuerpo[cuerpo.index(b'corromper')] = 255
@@ -177,18 +177,18 @@ class EscenariosMiddleware(EscenarioRabbitMQ):
         frecuencia.recibir(lambda datos: self.fail('Procesó un mensaje sin reserva'))
         entrada = palabras('cliente_A', 'control').entrada
         codificador = CodificadorMensajes(self.configuracion.limites.max_bytes_por_mensaje)
-        self.inyectar(codificador.codificar(SobreMensaje(
+        self.inyectar(codificador.codificar(SobreMensaje.nuevo(
             entrada, TipoMensaje.EOF, self.configuracion.proceso, CierreProductor(0),
         )))
         frecuencia.recibir(lambda datos: self.fail('Procesó EOF como datos'))
         error = self.recibir(gateway).contenido.registros[0]
         self.assertEqual(error.codigo, CodigoError.MENSAJE_INVALIDO)
         with self.assertRaises(ErrorConfiguracion):
-            productor.publicar('destino_inexistente', palabras('cliente_A', 'mal'))
+            productor.publicar(EnvioDatos.nuevo('destino_inexistente', palabras('cliente_A', 'mal')))
         with self.assertRaises(ErrorMensaje):
-            productor.publicar('frecuencias', palabras('', 'sin ejecución'))
+            productor.publicar(EnvioDatos.nuevo('frecuencias', palabras('', 'sin ejecución')))
         datos = palabras('cliente_B', 'válido')
-        productor.publicar('frecuencias', datos)
+        productor.publicar(EnvioDatos.nuevo('frecuencias', datos))
         self.assertEqual(self.recibir(frecuencia), datos)
         self.comprobar_capacidad_recuperada()
 
@@ -197,7 +197,7 @@ class EscenariosMiddleware(EscenarioRabbitMQ):
         productor = self.abrir('ocurrencias')
         frecuencia = self.abrir('frecuencias')
         datos = palabras('cliente_A', 'pendiente')
-        productor.publicar('frecuencias', datos)
+        productor.publicar(EnvioDatos.nuevo('frecuencias', datos))
         error_negocio = ValueError('Error deliberado del procesador de prueba')
 
         def fallar(recibido):
@@ -218,11 +218,11 @@ class EscenariosMiddleware(EscenarioRabbitMQ):
         productor = self.abrir('ocurrencias')
         frecuencia = self.abrir('frecuencias')
         datos = palabras('cliente_A', 'ocupado')
-        productor.publicar('frecuencias', datos)
+        productor.publicar(EnvioDatos.nuevo('frecuencias', datos))
         interrumpido = self.abrir('ocurrencias')
         interrumpido._conexion.programar(interrumpido.interrumpir)
         with self.assertRaises(OperacionInterrumpida):
-            interrumpido.publicar('frecuencias', palabras('cliente_B', 'cancelado'))
+            interrumpido.publicar(EnvioDatos.nuevo('frecuencias', palabras('cliente_B', 'cancelado')))
         self.assertEqual(self.recibir(frecuencia), datos)
         frecuencia._conexion.programar(frecuencia.detener_recepcion)
         frecuencia.recibir(lambda datos: self.fail('Recibió después de detenerse'))
@@ -241,7 +241,7 @@ class EscenariosMiddleware(EscenarioRabbitMQ):
         self.assertTrue(conexion.is_closed)
         self.assertTrue(all(canal.is_closed for canal in canales))
         with self.assertRaises(MiddlewareCerrado):
-            productor.publicar('frecuencias', datos)
+            productor.publicar(EnvioDatos.nuevo('frecuencias', datos))
 
     def test_inicializacion_repetida_y_apertura_parcial_no_dejan_recursos(self):
         """No duplica permisos y cierra la conexión si falta la marca de capacidad."""
@@ -267,7 +267,7 @@ class EscenariosMiddleware(EscenarioRabbitMQ):
             productor.esperar(5)
             self.assertGreaterEqual(time.monotonic() - inicio, 5)
             datos = palabras('cliente', 'despues_de_esperar')
-            productor.publicar('frecuencias', datos)
+            productor.publicar(EnvioDatos.nuevo('frecuencias', datos))
             self.assertTrue(productor._conexion._conexion.is_open)
         consumidor = self.abrir('frecuencias')
         self.assertEqual(self.recibir(consumidor), datos)

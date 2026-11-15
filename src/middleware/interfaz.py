@@ -3,7 +3,7 @@
 from abc import ABC, abstractmethod
 from typing import Callable, Generic, Optional
 
-from ..common.protocol.dto import Contenido, Datos, Entrada, Evento, FinEntrada
+from ..common.protocol.dto import Contenido, Datos, Entrada, EnvioDatos, Evento, FinEntrada
 
 
 class ErrorMiddleware(Exception):
@@ -95,18 +95,15 @@ class ComunicacionGrupos(ABC, Generic[Contenido]):
     """
 
     @abstractmethod
-    def publicar(
-        self,
-        grupo: str,
-        datos: Datos[Contenido],
-        *,
-        clave_afinidad: Optional[str] = None,
-    ) -> None:
-        """Publica datos hacia un grupo lógico, esperando capacidad disponible.
+    def publicar(self, envio: EnvioDatos[Contenido]) -> None:
+        """Publica un envío ya identificado, esperando capacidad disponible.
 
-        Sin clave de afinidad reparte entre consumidores; con clave selecciona un
-        destinatario estable durante la ejecución. El retorno indica aceptación
-        del transporte, no procesamiento remoto.
+        EnvioDatos.nuevo crea una publicación; reutilizar ese objeto conserva su
+        identidad al reenviar. Un ID ausente o inválido es un error, nunca se
+        reemplaza. El retorno indica aceptación del transporte, no procesamiento
+        remoto. Identificar no implica deduplicación ni reintentos automáticos.
+        Sin afinidad reparte entre consumidores; con afinidad selecciona un
+        destinatario estable durante la ejecución.
         Puede elevar PublicacionRechazada, ErrorCapacidad, ErrorConexion,
         ErrorMensaje, MiddlewareCerrado u OperacionInterrumpida.
         """

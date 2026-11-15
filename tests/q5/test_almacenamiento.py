@@ -43,8 +43,8 @@ class MiddlewareObservado:
     def admitir(self, registro):
         return True
 
-    def publicar(self, grupo, datos):
-        self.resultados.extend(datos.contenido.registros)
+    def publicar(self, envio):
+        self.resultados.extend(envio.datos.contenido.registros)
 
     def finalizar_entrada(self, grupo, entrada):
         self.cierres.append(entrada)

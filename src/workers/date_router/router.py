@@ -3,7 +3,7 @@ from src.middleware.interfaz import OperacionInterrumpida
 from typing import Optional
 
 from src.workers.base_worker import WorkerBase
-from src.common.protocol.dto import Datos, Entrada
+from src.common.protocol.dto import EnvioDatos, Datos, Entrada
 from src.common.protocol.registros import (
     Esquema, Lote, ReferenciaHistorica, ReferenciaBiografica, TextoArticulo
 )
@@ -74,20 +74,20 @@ class DateRouter(WorkerBase):
         if historicos_q1:
             entrada_q1 = Entrada(id_ejecucion, "historicos_q1")
             lote_q1 = Lote(Esquema.REFERENCIA_HISTORICA, tuple(historicos_q1))
-            self.middleware.publicar("q1_filter_lang", Datos(entrada_q1, lote_q1))
+            self.middleware.publicar(EnvioDatos.nuevo("q1_filter_lang", Datos(entrada_q1, lote_q1)))
 
         # Envio hacia nodo de la rama Query 2
         if biograficos_q2:
             entrada_q2 = Entrada(id_ejecucion, "historicos_q2")
             lote_q2 = Lote(Esquema.REFERENCIA_BIOGRAFICA, tuple(biograficos_q2))
-            self.middleware.publicar("q2_filter_bio", Datos(entrada_q2, lote_q2))
+            self.middleware.publicar(EnvioDatos.nuevo("q2_filter_bio", Datos(entrada_q2, lote_q2)))
 
         # Envio hacia rama NLP / Q5: Históricos
         if textos_historicos:
             try:
                 entrada_hist = Entrada(id_ejecucion, "textos_historicos")
                 lote_hist = Lote(Esquema.TEXTO_ARTICULO, tuple(textos_historicos))
-                self.middleware.publicar("word_occurrences", Datos(entrada_hist, lote_hist))
+                self.middleware.publicar(EnvioDatos.nuevo("word_occurrences", Datos(entrada_hist, lote_hist)))
             except OperacionInterrumpida:
                 raise
             except Exception as error:
@@ -98,7 +98,7 @@ class DateRouter(WorkerBase):
             try:
                 entrada_rec = Entrada(id_ejecucion, "textos_recientes")
                 lote_rec = Lote(Esquema.TEXTO_ARTICULO, tuple(textos_recientes))
-                self.middleware.publicar("word_occurrences", Datos(entrada_rec, lote_rec))
+                self.middleware.publicar(EnvioDatos.nuevo("word_occurrences", Datos(entrada_rec, lote_rec)))
             except OperacionInterrumpida:
                 raise
             except Exception as error:

@@ -78,7 +78,7 @@ class PublicadorMiddleware:
 
     def publicar(self, id_ejecucion, lote):
         self._obtener().publicar_en_ramas(tuple(
-            EnvioDatos(ruta.destino, Datos(Entrada(id_ejecucion, ruta.entrada), lote))
+            EnvioDatos.nuevo(ruta.destino, Datos(Entrada(id_ejecucion, ruta.entrada), lote))
             for ruta in self._rutas
         ))
 

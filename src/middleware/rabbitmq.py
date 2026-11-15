@@ -3,7 +3,7 @@
 import logging
 import os
 
-from ..common.protocol.dto import EnvioDatos
+from ..common.protocol.dto import EnvioDatos, SobreMensaje
 from ..common.protocol.registros import Esquema, Lote
 from .broker_connection import ConexionBroker
 from .capacidad import CapacidadDatos
@@ -64,7 +64,7 @@ class MiddlewareRabbitMQ(Middleware[Lote]):
             )
             if topologia.colas_recepcion() is not None:
                 self._coordinacion = CoordinacionCierre(
-                    configuracion, topologia, self._publicador.publicar_control,
+                    configuracion, topologia, self._publicar_control_nuevo,
                 )
                 self._receptor = ReceptorDatos(
                     configuracion, self._conexion, informar_error=notificador,
@@ -90,15 +90,20 @@ class MiddlewareRabbitMQ(Middleware[Lote]):
             if topologia.colas_recepcion() is not None:
                 raise ErrorConfiguracion("El sumidero requiere un manejador de errores")
             return None
-        return lambda datos: self.publicar(rutas[0].destino, datos)
+        return lambda datos: self.publicar(EnvioDatos.nuevo(rutas[0].destino, datos))
 
     def esperar(self, segundos):
         """Mantiene la conexión y la detección de SIGTERM durante una pausa del worker."""
         self._conexion.esperar(segundos)
 
-    def publicar(self, grupo, datos, *, clave_afinidad=None):
-        """Publica un lote tras obtener capacidad en su destino."""
-        self.publicar_en_ramas((EnvioDatos(grupo, datos, clave_afinidad),))
+    def _publicar_control_nuevo(self, tipo, entrada, contenido, instancia=None):
+        """Crea el control solicitado por la coordinación y publica su sobre."""
+        sobre = SobreMensaje.nuevo(entrada, tipo, self._identidad, contenido)
+        self._publicador.publicar_control(sobre, instancia)
+
+    def publicar(self, envio):
+        """Publica un envío identificado sin generar ni reemplazar su ID."""
+        self.publicar_en_ramas((envio,))
 
     def publicar_en_ramas(self, envios):
         """Publica salidas en orden sin volver a emitir ramas confirmadas al esperar."""

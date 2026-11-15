@@ -3,7 +3,7 @@
 from dataclasses import replace
 from pathlib import Path
 
-from src.common.protocol.dto import Datos, Entrada, IdentidadProceso
+from src.common.protocol.dto import EnvioDatos, Datos, Entrada, IdentidadProceso
 from src.common.protocol.registros import (
     CodigoError, ConteoPalabra, ErrorRegistro, Esquema, Lote, Palabra,
 )
@@ -61,7 +61,7 @@ def consumir_en_proceso(configuracion, eventos, publicar_salida=False, observar_
             if publicar_salida:
                 # Detener nuevas entregas no debe reencolar la que está procesándose.
                 middleware._conexion.programar(middleware.detener_recepcion)
-                middleware.publicar('top_n', conteo('segundo'))
+                middleware.publicar(EnvioDatos.nuevo('top_n', conteo('segundo')))
 
         middleware.recibir(procesar)
         eventos.put('terminado')
