@@ -63,6 +63,14 @@ def configurar_servicios(documento, configuracion, ruta):
     destino_wal = posixpath.normpath(posixpath.join('/app', directorio))
     if destino_wal in ('/', '/app', '/app/config'):
         raise ValueError('El directorio de persistencia debe ser exclusivo para los datos')
+    recepcion = configuracion['persistencia']['directorio_recepcion']
+    if not isinstance(recepcion, str) or not recepcion.strip():
+        raise ValueError('persistencia.directorio_recepcion debe ser texto no vacío')
+    destino_recepcion = posixpath.normpath(posixpath.join('/app', recepcion))
+    if destino_recepcion == destino_wal or not destino_recepcion.startswith(destino_wal + '/'):
+        raise ValueError('El directorio de recepción debe estar dentro del volumen de middleware')
+    if type(configuracion['persistencia']['particiones_recepcion']) is not int or configuracion['persistencia']['particiones_recepcion'] < 1:
+        raise ValueError('particiones_recepcion debe ser un entero positivo')
     documento.setdefault('volumes', {})['datos_middleware'] = {}
     broker = configuracion['broker']
     limite = configuracion['limites']['max_bytes_por_mensaje']
@@ -82,6 +90,7 @@ def configurar_servicios(documento, configuracion, ruta):
         if any(v['target'] == '/app/config/config.json' for v in servicio.get('volumes', [])):
             servicio['volumes'].append({'type': 'volume', 'source': 'datos_middleware', 'target': destino_wal})
             entorno['WIKI_MW_PERSISTENCIA_DIRECTORIO'] = posixpath.join(destino_wal, nombre)
+            entorno['WIKI_MW_PERSISTENCIA_DIRECTORIO_RECEPCION'] = destino_recepcion
         if 'WIKI_MW_BROKER_HOST' in entorno:
             entorno['WIKI_MW_BROKER_HOST'] = 'rabbitmq'
         if 'CLIENT_ID' in entorno:

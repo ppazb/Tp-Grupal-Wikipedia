@@ -84,7 +84,8 @@ class EscenariosMiddleware(EscenarioRabbitMQ):
             if elegido is not None:
                 self.assertEqual(instancia, elegido)
             elegido = instancia
-            self.assertEqual(self.recibir(self.abrir('frecuencias', instancia)), datos)
+            with self.abrir('frecuencias', instancia) as receptor:
+                self.assertEqual(self.recibir(receptor), datos)
         self.comprobar_capacidad_recuperada()
 
     def test_saturacion_propaga_la_espera_y_reanuda_el_worker(self):
@@ -219,7 +220,7 @@ class EscenariosMiddleware(EscenarioRabbitMQ):
         frecuencia = self.abrir('frecuencias')
         datos = palabras('cliente_A', 'ocupado')
         productor.publicar(EnvioDatos.nuevo('frecuencias', datos))
-        interrumpido = self.abrir('ocurrencias')
+        interrumpido = self.abrir('ocurrencias', 1)
         interrumpido._conexion.programar(interrumpido.interrumpir)
         with self.assertRaises(OperacionInterrumpida):
             interrumpido.publicar(EnvioDatos.nuevo('frecuencias', palabras('cliente_B', 'cancelado')))

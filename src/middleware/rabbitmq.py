@@ -205,6 +205,8 @@ class MiddlewareRabbitMQ(Middleware[Lote]):
         errores = []
         try:
             limpiezas = [self._recursos.cerrar, self._conexion.cerrar]
+            if self._receptor is not None:
+                limpiezas.insert(0, self._receptor.cerrar)
             if self._publicador is not None:
                 limpiezas.insert(0, self._publicador.cerrar)
             for liberar in limpiezas:
@@ -222,6 +224,14 @@ class MiddlewareRabbitMQ(Middleware[Lote]):
                 if not isinstance(error, Exception):
                     raise error
             raise ErrorCierre("Falló el cierre del middleware; ver registro") from errores[0]
+
+    @property
+    def entrega_actual(self):
+        """Devuelve la identidad del lote activo para la persistencia del consumidor."""
+        self._validar_abierta()
+        if self._receptor is None:
+            raise ErrorRecepcion('El proceso no tiene receptor de datos')
+        return self._receptor.entrega_actual
 
     def _validar_abierta(self):
         if self._cerrada:

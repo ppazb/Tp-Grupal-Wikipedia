@@ -1,5 +1,3 @@
-"""API pública del middleware de comunicación por grupos."""
-
 from ..common.protocol.dto import EnvioDatos
 from .cargador_configuracion import cargar_configuracion
 from .codificacion import CodificadorMensajes
@@ -14,6 +12,7 @@ from .configuracion import (
 )
 from .interfaz import (
     ComunicacionGrupos,
+    ContextoRecepcion,
     Datos,
     Entrada,
     EntradaFinalizada,
@@ -23,6 +22,7 @@ from .interfaz import (
     ErrorMensaje,
     ErrorMensajeInvalido,
     ErrorMiddleware,
+    ErrorPersistencia,
     ErrorPublicacionParcial,
     ErrorRecepcion,
     ErrorRecursosEjecucion,

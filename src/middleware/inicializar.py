@@ -44,6 +44,12 @@ def inicializar_capacidad(configuracion):
                     raise ErrorCapacidad("La cola de permisos debe estar vacía y sin consumidores")
                 for _ in range(configuracion.limites.max_mensajes_por_cola):
                     publicar_permiso(canal, permisos)
+            for cola in topologia.turnos_recepcion():
+                declarar_cola(canal, cola, 1)
+                estado = canal.queue_declare(queue=cola, passive=True).method
+                if estado.message_count or estado.consumer_count:
+                    raise ErrorCapacidad('La cola de turnos debe estar vacía y sin consumidores')
+                publicar_permiso(canal, cola)
             canal.queue_declare(queue=topologia.marca_capacidad(), durable=True)
         except (pika.exceptions.AMQPError, OSError) as error:
             raise ErrorCapacidad("Falló la inicialización de capacidad; no iniciar los procesos") from error

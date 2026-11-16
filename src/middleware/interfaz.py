@@ -1,9 +1,21 @@
 """Contrato de comunicación por grupos, independiente del transporte."""
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from typing import Callable, Generic, Optional
+from uuid import UUID
 
-from ..common.protocol.dto import Contenido, Datos, Entrada, EnvioDatos, Evento, FinEntrada
+from ..common.protocol.dto import Contenido, Datos, Entrada, EnvioDatos, Evento, FinEntrada, IdentidadProceso
+
+
+@dataclass(frozen=True)
+class ContextoRecepcion:
+    """Identidad del lote activo y aviso de un intento registrado anteriormente."""
+
+    id_mensaje: UUID
+    entrada: Entrada
+    origen: IdentidadProceso
+    reintento: bool
 
 
 class ErrorMiddleware(Exception):
@@ -117,12 +129,20 @@ class ComunicacionGrupos(ABC, Generic[Contenido]):
         """Espera y procesa un evento lógico del grupo receptor.
 
         Invoca procesar sincrónicamente y confirma solo si retorna correctamente;
+        el retorno debe asegurar efectos durables e idempotentes por entrega_actual.
+        Una reentrega completada se confirma sin invocar el negocio. Un intento
+        interrumpido conserva su ID para reconstruir o completar sus efectos.
         si falla, propaga su excepción original. Una detención permite retornar
         sin entregar otro evento. No garantiza procesamiento exactamente una vez
         ni orden global entre productores.
         Los registros inválidos se notifican y los válidos se procesan. Puede
         elevar ErrorConexion, ErrorMensaje, ErrorRecepcion o MiddlewareCerrado.
         """
+
+    @property
+    def entrega_actual(self) -> ContextoRecepcion:
+        """Expone el ID durante el callback para persistir efectos idempotentes."""
+        raise NotImplementedError('El transporte debe exponer la identidad de la entrega activa')
 
     @abstractmethod
     def detener_recepcion(self) -> None:

@@ -92,6 +92,9 @@ def preparar_archivos(configuracion, temporal):
     base = Path(temporal)
     config = json.loads(Path(__file__).with_name('config.json').read_text())
     config['broker']['virtual_host'] = configuracion.broker.virtual_host
+    config['persistencia']['directorio'] = configuracion.directorio_persistencia
+    config['persistencia']['directorio_recepcion'] = configuracion.directorio_recepcion
+    config['persistencia']['particiones_recepcion'] = configuracion.particiones_recepcion
     config['proceso'] = {'grupo': configuracion.proceso.grupo, 'instancia': configuracion.proceso.instancia}
     config['grupos'] = {grupo.nombre: grupo.instancias for grupo in configuracion.grupos}
     config['limites']['max_mensajes_por_cola'] = configuracion.limites.max_mensajes_por_cola

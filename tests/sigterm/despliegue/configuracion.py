@@ -24,7 +24,10 @@ def servicio(base, nombre, comando, entorno=None, observado=True):
         'volumes': [f'{base}:/prueba', f'{temporal}:/temporales'],
         'environment': {
             'NODO_PRUEBA': nombre, 'NLTK_DATA': '/prueba/nltk', 'TEMP_DIR': '/temporales',
-            'WIKI_MW_BROKER_HOST': 'rabbitmq', **(entorno or {}),
+            'WIKI_MW_BROKER_HOST': 'rabbitmq',
+            'WIKI_MW_PERSISTENCIA_DIRECTORIO': f'/prueba/persistencia/{nombre}',
+            'WIKI_MW_PERSISTENCIA_DIRECTORIO_RECEPCION': '/prueba/persistencia/recepciones',
+            **(entorno or {}),
         },
         'restart': 'no',
     }

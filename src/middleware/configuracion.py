@@ -70,6 +70,8 @@ class ConfiguracionComunicacion:
     grupos: Tuple[ConfiguracionGrupo, ...]
     rutas: Tuple[Ruta, ...]
     directorio_persistencia: str
+    directorio_recepcion: str
+    particiones_recepcion: int
 
     def obtener_grupo(self, nombre: str) -> ConfiguracionGrupo:
         """Busca un grupo declarado; un nombre desconocido es un error."""

@@ -7,6 +7,7 @@ from pathlib import Path
 import signal
 from queue import Empty
 from time import monotonic
+from uuid import UUID
 
 from src.middleware.topologia import TopologiaGrupos
 from src.common.protocol.dto import EnvioDatos, Datos, Entrada
@@ -187,7 +188,8 @@ class ConjuntoReplicas(EscenarioRabbitMQ):
                 _, datos = entrada_prueba('frecuencias')
                 datos = replace(datos, entrada=Entrada(f'cliente-{numero}', 'palabras'),
                                 contenido=replace(datos.contenido, registros=datos.contenido.registros * 4))
-                productor.publicar(EnvioDatos.nuevo('frecuencias', datos))
+                # Particiones distintas permiten retener los tres cómputos a la vez.
+                productor.publicar(EnvioDatos('frecuencias', datos, id_mensaje=UUID(int=numero + 1)))
             _, datos = entrada_prueba('q5_comparator')
             productor.publicar(EnvioDatos.nuevo('q5_comparator', datos))
         procesos = []

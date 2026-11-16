@@ -1,6 +1,7 @@
 """WAL común: escritura durable y recuperación incremental de operaciones binarias."""
 
 import fcntl
+from dataclasses import dataclass
 import logging
 import os
 from pathlib import Path
@@ -14,6 +15,16 @@ from .formato_wal import (
 
 
 REGISTRO = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class PuntoWAL:
+    """Posición de un estado ya reconstruido sobre el mismo archivo durable."""
+
+    dispositivo: int
+    inodo: int
+    posicion: int
+    siguiente: int
 
 
 class WAL:
@@ -61,10 +72,12 @@ class WAL:
             self._cerrar_tras_error()
             raise
 
-    def recuperar(self, aplicar):
+    def recuperar(self, aplicar, *, desde=None):
         """Aplica registros en orden y recorta solo una cola incompleta.
 
         aplicar recibe un RegistroWAL por vez y no debe llamar al mismo WAL.
+        desde permite continuar un estado que el dueño conservó junto con ese
+        punto; sin él se reconstruye desde el primer registro.
         Se invoca una sola vez por apertura, sobre un estado por reconstruir.
         Si falla, el dueño debe descartar su reconstrucción parcial y reabrir.
         Devuelve la cantidad de operaciones recuperadas, sin reunirlas en memoria.
@@ -78,8 +91,17 @@ class WAL:
                 raise TypeError('aplicar debe ser invocable')
             self._operando = True
             try:
-                self._archivo.seek(0)
-                self._siguiente = self._recorrer(aplicar)
+                inicio, secuencia = 0, 1
+                if desde is not None:
+                    estado = os.fstat(self._archivo.fileno())
+                    if (type(desde) is not PuntoWAL
+                            or (desde.dispositivo, desde.inodo) != (estado.st_dev, estado.st_ino)
+                            or not 0 <= desde.posicion <= estado.st_size
+                            or desde.siguiente < 1):
+                        raise ErrorWAL('El punto de recuperación no pertenece al historial disponible')
+                    inicio, secuencia = desde.posicion, desde.siguiente
+                self._archivo.seek(inicio)
+                self._siguiente = self._recorrer(aplicar, secuencia)
                 os.fsync(self._archivo.fileno())
                 self._recuperado = True
                 return self._siguiente - 1
@@ -89,8 +111,18 @@ class WAL:
             finally:
                 self._operando = False
 
-    def _recorrer(self, aplicar):
-        secuencia = 1
+    @property
+    def punto_recuperacion(self):
+        """Devuelve el punto durable asociado al estado reconstruido por el dueño."""
+        self._validar_proceso()
+        with self._mutex:
+            self._validar_disponible()
+            if not self._recuperado:
+                raise ErrorWAL('Recuperar el WAL antes de obtener una posición')
+            estado = os.fstat(self._archivo.fileno())
+            return PuntoWAL(estado.st_dev, estado.st_ino, self._archivo.tell(), self._siguiente)
+
+    def _recorrer(self, aplicar, secuencia):
         while True:
             self._comprobar()
             inicio = self._archivo.tell()

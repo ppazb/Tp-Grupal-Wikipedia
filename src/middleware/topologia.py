@@ -153,8 +153,22 @@ class TopologiaGrupos:
         partes = sorted(self._colas)
         partes.extend("|".join(enlace) for enlace in sorted(self._enlaces))
         partes.append(str(self._configuracion.limites.max_mensajes_por_cola))
+        partes.append(str(self._configuracion.particiones_recepcion))
         huella = hashlib.sha256("\n".join(partes).encode("utf-8")).hexdigest()
         return _nombre("capacidad", "lista", huella)
+
+    def cola_turno_recepcion(self, grupo, particion):
+        """Identifica el turno exclusivo de una partición del registro compartido."""
+        self._configuracion.obtener_grupo(grupo)
+        if not 0 <= particion < self._configuracion.particiones_recepcion:
+            raise ErrorConfiguracion('Partición de recepción fuera de rango')
+        return _nombre('recepcion', grupo, 'turno', particion)
+
+    def turnos_recepcion(self):
+        """Recorre las colas de exclusión de los grupos con entradas de datos."""
+        for grupo in sorted({ruta.destino for ruta in self._configuracion.rutas}):
+            for particion in range(self._configuracion.particiones_recepcion):
+                yield self.cola_turno_recepcion(grupo, particion)
 
     def _buscar_ruta(self, grupo, entrada):
         return self._configuracion.obtener_ruta(

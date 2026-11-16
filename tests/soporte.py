@@ -68,6 +68,7 @@ class EscenarioRabbitMQ(unittest.TestCase):
             base, broker=replace(base.broker, virtual_host=self.virtual_host),
             directorio_persistencia=str(Path(self.directorio_persistencia)
                                        / f"{grupo or self.grupo_fuente}-{instancia}"),
+            directorio_recepcion=str(Path(self.directorio_persistencia) / "recepciones"),
             proceso=IdentidadProceso(grupo or self.grupo_fuente, instancia),
         )
 

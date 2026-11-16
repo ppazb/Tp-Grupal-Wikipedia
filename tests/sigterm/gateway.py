@@ -20,6 +20,9 @@ def ejecutar_gateway(configuracion, eventos, modo):
     with TemporaryDirectory(prefix='sigterm-gateway-') as temporal, ExitStack() as recursos:
         config = json.loads(Path(__file__).with_name('config.json').read_text())
         config['broker']['virtual_host'] = configuracion.broker.virtual_host
+        config['persistencia']['directorio'] = configuracion.directorio_persistencia
+        config['persistencia']['directorio_recepcion'] = configuracion.directorio_recepcion
+        config['persistencia']['particiones_recepcion'] = configuracion.particiones_recepcion
         archivo = Path(temporal) / 'config.json'
         archivo.write_text(json.dumps(config))
         entorno = dict(MIDDLEWARE_CONFIG=str(archivo), GATEWAY_GROUP='gateway', GATEWAY_INSTANCE='0',

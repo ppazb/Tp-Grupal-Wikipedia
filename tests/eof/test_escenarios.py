@@ -135,6 +135,8 @@ class EscenariosEOF(EscenarioRabbitMQ):
                 eventos.get(timeout=PLAZO_BLOQUEO)
         permiso.set()
         self.assertEqual(self.resultados(consumidores, (entrada,)), [datos])
+        for fuente in fuentes:
+            fuente.cerrar()
 
     def test_ramas_independientes_y_dos_entradas_incluida_una_vacia(self):
         """Cerrar una rama no cierra otra ni habilita limpiar dependencias aún vacías."""

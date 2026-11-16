@@ -15,6 +15,8 @@ from .configuracion import ConfiguracionComunicacion, ErrorConfiguracion
 from .interfaz import ErrorConexion, ErrorMensajeInvalido, ErrorRecepcion, OperacionInterrumpida
 from .rechazos import ENTRADA_ERRORES, notificacion_rechazo
 from .topologia import TopologiaGrupos
+from .recepciones_durables import RecepcionesDurables
+from .turnos_recepcion import TurnosRecepcion
 
 
 REGISTRO = logging.getLogger(__name__)
@@ -59,6 +61,17 @@ class ReceptorDatos:
         self._entrega = None
         self._error_procesamiento = None
         self._retener_pendiente = False
+        self._turnos = TurnosRecepcion(conexion)
+        self._recepciones = RecepcionesDurables(configuracion, conexion, topologia, self._turnos)
+
+    @property
+    def entrega_actual(self):
+        """Expone la identidad del lote que está ejecutando el negocio."""
+        return self._recepciones.actual
+
+    def cerrar(self):
+        """Libera los índices locales sin borrar el historial de mensajes procesados."""
+        self._recepciones.cerrar()
 
     def recibir(
         self, procesar: Callable[[Evento], None], *,
@@ -118,6 +131,7 @@ class ReceptorDatos:
 
     def _detener(self):
         self._detenido = True
+        self._turnos.detener()
         self._cancelar_consumidores(self._conexion.canal)
 
     def _esperar(self, canal):
@@ -146,7 +160,6 @@ class ReceptorDatos:
         self._cancelar_consumidores(canal)
 
     def _procesar(self, canal, cuerpo, procesar):
-        contabilizable = False
         try:
             if not self._reservada:
                 raise ErrorMensajeInvalido("La entrega no tiene una reserva de capacidad")
@@ -158,20 +171,29 @@ class ReceptorDatos:
                     "Se recibió un control en una cola de datos",
                     entrada=sobre.entrada, origen=sobre.origen,
                 )
-            if self._coordinacion is not None:
-                self._coordinacion.validar_datos(sobre)
-            contabilizable = True
-            if sobre.contenido.esquema not in ruta.esquemas:
-                raise ErrorMensajeInvalido(
-                    "El esquema no está admitido en la entrada",
-                    entrada=sobre.entrada, origen=sobre.origen,
-                    esquema=sobre.contenido.esquema.value,
-                )
         except ErrorMensajeInvalido as error:
             self._rechazar_mensaje(canal, error)
-            if contabilizable and self._coordinacion is not None:
-                self._coordinacion.resolver_lote(sobre)
             return
+        with self._recepciones.recibir(sobre, cuerpo) as completada:
+            if completada:
+                # No vuelve a contar para EOF ni a notificar rechazos ya atendidos.
+                self._resolver(canal, rechazar=False)
+                return
+            if self._coordinacion is not None:
+                self._coordinacion.validar_datos(sobre)
+            rechazar = sobre.contenido.esquema not in ruta.esquemas
+            if rechazar:
+                self._notificar(sobre.entrada, sobre.contenido.esquema.value,
+                                'El esquema no está admitido en la entrada')
+            else:
+                self._entregar_datos(resultado, procesar)
+            self._recepciones.confirmar()
+            if self._coordinacion is not None:
+                self._coordinacion.resolver_lote(sobre)
+            self._resolver(canal, rechazar=rechazar)
+
+    def _entregar_datos(self, resultado, procesar):
+        sobre = resultado.sobre
         for error in resultado.errores_por_registro:
             self._notificar(
                 sobre.entrada, sobre.contenido.esquema.value, error.detalle, error.indice,
@@ -182,9 +204,6 @@ class ReceptorDatos:
         except BaseException as error:
             self._error_procesamiento = error
             raise
-        self._resolver(canal, rechazar=False)
-        if self._coordinacion is not None:
-            self._coordinacion.resolver_lote(sobre)
 
     def _procesar_control(self, canal, cuerpo, procesar, al_finalizar):
         try:
