@@ -8,16 +8,18 @@ from uuid import UUID, uuid4
 import pika
 
 from ..common.protocol.dto import CierreProductor, Datos, EnvioDatos, SobreMensaje, TipoMensaje
-from ..common.protocol.primitivas import BYTES_U64
+from ..common.protocol.primitivas import ErrorSerializacion
+from ..common.io_adapters.formato_wal import ErrorWAL
 from .broker_connection import ConexionBroker
 from .capacidad import CABECERA_CAPACIDAD, VERSION_CAPACIDAD, CapacidadDatos
 from .codificacion import CodificadorMensajes
 from .configuracion import ConfiguracionComunicacion
 from .interfaz import (
     EntradaFinalizada, ErrorConexion, ErrorMensaje, ErrorMiddleware, ErrorPublicacionParcial,
-    PublicacionRechazada, OperacionInterrumpida,
+    PublicacionRechazada, OperacionInterrumpida, ErrorPersistencia,
 )
 from .topologia import TopologiaGrupos
+from .salidas_durables import Publicacion, SalidasDurables
 
 
 MAXIMO_LOTES = 18446744073709551615
@@ -35,13 +37,13 @@ class PublicadorDatos:
     """Reserva capacidad y publica lotes secuencialmente con confirmación.
 
     Cada Datos viaja como un mensaje sujeto al límite de tamaño configurado.
-    Un NACK eleva PublicacionRechazada, sin reintentos automáticos.
+    Un NACK eleva PublicacionRechazada; la salida se conserva para recuperarla.
     El llamador administra el cierre de la conexión, incluso ante errores.
     """
 
     def __init__(
         self, configuracion: ConfiguracionComunicacion, conexion: ConexionBroker,
-        *, capacidad=None, topologia=None,
+        *, capacidad=None, topologia=None, ambito,
     ):
         self._configuracion = configuracion
         self._conexion = conexion
@@ -61,6 +63,13 @@ class PublicadorDatos:
             raise ErrorConexion("No se pudieron habilitar las confirmaciones") from error
         except pika.exceptions.AMQPError as error:
             raise ErrorMensaje("No se pudieron habilitar las confirmaciones") from error
+        try:
+            self._durables = SalidasDurables(
+                configuracion, self._codificador, self._seguir_salida, self._liberar_seguimiento,
+                ambito, conexion.comprobar_apagado,
+            )
+        except (ErrorWAL, OSError, ErrorSerializacion) as error:
+            raise ErrorPersistencia("No se pudo recuperar el registro de salidas") from error
 
     def publicar(self, envio: EnvioDatos) -> None:
         """Publica un envío identificado conservando su destino, contenido e ID."""
@@ -70,16 +79,17 @@ class PublicadorDatos:
         """Valida y publica una secuencia de salidas, en el orden recibido.
 
         Recibe una secuencia de envíos a las ramas definidas por el llamador.
-        Codifica todas las salidas antes de enviar la primera; una secuencia vacía
-        no publica nada. Si un envío falla después de otros confirmados, eleva
+        Recupera pendientes antes de admitir trabajo nuevo y codifica todas las
+        salidas antes de registrarlas. Si un envío falla después de otros confirmados, eleva
         ErrorPublicacionParcial con esas salidas y la causa del fallo.
-        Reutilizar los mismos EnvioDatos conserva sus IDs. Repetir el conjunto
-        puede duplicar las salidas confirmadas; identificar no deduplica.
+        Las ramas quedan registradas antes del primer envío. Repetir un ID
+        confirmado no publica otra vez; un resultado incierto se reenvía con su ID.
         """
         if self._publicando:
             raise ErrorMiddleware("La publicación no admite llamadas reentrantes")
         if not isinstance(envios, Sequence):
             raise ErrorMensaje("Las salidas deben ser una secuencia")
+        self.recuperar_pendientes()
         self._publicando = True
         try:
             preparados = [self._preparar(envio) for envio in envios]
@@ -95,7 +105,7 @@ class PublicadorDatos:
         """
         if self._publicando:
             raise ErrorMiddleware("No se puede cerrar una entrada durante una publicación")
-        # Codificar primero valida la identidad incluso cuando no hubo datos.
+        self.recuperar_pendientes()
         sobre = SobreMensaje.nuevo(entrada, TipoMensaje.EOF, self._configuracion.proceso, CierreProductor(0))
         self._codificador.codificar(sobre)
         instancia = self._topologia.instancia_coordinadora(grupo, entrada)
@@ -103,20 +113,21 @@ class PublicadorDatos:
         estado = self._salidas.setdefault((grupo, entrada), _EstadoSalida())
         if estado.cierre_confirmado:
             return
-        cuerpo = self._codificador.codificar(SobreMensaje(
-            entrada, TipoMensaje.EOF, self._configuracion.proceso, CierreProductor(estado.total),
-            estado.id_cierre,
-        ))
-        estado.cierre_iniciado = True
+        sobre = SobreMensaje(entrada, TipoMensaje.EOF, self._configuracion.proceso,
+                             CierreProductor(estado.total), estado.id_cierre)
+        publicacion = Publicacion(grupo, destino, self._codificador.codificar(sobre), sobre)
         self._publicando = True
         try:
-            self._publicar_cuerpo(destino, cuerpo, reservar_capacidad=False)
-            estado.cierre_confirmado = True
+            self._durables.preparar((publicacion,))
+            self._transmitir(publicacion)
         finally:
             self._publicando = False
 
     def liberar_ejecucion(self, id_ejecucion):
         """Elimina contadores y cierres de una ejecución cuya limpieza autorizó el llamador."""
+        self._durables.liberar(id_ejecucion)
+
+    def _liberar_seguimiento(self, id_ejecucion):
         self._salidas = {
             identidad: estado for identidad, estado in self._salidas.items()
             if identidad[1].id_ejecucion != id_ejecucion
@@ -128,35 +139,76 @@ class PublicadorDatos:
             TipoMensaje.PREPARAR_CIERRE, TipoMensaje.AVANCE_REPLICA, TipoMensaje.FIN_ENTRADA,
         ):
             raise ErrorMensaje("El tipo no corresponde a coordinación entre réplicas")
+        if sobre.origen != self._configuracion.proceso:
+            raise ErrorMensaje("El control debe pertenecer al productor local")
         if self._publicando:
             raise ErrorMiddleware("La publicación no admite llamadas reentrantes")
+        self.recuperar_pendientes()
         cuerpo = self._codificador.codificar(sobre)
         destino = self._topologia.destino_coordinacion(sobre.entrada.nombre, instancia)
         self._publicando = True
         try:
-            self._publicar_cuerpo(destino, cuerpo, reservar_capacidad=False)
+            publicacion = Publicacion(self._configuracion.proceso.grupo, destino, cuerpo, sobre)
+            self._durables.preparar((publicacion,))
+            if any(p.id_mensaje == sobre.id_mensaje for p in self._durables.pendientes()):
+                self._transmitir(publicacion)
         finally:
             self._publicando = False
 
-    def descartar_seguimiento(self):
-        """Libera todos los contadores locales al cerrar el middleware, sin emitir EOF."""
+    def cerrar(self):
+        """Cierra el registro durable sin descartar publicaciones pendientes."""
+        self._durables.cerrar()
         self._salidas.clear()
 
+    def recuperar_pendientes(self):
+        """Reenvía en orden las publicaciones sin confirmación durable."""
+        if self._publicando:
+            raise ErrorMiddleware("No se puede recuperar durante una publicación")
+        self._publicando = True
+        try:
+            for publicacion in self._durables.pendientes():
+                self._transmitir(publicacion)
+        finally:
+            self._publicando = False
+
+    def _seguir_salida(self, publicacion, confirmada):
+        sobre = publicacion.sobre
+        if sobre.tipo not in (TipoMensaje.DATOS, TipoMensaje.EOF):
+            return
+        estado = self._salidas.setdefault((publicacion.grupo, sobre.entrada), _EstadoSalida())
+        if sobre.tipo is TipoMensaje.DATOS:
+            if not confirmada:
+                if estado.cierre_iniciado or estado.total == MAXIMO_LOTES:
+                    raise ErrorMensaje("Historial de datos incompatible con el cierre de salida")
+                estado.total += 1
+        else:
+            if sobre.contenido.total_lotes != estado.total:
+                raise ErrorMensaje("El cierre persistido no coincide con el total de salida")
+            estado.id_cierre = sobre.id_mensaje
+            estado.cierre_iniciado = True
+            estado.cierre_confirmado = confirmada
+
+    def _transmitir(self, publicacion):
+        self._publicar_cuerpo(publicacion.destino, publicacion.cuerpo,
+                             reservar_capacidad=publicacion.sobre.tipo is TipoMensaje.DATOS)
+        self._durables.confirmar(publicacion)
+
     def _enviar_preparados(self, preparados):
+        self._durables.preparar(preparados)
         confirmadas = []
-        for identidad, destino, cuerpo in preparados:
-            estado = self._salidas.setdefault(identidad, _EstadoSalida())
+        pendientes = {p.id_mensaje for p in self._durables.pendientes()}
+        for publicacion in preparados:
+            identidad = (publicacion.grupo, publicacion.sobre.entrada)
             try:
-                if estado.total == MAXIMO_LOTES:
-                    raise ErrorMensaje("La cantidad de lotes excede el rango u64")
-                self._publicar_cuerpo(destino, cuerpo)
+                if publicacion.id_mensaje in pendientes:
+                    self._transmitir(publicacion)
+                    pendientes.remove(publicacion.id_mensaje)
             except OperacionInterrumpida:
                 raise
             except ErrorMiddleware as error:
                 if confirmadas:
                     raise ErrorPublicacionParcial(confirmadas, identidad) from error
                 raise
-            estado.total += 1
             confirmadas.append(identidad)
 
     def _preparar(self, envio):
@@ -173,7 +225,7 @@ class PublicadorDatos:
         )
         cuerpo = self._codificador.codificar(sobre)
         estado = self._salidas.get((envio.grupo, sobre.entrada))
-        if estado is not None and estado.cierre_iniciado:
+        if estado is not None and estado.cierre_iniciado and not self._durables.contiene(sobre.id_mensaje):
             raise EntradaFinalizada("El productor ya inició el cierre de esa salida")
         ruta = self._configuracion.obtener_ruta(
             sobre.origen.grupo, envio.grupo, sobre.entrada.nombre,
@@ -184,7 +236,7 @@ class PublicadorDatos:
         destino = self._topologia.destino_datos(
             envio.grupo, sobre.entrada.nombre, instancia,
         )
-        return (envio.grupo, sobre.entrada), destino, cuerpo
+        return Publicacion(envio.grupo, destino, cuerpo, sobre)
 
     def _instancia_destinataria(self, envio):
         clave = envio.clave_afinidad

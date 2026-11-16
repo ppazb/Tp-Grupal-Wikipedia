@@ -1,4 +1,5 @@
 {
+  "persistencia": {"directorio": "data/middleware"},
   "broker": {
     "host": "rabbitmq",
     "puerto": 5672,

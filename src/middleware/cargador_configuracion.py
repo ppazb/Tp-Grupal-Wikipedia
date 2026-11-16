@@ -24,6 +24,7 @@ PUERTO_MAXIMO = 65535
 MAXIMO_ENTERO_CORTO_AMQP = 65535
 PATRON_IDENTIFICADOR = re.compile(r"[a-z][a-z0-9_]*")
 CAMPOS_POR_SECCION = {
+    "persistencia": ("directorio",),
     "broker": (
         "host", "puerto", "usuario", "contrasena", "virtual_host",
         "latido_segundos", "timeout_conexion_segundos", "timeout_bloqueo_segundos",
@@ -47,6 +48,7 @@ def cargar_configuracion(ruta: Union[str, Path]) -> ConfiguracionComunicacion:
     _validar_campos(lector)
     _aplicar_entorno(lector, dict(os.environ))
     configuracion = ConfiguracionComunicacion(
+        directorio_persistencia=_texto(lector["persistencia"], "directorio"),
         broker=_leer_broker(lector["broker"]),
         proceso=IdentidadProceso(
             grupo=_identificador(lector["proceso"], "grupo"),
@@ -131,7 +133,7 @@ def _aplicar_entorno(lector, entorno):
         if variable not in destinos:
             raise ErrorConfiguracion(f"Variable de entorno desconocida: {variable}")
         seccion, campo = destinos[variable]
-        campos_texto = {"host", "usuario", "contrasena", "virtual_host", "grupo"}
+        campos_texto = {"host", "usuario", "contrasena", "virtual_host", "grupo", "directorio"}
         if seccion == "grupos" or campo not in campos_texto:
             try:
                 valor = int(valor)

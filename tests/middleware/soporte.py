@@ -44,14 +44,14 @@ def aviso(valor):
 
 
 def publicar_en_proceso(configuracion, eventos, envios, reserva_observada):
-    with MiddlewareRabbitMQ(configuracion) as middleware:
+    with MiddlewareRabbitMQ(configuracion, ambito_publicacion="instancia") as middleware:
         observar_reserva(middleware, eventos, reserva_observada)
         middleware.publicar_en_ramas(envios)
         eventos.put('publicado')
 
 
 def consumir_en_proceso(configuracion, eventos, publicar_salida=False, observar_error=False):
-    with MiddlewareRabbitMQ(configuracion) as middleware:
+    with MiddlewareRabbitMQ(configuracion, ambito_publicacion="instancia") as middleware:
         middleware._conexion.programar(lambda: eventos.put('listo'))
         if publicar_salida or observar_error:
             observar_reserva(middleware, eventos)

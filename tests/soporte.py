@@ -5,8 +5,10 @@ from contextlib import ExitStack
 from dataclasses import replace
 import multiprocessing
 from queue import Empty
+from pathlib import Path
 import signal
 import unittest
+from tempfile import TemporaryDirectory
 from urllib.request import Request, urlopen
 from uuid import uuid4
 
@@ -48,6 +50,9 @@ class EscenarioRabbitMQ(unittest.TestCase):
         self.addCleanup(signal.alarm, 0)
         signal.alarm(PLAZO_ESCENARIO)
         self.virtual_host = f'escenario_{uuid4().hex}'
+        temporal = TemporaryDirectory(prefix='wal-escenario-')
+        self.addCleanup(temporal.cleanup)
+        self.directorio_persistencia = temporal.name
         self.configuracion = self.configurar()
         administrar_virtual_host(self.configuracion, 'PUT')
         self.addCleanup(administrar_virtual_host, self.configuracion, 'DELETE')
@@ -61,12 +66,14 @@ class EscenarioRabbitMQ(unittest.TestCase):
         base = cargar_configuracion(self.archivo_configuracion)
         return replace(
             base, broker=replace(base.broker, virtual_host=self.virtual_host),
+            directorio_persistencia=str(Path(self.directorio_persistencia)
+                                       / f"{grupo or self.grupo_fuente}-{instancia}"),
             proceso=IdentidadProceso(grupo or self.grupo_fuente, instancia),
         )
 
     def abrir(self, grupo, instancia=0, **opciones):
         return self.recursos.enter_context(MiddlewareRabbitMQ(
-            self.configurar(grupo, instancia), **opciones,
+            self.configurar(grupo, instancia), ambito_publicacion="instancia", **opciones,
         ))
 
     def lanzar(self, funcion, grupo, *argumentos, instancia=0):

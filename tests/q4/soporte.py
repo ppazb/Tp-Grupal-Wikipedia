@@ -29,7 +29,7 @@ def rechazar_error(error):
 
 def producir(configuracion, eventos, clientes, numero):
     """Representa Ocurrencia Palabras con tokens controlados, sin analizar texto natural."""
-    with MiddlewareRabbitMQ(configuracion, informar_error=rechazar_error) as middleware:
+    with MiddlewareRabbitMQ(configuracion, ambito_publicacion="instancia", informar_error=rechazar_error) as middleware:
         for indice in range(max(map(len, clientes.values()), default=0)):
             if indice % 2 != numero:
                 continue
@@ -72,7 +72,7 @@ def ejecutar_worker(worker, eventos, clientes):
 
 
 def frecuencia(configuracion, eventos, clientes):
-    with MiddlewareRabbitMQ(configuracion, informar_error=rechazar_error) as middleware:
+    with MiddlewareRabbitMQ(configuracion, ambito_publicacion="instancia", informar_error=rechazar_error) as middleware:
         worker = WorkerFrecuencia(middleware, entrada='palabras',
                                   grupo_salida='top_n', entrada_salida='conteos')
         ejecutar_worker(worker, eventos, clientes)
@@ -82,7 +82,7 @@ def frecuencia(configuracion, eventos, clientes):
 def top_n(configuracion, eventos, clientes):
     with TemporaryDirectory(prefix='prueba-q4-') as temporal:
         with ConsolidadorFrecuencias(PRESUPUESTO_CONSOLIDACION, temporal) as consolidador:
-            with MiddlewareRabbitMQ(configuracion, informar_error=rechazar_error) as middleware:
+            with MiddlewareRabbitMQ(configuracion, ambito_publicacion="instancia", informar_error=rechazar_error) as middleware:
                 worker = WorkerTopN(middleware, consolidador, entrada='conteos',
                                     grupo_salida='sumidero', entrada_salida='q4')
                 ejecutar_worker(worker, eventos, clientes)
@@ -99,7 +99,7 @@ def consumir(configuracion, eventos, clientes):
     resultados = {cliente: [] for cliente in clientes}
     lotes = Counter()
     cierres = set()
-    with MiddlewareRabbitMQ(configuracion, informar_error=rechazar_error) as middleware:
+    with MiddlewareRabbitMQ(configuracion, ambito_publicacion="instancia", informar_error=rechazar_error) as middleware:
         def procesar(datos):
             cliente = datos.entrada.id_ejecucion
             if datos.entrada.nombre != 'q4' or cliente in cierres:

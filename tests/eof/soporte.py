@@ -37,7 +37,7 @@ def observar_avances(middleware, eventos):
 
 
 def producir(configuracion, eventos, envios, entradas):
-    with MiddlewareRabbitMQ(configuracion) as middleware:
+    with MiddlewareRabbitMQ(configuracion, ambito_publicacion="instancia") as middleware:
         for envio in envios:
             middleware.publicar_en_ramas((envio,))
         for grupo, entrada in entradas:
@@ -63,7 +63,7 @@ def consumir(configuracion, eventos, entradas, inicio=None, trabajo=None,
              observar=False, acumular=False, usar_evento_fin=False):
     """Retiene aportes hasta finalizar; comprueba cierres únicos y limpieza por cliente."""
     datos, fines, liberados = [], set(), Counter()
-    with MiddlewareRabbitMQ(configuracion, informar_error=error_inesperado) as middleware:
+    with MiddlewareRabbitMQ(configuracion, ambito_publicacion="instancia", informar_error=error_inesperado) as middleware:
         for ejecucion in {entrada.id_ejecucion for entrada in entradas}:
             middleware.registrar_recurso(
                 ejecucion, 'acumulador', lambda clave=ejecucion: liberados.update((clave,)),

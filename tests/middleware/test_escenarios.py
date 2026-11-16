@@ -35,7 +35,7 @@ class EscenariosMiddleware(EscenarioRabbitMQ):
         if grupo == 'gateway_resultados':
             opciones['informar_error'] = self.fail
         return self.recursos.enter_context(MiddlewareRabbitMQ(
-            self.configurar(grupo, instancia), **opciones,
+            self.configurar(grupo, instancia), ambito_publicacion="instancia", **opciones,
         ))
 
     def inyectar(self, cuerpo, *, reservar=True):
@@ -95,7 +95,7 @@ class EscenariosMiddleware(EscenarioRabbitMQ):
         frecuencia.publicar(EnvioDatos.nuevo('top_n', conteo('primero')))
         entrada = palabras('cliente_A', 'trabajo')
         productor.publicar(EnvioDatos.nuevo('frecuencias', entrada))
-        proceso, eventos = self.lanzar(consumir_en_proceso, 'frecuencias', True)
+        proceso, eventos = self.lanzar(consumir_en_proceso, 'frecuencias', True, instancia=1)
         self.assertEqual(self.esperar(eventos), 'listo')
         self.assertEqual(self.esperar(eventos), entrada)
         self.comprobar_bloqueado(eventos)
@@ -103,7 +103,7 @@ class EscenariosMiddleware(EscenarioRabbitMQ):
         self.assertEqual(self.estado(self.topologia.cola_capacidad(cola)).message_count, 0)
         siguiente = palabras('cliente_B', 'siguiente')
         fuente, publicaciones = self.lanzar(
-            publicar_en_proceso, 'ocurrencias', (EnvioDatos.nuevo('frecuencias', siguiente),), 1,
+            publicar_en_proceso, 'ocurrencias', (EnvioDatos.nuevo('frecuencias', siguiente),), 1, instancia=1,
         )
         self.comprobar_bloqueado(publicaciones)
         self.assertEqual(self.recibir(top), conteo('primero'))
@@ -125,7 +125,7 @@ class EscenariosMiddleware(EscenarioRabbitMQ):
         nuevo = aviso('nuevo')
         proceso, eventos = self.lanzar(
             publicar_en_proceso, 'ocurrencias',
-            (EnvioDatos.nuevo('frecuencias', datos), EnvioDatos.nuevo('gateway_resultados', nuevo)), 2,
+            (EnvioDatos.nuevo('frecuencias', datos), EnvioDatos.nuevo('gateway_resultados', nuevo)), 2, instancia=1,
         )
         self.comprobar_bloqueado(eventos)
         cola = self.topologia.destino_datos('frecuencias', 'palabras').cola
@@ -253,7 +253,7 @@ class EscenariosMiddleware(EscenarioRabbitMQ):
         # Se conserva la conexión real para inspeccionar su cierre tras el error.
         with patch('src.middleware.rabbitmq.ConexionBroker', return_value=conexion):
             with self.assertRaises(ErrorConfiguracion):
-                MiddlewareRabbitMQ(self.configuracion)
+                MiddlewareRabbitMQ(self.configuracion, ambito_publicacion="instancia")
         self.assertIsNone(conexion._conexion)
         self.assertEqual(conexion._canales_adicionales, [])
         with self.assertRaises(MiddlewareCerrado):
@@ -262,7 +262,7 @@ class EscenariosMiddleware(EscenarioRabbitMQ):
     def test_espera_larga_conserva_latidos_y_permite_seguir_publicando(self):
         """Una pausa mayor que el heartbeat mantiene utilizable la conexión."""
         configuracion = replace(self.configuracion, broker=replace(self.configuracion.broker, latido_segundos=2))
-        with MiddlewareRabbitMQ(configuracion) as productor:
+        with MiddlewareRabbitMQ(configuracion, ambito_publicacion="instancia") as productor:
             inicio = time.monotonic()
             productor.esperar(5)
             self.assertGreaterEqual(time.monotonic() - inicio, 5)

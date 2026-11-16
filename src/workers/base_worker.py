@@ -29,7 +29,7 @@ def entorno_worker(configuracion, *, limpiar=None):
         if limpiar is not None:
             apagado.registrar_limpieza(limpiar)
         try:
-            with MiddlewareRabbitMQ(configuracion, apagado=apagado) as middleware:
+            with MiddlewareRabbitMQ(configuracion, ambito_publicacion="instancia", apagado=apagado) as middleware:
                 iniciado = True
                 yield middleware, apagado
         except OperacionInterrumpida:

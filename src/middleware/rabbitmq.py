@@ -35,7 +35,7 @@ class MiddlewareRabbitMQ(Middleware[Lote]):
     abierto hasta salir del contexto del middleware. No emite EOF al detenerse.
     """
 
-    def __init__(self, configuracion, *, informar_error=None, apagado=None):
+    def __init__(self, configuracion, *, informar_error=None, apagado=None, ambito_publicacion):
         self._proceso_propietario = os.getpid()
         self._identidad = configuracion.proceso
         self._conexion = ConexionBroker(configuracion.broker, apagado=apagado)
@@ -61,6 +61,7 @@ class MiddlewareRabbitMQ(Middleware[Lote]):
             self._capacidad = CapacidadDatos(self._conexion, topologia)
             self._publicador = PublicadorDatos(
                 configuracion, self._conexion, capacidad=self._capacidad, topologia=topologia,
+                ambito=ambito_publicacion,
             )
             if topologia.colas_recepcion() is not None:
                 self._coordinacion = CoordinacionCierre(
@@ -147,6 +148,7 @@ class MiddlewareRabbitMQ(Middleware[Lote]):
             raise ErrorRecepcion("No se puede iniciar una recepción durante otra operación")
         self._recibiendo = True
         try:
+            self._publicador.recuperar_pendientes()
             self._receptor.recibir(procesar, al_finalizar=al_finalizar)
         finally:
             self._recibiendo = False
@@ -202,9 +204,10 @@ class MiddlewareRabbitMQ(Middleware[Lote]):
         self._cerrando = True
         errores = []
         try:
+            limpiezas = [self._recursos.cerrar, self._conexion.cerrar]
             if self._publicador is not None:
-                self._publicador.descartar_seguimiento()
-            for liberar in (self._recursos.cerrar, self._conexion.cerrar):
+                limpiezas.insert(0, self._publicador.cerrar)
+            for liberar in limpiezas:
                 try:
                     liberar()
                 except BaseException as error:

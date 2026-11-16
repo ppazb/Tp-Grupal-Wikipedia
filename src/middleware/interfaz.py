@@ -10,6 +10,10 @@ class ErrorMiddleware(Exception):
     """Error de comunicación informado."""
 
 
+class ErrorPersistencia(ErrorMiddleware):
+    """El registro durable de comunicación no pudo completar una operación."""
+
+
 class ErrorConexion(ErrorMiddleware):
     """No se pudo establecer o mantener la conexión."""
 
@@ -136,7 +140,8 @@ class ComunicacionGrupos(ABC, Generic[Contenido]):
         Requiere haber completado el procesamiento, las confirmaciones y las salidas.
         Conserva los recursos compartidos. Repetir una liberación exitosa no tiene
         efecto; ante fallos intenta las demás limpiezas, conserva las pendientes y
-        eleva ErrorRecursosEjecucion. No conserva un historial de ejecuciones.
+        eleva ErrorRecursosEjecucion. La liberación lógica conserva el historial
+        durable de publicación; no equivale a compactarlo.
         """
 
     @abstractmethod
@@ -145,6 +150,8 @@ class ComunicacionGrupos(ABC, Generic[Contenido]):
 
         Una espera conserva la salida actual y no repite las confirmadas. Un
         error posterior a un envío confirmado eleva ErrorPublicacionParcial.
+        Las salidas se registran antes de transmitirlas y un ID confirmado no se
+        publica nuevamente. Los resultados inciertos conservan su identidad.
         """
 
     @abstractmethod
