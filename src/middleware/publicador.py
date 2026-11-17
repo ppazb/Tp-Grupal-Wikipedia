@@ -11,7 +11,8 @@ from ..common.protocol.dto import CierreProductor, Datos, EnvioDatos, SobreMensa
 from ..common.protocol.primitivas import ErrorSerializacion
 from ..common.io_adapters.formato_wal import ErrorWAL
 from .broker_connection import ConexionBroker
-from .capacidad import CABECERA_CAPACIDAD, VERSION_CAPACIDAD, CapacidadDatos
+from .capacidad import CABECERA_CAPACIDAD, CABECERA_RESERVA, VERSION_CAPACIDAD, CapacidadDatos
+from .reservas_durables import EstadoReserva
 from .codificacion import CodificadorMensajes
 from .configuracion import ConfiguracionComunicacion
 from .interfaz import (
@@ -54,7 +55,7 @@ class PublicadorDatos:
         )
         if topologia is None:
             self._topologia.declarar(conexion)
-        self._capacidad = capacidad or CapacidadDatos(conexion, self._topologia)
+        self._capacidad = capacidad or CapacidadDatos(configuracion, conexion, self._topologia)
         self._publicando = False
         self._salidas = {}
         try:
@@ -190,6 +191,7 @@ class PublicadorDatos:
 
     def _transmitir(self, publicacion):
         self._publicar_cuerpo(publicacion.destino, publicacion.cuerpo,
+                             identificador=publicacion.id_mensaje,
                              reservar_capacidad=publicacion.sobre.tipo is TipoMensaje.DATOS)
         self._durables.confirmar(publicacion)
 
@@ -253,16 +255,14 @@ class PublicadorDatos:
         cantidad = self._configuracion.obtener_grupo(envio.grupo).instancias
         return int.from_bytes(huella, byteorder="big") % cantidad
 
-    def _publicar_cuerpo(self, destino, cuerpo, *, reservar_capacidad=True):
+    def _publicar_cuerpo(self, destino, cuerpo, *, identificador, reservar_capacidad=True):
+        reserva = None
         if reservar_capacidad:
-            self._capacidad.adquirir(destino.cola)
-        try:
-            canal = self._conexion.canal
-        except OperacionInterrumpida:
-            # Aún no se invocó basic_publish: este permiso no respalda ningún dato.
-            if reservar_capacidad:
-                self._capacidad.devolver(destino.cola, durante_apagado=True)
-            raise
+            reserva = self._capacidad.adquirir(destino.cola, identificador, cuerpo)
+            if reserva is EstadoReserva.COMPLETADA:
+                return
+        # Una interrupción conserva la reserva: la salida ya está en el WAL.
+        canal = self._conexion.canal
         try:
             canal.basic_publish(
                 exchange=destino.exchange,
@@ -270,18 +270,19 @@ class PublicadorDatos:
                 body=cuerpo,
                 mandatory=True,
                 properties=pika.BasicProperties(
-                    headers={CABECERA_CAPACIDAD: VERSION_CAPACIDAD} if reservar_capacidad else None,
+                    headers={CABECERA_CAPACIDAD: VERSION_CAPACIDAD,
+                             CABECERA_RESERVA: identificador.hex} if reservar_capacidad else None,
                     content_type="application/octet-stream",
                     delivery_mode=pika.spec.PERSISTENT_DELIVERY_MODE,
                 ),
             )
         except pika.exceptions.UnroutableError as error:
-            if reservar_capacidad:
-                self._capacidad.devolver(destino.cola)
+            if reserva is EstadoReserva.NUEVA:
+                self._capacidad.devolver(destino.cola, identificador, consumida=False)
             raise ErrorMensaje("El mensaje no llegó a una cola destinataria") from error
         except pika.exceptions.NackError as error:
-            if reservar_capacidad:
-                self._capacidad.devolver(destino.cola)
+            if reserva is EstadoReserva.NUEVA:
+                self._capacidad.devolver(destino.cola, identificador, consumida=False)
             # Un NACK puede indicar una cola llena, pero no identifica la causa.
             raise PublicacionRechazada("El broker no admitió la publicación") from error
         except (pika.exceptions.AMQPConnectionError, OSError) as error:

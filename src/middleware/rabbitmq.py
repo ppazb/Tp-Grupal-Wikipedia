@@ -58,7 +58,7 @@ class MiddlewareRabbitMQ(Middleware[Lote]):
         try:
             self._conexion.abrir()
             topologia.declarar(self._conexion)
-            self._capacidad = CapacidadDatos(self._conexion, topologia)
+            self._capacidad = CapacidadDatos(configuracion, self._conexion, topologia)
             self._publicador = PublicadorDatos(
                 configuracion, self._conexion, capacidad=self._capacidad, topologia=topologia,
                 ambito=ambito_publicacion,
@@ -205,6 +205,8 @@ class MiddlewareRabbitMQ(Middleware[Lote]):
         errores = []
         try:
             limpiezas = [self._recursos.cerrar, self._conexion.cerrar]
+            if self._capacidad is not None:
+                limpiezas.insert(0, self._capacidad.cerrar)
             if self._receptor is not None:
                 limpiezas.insert(0, self._receptor.cerrar)
             if self._publicador is not None:

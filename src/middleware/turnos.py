@@ -1,19 +1,20 @@
-"""Exclusión entre réplicas mediante un turno no confirmado por partición."""
+"""Exclusión entre procesos mediante turnos no confirmados en RabbitMQ."""
 
 from contextlib import contextmanager
 import logging
 
-from .capacidad import PERMISO
-from .interfaz import ErrorRecepcion, OperacionInterrumpida
+from .permisos import PERMISO
+from .interfaz import OperacionInterrumpida
 
 
 REGISTRO = logging.getLogger(__name__)
 
 
-class TurnosRecepcion:
+class TurnosCompartidos:
     """Mantiene el turno sin ACK; RabbitMQ lo devuelve si desaparece la conexión."""
 
-    def __init__(self, conexion):
+    def __init__(self, conexion, *, tipo_error):
+        self._error = tipo_error
         self._conexion = conexion
         self._canal = conexion.crear_canal()
         self._canal.basic_qos(prefetch_count=1, global_qos=True)
@@ -26,11 +27,11 @@ class TurnosRecepcion:
     def adquirir(self, cola):
         """Espera por eventos y conserva la exclusión hasta salir del contexto."""
         if self._activo:
-            raise ErrorRecepcion('La adquisición de turnos no admite reentrancia')
+            raise self._error('La adquisición de turnos no admite reentrancia')
         if self._entrega is not None or self._consumidor is not None:
-            raise ErrorRecepcion('Quedó un turno sin liberar; cerrar la conexión')
+            raise self._error('Quedó un turno sin liberar; cerrar la conexión')
         if self._detenido:
-            raise OperacionInterrumpida('La espera de recepción fue detenida')
+            raise OperacionInterrumpida('La espera del turno fue detenida')
         self._activo = True
         try:
             self._conexion.comprobar_apagado()
@@ -40,12 +41,12 @@ class TurnosRecepcion:
             self._canal.start_consuming()
             self._conexion.comprobar_apagado()
             if self._detenido:
-                raise OperacionInterrumpida('La espera de recepción fue detenida')
+                raise OperacionInterrumpida('La espera del turno fue detenida')
             if self._entrega is None:
-                raise ErrorRecepcion('Se canceló la espera sin entregar el turno')
+                raise self._error('Se canceló la espera sin entregar el turno')
             _, cuerpo = self._entrega
             if cuerpo != PERMISO:
-                raise ErrorRecepcion('El turno de recepción es inválido')
+                raise self._error('El turno compartido es inválido')
             yield
         except BaseException:
             try:

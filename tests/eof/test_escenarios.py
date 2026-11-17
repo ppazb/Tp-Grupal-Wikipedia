@@ -11,7 +11,7 @@ from src.common.protocol.dto import (
     CierreProductor, Datos, Entrada, EnvioDatos, IdentidadProceso, SobreMensaje, TipoMensaje,
 )
 from src.common.protocol.registros import ConteoPalabra, Esquema, Lote
-from src.middleware.capacidad import CABECERA_CAPACIDAD, VERSION_CAPACIDAD, CapacidadDatos
+from src.middleware.capacidad import CABECERA_CAPACIDAD, CABECERA_RESERVA, VERSION_CAPACIDAD, CapacidadDatos
 from src.middleware.codificacion import CodificadorMensajes
 from src.middleware.interfaz import EntradaFinalizada, ErrorSeguimientoEntrada
 from src.middleware.topologia import TopologiaGrupos
@@ -236,19 +236,21 @@ class EscenariosEOF(EscenarioRabbitMQ):
         topologia = TopologiaGrupos(self.configurar('consumidores'))
         destino = topologia.destino_datos('sumidero', 'conteos')
         codificador = CodificadorMensajes(self.configuracion.limites.max_bytes_por_mensaje)
-        capacidad = CapacidadDatos(self.inspector, topologia)
+        capacidad = CapacidadDatos(self.configuracion, self.inspector, topologia)
         self.inspector.canal.confirm_delivery()
         for palabras_lote in (('válido', 'corromper'), ('corromper',)):
             lote = Lote(Esquema.CONTEO_PALABRA, tuple(ConteoPalabra(p, 1) for p in palabras_lote))
-            cuerpo = bytearray(codificador.codificar(SobreMensaje.nuevo(
+            sobre = SobreMensaje.nuevo(
                 entrada, TipoMensaje.DATOS, IdentidadProceso('consumidores', 0), lote,
-            )))
+            )
+            cuerpo = bytearray(codificador.codificar(sobre))
             cuerpo[cuerpo.index(b'corromper')] = 255
-            capacidad.adquirir(destino.cola)
+            capacidad.adquirir(destino.cola, sobre.id_mensaje, bytes(cuerpo))
             self.inspector.canal.basic_publish(
                 exchange=destino.exchange, routing_key=destino.clave, body=bytes(cuerpo),
                 mandatory=True, properties=pika.BasicProperties(
-                    headers={CABECERA_CAPACIDAD: VERSION_CAPACIDAD},
+                    headers={CABECERA_CAPACIDAD: VERSION_CAPACIDAD,
+                             CABECERA_RESERVA: sobre.id_mensaje.hex},
                 ),
             )
             receptor.recibir(recibidos.append, al_finalizar=finales.append)

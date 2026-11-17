@@ -130,9 +130,9 @@ def ejecutar_worker(configuracion, eventos, modo, continuar):
         if modo == 'inactivo':
             middleware._conexion.programar(lambda: eventos.put('esperando'))
 
-    def adquirir_observado(capacidad, cola):
+    def adquirir_observado(capacidad, cola, identificador, cuerpo):
         capacidad._conexion.programar(lambda: eventos.put('sin_capacidad'))
-        return adquirir_original(capacidad, cola)
+        return adquirir_original(capacidad, cola, identificador, cuerpo)
 
     def procesar_observado(worker, datos):
         procesar_original(worker, datos)

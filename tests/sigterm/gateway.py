@@ -74,9 +74,9 @@ def ejecutar_gateway(configuracion, eventos, modo):
             servidores.append(servidor)
             return aceptar(servidor)
 
-        def adquirir_observado(capacidad, cola):
+        def adquirir_observado(capacidad, cola, identificador, cuerpo):
             capacidad._conexion.programar(lambda: eventos.put('sin_capacidad'))
-            return adquirir(capacidad, cola)
+            return adquirir(capacidad, cola, identificador, cuerpo)
 
         def enviar_observado(sesion, tipo, cuerpo):
             if modo == 'envio' and tipo.name == 'RESULTADO':

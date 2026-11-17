@@ -143,10 +143,15 @@ class TopologiaGrupos:
         return tuple(sorted(self._colas_datos))
 
     def cola_capacidad(self, cola_datos):
-        """Resuelve la cola de permisos asociada a una cola de datos declarada."""
+        """Resuelve la cola de avisos de capacidad asociada a los datos."""
         if cola_datos not in self._colas_datos:
             raise ErrorConfiguracion("La cola no pertenece a la topología de datos")
         return _nombre("capacidad", cola_datos)
+
+    def cola_turno_capacidad(self, cola_datos):
+        """Resuelve el turno exclusivo para consultar y modificar las reservas."""
+        self.cola_capacidad(cola_datos)
+        return _nombre('capacidad', 'turno', cola_datos)
 
     def marca_capacidad(self):
         """Identifica una topología y su límite de capacidad para validar el arranque."""
@@ -154,6 +159,7 @@ class TopologiaGrupos:
         partes.extend("|".join(enlace) for enlace in sorted(self._enlaces))
         partes.append(str(self._configuracion.limites.max_mensajes_por_cola))
         partes.append(str(self._configuracion.particiones_recepcion))
+        partes.append('reservas-durables-v2')
         huella = hashlib.sha256("\n".join(partes).encode("utf-8")).hexdigest()
         return _nombre("capacidad", "lista", huella)
 

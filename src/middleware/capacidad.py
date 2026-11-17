@@ -1,45 +1,38 @@
-"""Permisos de capacidad compartidos mediante colas básicas de RabbitMQ."""
+"""Capacidad durable por lote y avisos de disponibilidad mediante RabbitMQ."""
 
 import logging
 import sys
+from uuid import UUID
 
 import pika
 
 from .interfaz import ErrorCapacidad, OperacionInterrumpida
 from .configuracion import ErrorConfiguracion
+from .permisos import PERMISO, publicar_permiso
+from .reservas_durables import RegistroReservas
+from .turnos import TurnosCompartidos
 
 
 REGISTRO = logging.getLogger(__name__)
-PERMISO = b"\x01"
-CABECERA_CAPACIDAD = "wikipedia_capacidad"
-VERSION_CAPACIDAD = 1
+CABECERA_CAPACIDAD = 'wikipedia_capacidad'
+CABECERA_RESERVA = 'wikipedia_reserva'
+VERSION_CAPACIDAD = 2
 COLA_INEXISTENTE = 404
 
 
-def publicar_permiso(canal, cola):
-    """Publica un permiso y espera su confirmación antes de retornar."""
-    canal.basic_publish(
-        exchange="", routing_key=cola, body=PERMISO, mandatory=True,
-        properties=pika.BasicProperties(
-            content_type="application/octet-stream",
-            delivery_mode=pika.spec.PERSISTENT_DELIVERY_MODE,
-        ),
-    )
-
-
 class CapacidadDatos:
-    """Reserva un lugar por publicación y lo devuelve al resolver su entrega.
+    """Cuenta lotes distintos en un WAL compartido; los avisos solo despiertan esperas.
 
-    El canal de permisos comparte conexión con los datos, pero tiene su propio
-    prefetch. Cada instancia permite una sola espera a la vez. Todos los procesos
-    utilizan permisos inicializados para la misma topología y capacidad.
+    Una retransmisión conserva su reserva. La resolución durable precede al ACK
+    de datos y es idempotente por ID. Cada instancia admite una espera a la vez.
     """
 
-    def __init__(self, conexion, topologia):
+    def __init__(self, configuracion, conexion, topologia):
         self._conexion = conexion
         self._topologia = topologia
         self._canal = conexion.crear_canal()
         self._consumidor = None
+        self._entrega = None
         self._esperando = False
         self._detenido = False
         try:
@@ -48,83 +41,118 @@ class CapacidadDatos:
             self._canal.basic_qos(prefetch_count=1, global_qos=True)
         except pika.exceptions.ChannelClosedByBroker as error:
             if error.reply_code == COLA_INEXISTENTE:
-                raise ErrorConfiguracion("Inicializar la capacidad del despliegue antes de abrir el middleware") from error
-            raise ErrorCapacidad("No se pudo abrir el canal de permisos") from error
+                raise ErrorConfiguracion('Inicializar la capacidad antes de abrir el middleware') from error
+            raise ErrorCapacidad('No se pudo abrir el canal de capacidad') from error
         except (pika.exceptions.AMQPError, OSError) as error:
-            raise ErrorCapacidad("No se pudo abrir el canal de permisos") from error
+            raise ErrorCapacidad('No se pudo abrir el canal de capacidad') from error
+        self._turnos = TurnosCompartidos(conexion, tipo_error=ErrorCapacidad)
+        self._registro = RegistroReservas(configuracion, conexion, topologia, self._turnos)
 
-    def adquirir(self, cola_datos):
-        """Espera un permiso por eventos de E/S, sin sondeo ni temporizadores."""
+    def adquirir(self, cola_datos, identificador, cuerpo):
+        """Reserva el lote o espera un aviso; reintentar no consume otro lugar."""
         self._conexion.canal
-        if self._esperando:
-            raise ErrorCapacidad("La reserva de capacidad no admite reentrancia")
-        if self._consumidor is not None:
-            raise ErrorCapacidad("No se pudo cerrar la reserva anterior; cerrar la conexión")
+        if self._esperando or self._consumidor is not None or self._entrega is not None:
+            raise ErrorCapacidad('La reserva no admite reentrancia ni esperas pendientes')
         if self._detenido:
-            raise OperacionInterrumpida("La espera de capacidad fue interrumpida")
-        entrega = []
+            raise OperacionInterrumpida('La espera de capacidad fue interrumpida')
         self._esperando = True
         try:
-            self._consumidor = self._canal.basic_consume(
-                queue=self._topologia.cola_capacidad(cola_datos), auto_ack=False,
-                on_message_callback=lambda canal, metodo, propiedades, cuerpo:
-                    self._recibir_permiso(entrega, metodo, cuerpo),
-            )
-            self._canal.start_consuming()
-            if self._detenido:
-                raise OperacionInterrumpida("La espera de capacidad fue interrumpida")
-            if not entrega:
-                raise ErrorCapacidad("El broker canceló la espera sin entregar un permiso")
-            etiqueta, cuerpo = entrega[0]
-            if cuerpo != PERMISO:
-                self._canal.basic_reject(delivery_tag=etiqueta, requeue=False)
-                entrega.clear()
-                raise ErrorCapacidad("El permiso recibido es inválido")
-            self._canal.basic_ack(delivery_tag=etiqueta)
-            entrega.clear()
+            while True:
+                self._conexion.comprobar_apagado()
+                if self._detenido:
+                    raise OperacionInterrumpida('La espera de capacidad fue interrumpida')
+                with self._registro.abrir(cola_datos) as reserva:
+                    resultado = reserva.adquirir(identificador, cuerpo)
+                    if reserva.disponibles:
+                        # Pasa el aviso a otro esperante antes de confirmar el propio.
+                        publicar_permiso(self._canal, self._topologia.cola_capacidad(cola_datos))
+                self._resolver_aviso()
+                if resultado is not None:
+                    return resultado
+                # Solo se vuelve a consultar tras una entrega, no por sondeo.
+                self._esperar_aviso(cola_datos)
         except (pika.exceptions.AMQPError, OSError) as error:
-            raise ErrorCapacidad("Falló la reserva de capacidad") from error
+            raise ErrorCapacidad('Falló la reserva de capacidad') from error
         finally:
             self._esperando = False
-            self._limpiar_espera(entrega, sys.exc_info()[0] is not None)
+            self._limpiar_espera(sys.exc_info()[0] is not None)
 
-    def _recibir_permiso(self, entrega, metodo, cuerpo):
-        entrega.append((metodo.delivery_tag, cuerpo))
+    def _esperar_aviso(self, cola):
+        self._consumidor = self._canal.basic_consume(
+            queue=self._topologia.cola_capacidad(cola), auto_ack=False,
+            on_message_callback=self._recibir_aviso,
+        )
+        self._canal.start_consuming()
+        if self._detenido:
+            raise OperacionInterrumpida('La espera de capacidad fue interrumpida')
+        if self._entrega is None:
+            raise ErrorCapacidad('El broker canceló la espera sin entregar un aviso')
+        if self._entrega[1] != PERMISO:
+            raise ErrorCapacidad('Aviso de capacidad inválido')
+
+    def _recibir_aviso(self, canal, metodo, propiedades, cuerpo):
+        self._entrega = (metodo.delivery_tag, cuerpo)
         self._cancelar_consumidor()
+
+    def _resolver_aviso(self):
+        if self._entrega is not None:
+            self._canal.basic_ack(delivery_tag=self._entrega[0])
+            self._entrega = None
 
     def _cancelar_consumidor(self):
         if self._consumidor is not None and self._canal.is_open:
             self._canal.basic_cancel(consumer_tag=self._consumidor)
             self._consumidor = None
 
-    def _limpiar_espera(self, entrega, preservar_error):
+    def _limpiar_espera(self, preservar_error):
         self._conexion.preparar_limpieza()
         try:
             self._cancelar_consumidor()
-            if entrega and self._canal.is_open:
-                self._canal.basic_nack(delivery_tag=entrega[0][0], requeue=True)
+            if self._entrega is not None and self._canal.is_open:
+                self._canal.basic_nack(delivery_tag=self._entrega[0], requeue=True)
+                self._entrega = None
         except (pika.exceptions.AMQPError, OSError) as error:
             if not preservar_error:
-                raise ErrorCapacidad("No se pudo cancelar la reserva") from error
-            REGISTRO.exception("Falló la limpieza de una reserva; se conserva el error original")
+                raise ErrorCapacidad('No se pudo limpiar la espera; cerrar la conexión') from error
+            REGISTRO.exception('Falló la limpieza del aviso; se conserva el error original')
 
-    def devolver(self, cola_datos, *, durante_apagado=False):
-        """Devuelve un permiso; admite limpieza de reservas no publicadas al apagar."""
-        if not durante_apagado:
-            self._conexion.canal
+    def validar_entrega(self, cola_datos, identificador, cuerpo):
+        """Valida la reserva contra el historial común, incluso para duplicados."""
+        with self._registro.abrir(cola_datos) as reserva:
+            reserva.validar_entrega(identificador, cuerpo)
+
+    def devolver(self, cola_datos, identificador, *, consumida):
+        """Persiste la devolución y despierta esperantes antes de confirmar el dato."""
+        self._conexion.canal
         try:
-            publicar_permiso(self._canal, self._topologia.cola_capacidad(cola_datos))
+            with self._registro.abrir(cola_datos) as reserva:
+                reserva.devolver(identificador, consumida=consumida)
+                publicar_permiso(self._canal, self._topologia.cola_capacidad(cola_datos))
         except (pika.exceptions.AMQPError, OSError) as error:
-            raise ErrorCapacidad("No se pudo devolver el permiso de capacidad") from error
+            raise ErrorCapacidad('Falló la devolución durable de capacidad') from error
 
     def interrumpir(self):
-        """Cancela la espera activa y rechaza reservas nuevas en esta instancia."""
+        """Cancela esperas conservando reservas asociadas a salidas recuperables."""
         self._detenido = True
         self._cancelar_consumidor()
+        self._turnos.detener()
+
+    def cerrar(self):
+        """Descarta índices locales; los canales los cierra la conexión propietaria."""
+        self._registro.cerrar()
 
     @staticmethod
-    def tiene_reserva(propiedades):
-        """Comprueba la marca de capacidad de una publicación del middleware."""
+    def identificar_reserva(propiedades):
+        """Lee el ID de reserva de las cabeceras; las ausentes o inválidas dan None."""
         cabeceras = propiedades.headers if propiedades is not None else None
-        valor = cabeceras.get(CABECERA_CAPACIDAD) if isinstance(cabeceras, dict) else None
-        return type(valor) is int and valor == VERSION_CAPACIDAD
+        if not isinstance(cabeceras, dict):
+            return None
+        version = cabeceras.get(CABECERA_CAPACIDAD)
+        valor = cabeceras.get(CABECERA_RESERVA)
+        if type(version) is not int or version != VERSION_CAPACIDAD or type(valor) is not str:
+            return None
+        try:
+            identificador = UUID(valor)
+            return identificador if identificador.int else None
+        except ValueError:
+            return None

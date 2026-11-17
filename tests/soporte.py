@@ -14,6 +14,7 @@ from uuid import uuid4
 
 from src.common.protocol.dto import IdentidadProceso
 from src.middleware.broker_connection import ConexionBroker
+from src.middleware.capacidad import CapacidadDatos
 from src.middleware.cargador_configuracion import cargar_configuracion
 from src.middleware.inicializar import inicializar_capacidad
 from src.middleware.rabbitmq import MiddlewareRabbitMQ
@@ -126,9 +127,19 @@ class EscenarioRabbitMQ(unittest.TestCase):
     def estado(self, cola):
         return self.inspector.canal.queue_declare(queue=cola, passive=True).method
 
+    def capacidad_disponible(self, cola):
+        capacidad = CapacidadDatos(self.configuracion, self.inspector, self.topologia)
+        try:
+            with capacidad._registro.abrir(cola) as reserva:
+                return reserva.disponibles
+        finally:
+            capacidad.cerrar()
+
     def comprobar_capacidad_recuperada(self):
         for cola in self.topologia.colas_datos():
             with self.subTest(cola=cola):
+                self.assertEqual(self.capacidad_disponible(cola),
+                                 self.configuracion.limites.max_mensajes_por_cola)
                 datos = self.estado(cola)
                 permisos = self.estado(self.topologia.cola_capacidad(cola))
                 self.assertEqual((datos.message_count, datos.consumer_count), (0, 0))
@@ -140,11 +151,11 @@ def observar_reserva(middleware, eventos, numero=1):
     adquirir = middleware._capacidad.adquirir
     llamadas = 0
 
-    def observado(cola):
+    def observado(cola, identificador, cuerpo):
         nonlocal llamadas
         llamadas += 1
         if llamadas == numero:
             middleware._conexion.programar(lambda: eventos.put('esperando'))
-        return adquirir(cola)
+        return adquirir(cola, identificador, cuerpo)
 
     middleware._capacidad.adquirir = observado

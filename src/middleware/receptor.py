@@ -16,7 +16,7 @@ from .interfaz import ErrorConexion, ErrorMensajeInvalido, ErrorRecepcion, Opera
 from .rechazos import ENTRADA_ERRORES, notificacion_rechazo
 from .topologia import TopologiaGrupos
 from .recepciones_durables import RecepcionesDurables
-from .turnos_recepcion import TurnosRecepcion
+from .turnos import TurnosCompartidos
 from .procesamiento import ProcesadorRecuperable, ejecutar_procesamiento
 
 
@@ -52,17 +52,18 @@ class ReceptorDatos:
         self._colas = topologia.colas_recepcion()
         if self._colas is None:
             raise ErrorConfiguracion("El grupo local no tiene rutas de recepción")
-        self._capacidad = capacidad or CapacidadDatos(conexion, topologia)
+        self._capacidad = capacidad or CapacidadDatos(configuracion, conexion, topologia)
         self._recibiendo = False
         self._detenido = False
         self._consumidores = []
         self._pendiente = None
         self._cola_pendiente = None
         self._reservada = False
+        self._id_reserva = None
         self._entrega = None
         self._error_procesamiento = None
         self._retener_pendiente = False
-        self._turnos = TurnosRecepcion(conexion)
+        self._turnos = TurnosCompartidos(conexion, tipo_error=ErrorRecepcion)
         self._recepciones = RecepcionesDurables(configuracion, conexion, topologia, self._turnos)
 
     @property
@@ -157,17 +158,23 @@ class ReceptorDatos:
     def _capturar(self, cola, canal, entrega, propiedades, cuerpo):
         self._pendiente = entrega.delivery_tag
         self._cola_pendiente = cola
-        self._reservada = cola != self._colas.control and self._capacidad.tiene_reserva(propiedades)
+        self._reservada = False
+        self._id_reserva = (self._capacidad.identificar_reserva(propiedades)
+                            if cola != self._colas.control else None)
         self._entrega = cuerpo
         # Conserva esta entrega sin ACK y devuelve las prefetched sin procesar.
         self._cancelar_consumidores(canal)
 
     def _procesar(self, canal, cuerpo, procesar):
         try:
-            if not self._reservada:
+            if self._id_reserva is None:
                 raise ErrorMensajeInvalido("La entrega no tiene una reserva de capacidad")
+            self._capacidad.validar_entrega(self._cola_pendiente, self._id_reserva, cuerpo)
+            self._reservada = True
             resultado = self._codificador.decodificar(cuerpo)
             sobre = resultado.sobre
+            if sobre.id_mensaje != self._id_reserva:
+                raise ErrorMensajeInvalido('El ID del sobre no coincide con su reserva')
             ruta = self._validar_origen(sobre)
             if sobre.tipo != TipoMensaje.DATOS:
                 raise ErrorMensajeInvalido(
@@ -241,15 +248,16 @@ class ReceptorDatos:
 
     def _resolver(self, canal, *, rechazar):
         self._conexion.comprobar_apagado()
+        if self._reservada:
+            self._capacidad.devolver(self._cola_pendiente, self._id_reserva, consumida=True)
         if rechazar:
             canal.basic_reject(delivery_tag=self._pendiente, requeue=False)
         else:
             canal.basic_ack(delivery_tag=self._pendiente)
         self._pendiente = None
-        if self._reservada:
-            self._capacidad.devolver(self._cola_pendiente)
         self._cola_pendiente = None
         self._reservada = False
+        self._id_reserva = None
 
     def _validar_origen(self, sobre):
         try:

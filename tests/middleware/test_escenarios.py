@@ -2,16 +2,17 @@
 
 from unittest.mock import patch
 from dataclasses import replace
+from uuid import uuid4
 import time
 
 from src.common.protocol.dto import CierreProductor, EnvioDatos, SobreMensaje, TipoMensaje
 from src.common.protocol.registros import CodigoError
 from src.middleware.broker_connection import ConexionBroker
-from src.middleware.capacidad import CABECERA_CAPACIDAD, VERSION_CAPACIDAD, CapacidadDatos
+from src.middleware.capacidad import CABECERA_CAPACIDAD, CABECERA_RESERVA, VERSION_CAPACIDAD, CapacidadDatos
 from src.middleware.codificacion import CodificadorMensajes
 from src.middleware.configuracion import ErrorConfiguracion
 from src.middleware.inicializar import inicializar_capacidad
-from src.middleware.interfaz import ErrorCapacidad, ErrorMensaje, MiddlewareCerrado, OperacionInterrumpida
+from src.middleware.interfaz import ErrorMensaje, MiddlewareCerrado, OperacionInterrumpida
 from src.middleware.rabbitmq import MiddlewareRabbitMQ
 from src.middleware.topologia import TopologiaGrupos
 import pika
@@ -41,13 +42,23 @@ class EscenariosMiddleware(EscenarioRabbitMQ):
     def inyectar(self, cuerpo, *, reservar=True):
         """Introduce bytes inválidos por AMQP sin agregar accesos al código productivo."""
         destino = self.topologia.destino_datos('frecuencias', 'palabras')
+        identificador = uuid4()
         if reservar:
-            CapacidadDatos(self.inspector, self.topologia).adquirir(destino.cola)
+            try:
+                identificador = CodificadorMensajes(
+                    self.configuracion.limites.max_bytes_por_mensaje,
+                ).decodificar(cuerpo).sobre.id_mensaje
+            except ErrorMensaje:
+                pass  # Este escenario también inyecta sobres truncados sin ID legible.
+            capacidad = CapacidadDatos(self.configuracion, self.inspector, self.topologia)
+            capacidad.adquirir(destino.cola, identificador, cuerpo)
+            capacidad.cerrar()
         self.inspector.canal.confirm_delivery()
         self.inspector.canal.basic_publish(
             exchange=destino.exchange, routing_key=destino.clave, body=cuerpo,
             mandatory=True, properties=pika.BasicProperties(
-                headers={CABECERA_CAPACIDAD: VERSION_CAPACIDAD} if reservar else None,
+                headers={CABECERA_CAPACIDAD: VERSION_CAPACIDAD,
+                         CABECERA_RESERVA: identificador.hex} if reservar else None,
                 content_type='application/octet-stream',
             ),
         )
@@ -101,7 +112,7 @@ class EscenariosMiddleware(EscenarioRabbitMQ):
         self.assertEqual(self.esperar(eventos), entrada)
         self.comprobar_bloqueado(eventos)
         cola = self.topologia.destino_datos('frecuencias', 'palabras').cola
-        self.assertEqual(self.estado(self.topologia.cola_capacidad(cola)).message_count, 0)
+        self.assertEqual(self.capacidad_disponible(cola), 0)
         siguiente = palabras('cliente_B', 'siguiente')
         fuente, publicaciones = self.lanzar(
             publicar_en_proceso, 'ocurrencias', (EnvioDatos.nuevo('frecuencias', siguiente),), 1, instancia=1,
@@ -209,7 +220,7 @@ class EscenariosMiddleware(EscenarioRabbitMQ):
             frecuencia.recibir(fallar)
         self.assertIs(resultado.exception, error_negocio)
         cola = self.topologia.destino_datos('frecuencias', 'palabras').cola
-        self.assertEqual(self.estado(self.topologia.cola_capacidad(cola)).message_count, 0)
+        self.assertEqual(self.capacidad_disponible(cola), 0)
         frecuencia.cerrar()
         self.assertEqual(self.recibir(self.abrir('frecuencias', 1)), datos)
         self.comprobar_capacidad_recuperada()
@@ -246,8 +257,7 @@ class EscenariosMiddleware(EscenarioRabbitMQ):
 
     def test_inicializacion_repetida_y_apertura_parcial_no_dejan_recursos(self):
         """No duplica permisos y cierra la conexión si falta la marca de capacidad."""
-        with self.assertRaises(ErrorCapacidad):
-            inicializar_capacidad(self.configuracion)
+        inicializar_capacidad(self.configuracion)
         self.comprobar_capacidad_recuperada()
         self.inspector.canal.queue_delete(queue=self.topologia.marca_capacidad())
         conexion = ConexionBroker(self.configuracion.broker)
