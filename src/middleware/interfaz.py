@@ -2,10 +2,13 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Callable, Generic, Optional
+from typing import Callable, Generic, Optional, TYPE_CHECKING, Union
 from uuid import UUID
 
 from ..common.protocol.dto import Contenido, Datos, Entrada, EnvioDatos, Evento, FinEntrada, IdentidadProceso
+
+if TYPE_CHECKING:
+    from .procesamiento import ProcesadorRecuperable
 
 
 @dataclass(frozen=True)
@@ -205,11 +208,15 @@ class Middleware(ComunicacionGrupos[Contenido]):
 
     @abstractmethod
     def recibir(
-        self, procesar: Callable[[Evento[Contenido]], None], *,
+        self, procesar: Union[Callable[[Evento[Contenido]], None], 'ProcesadorRecuperable'], *,
         al_finalizar: Optional[Callable[[Entrada], None]] = None,
     ) -> None:
         """Entrega datos y notifica el cierre consolidado de cada entrada.
 
+        procesar también admite un ProcesadorRecuperable: vincula su operación
+        durable a la entrega, aplica cambios, completa publicaciones y exige una
+        confirmación explícita antes del ACK. En ese caso al_finalizar es obligatorio;
+        el contrato de datos no confirma ni recupera los cierres de EOF.
         Con al_finalizar, procesar recibe solo Datos y al_finalizar recibe Entrada.
         Sin ese callback, procesar recibe también los eventos FinEntrada.
         La finalización es síncrona: puede publicar acumulados y luego cerrar sus

@@ -8,13 +8,17 @@ from uuid import UUID
 
 from ..common.io_adapters.state_storage import WAL, PuntoWAL
 from ..common.io_adapters.formato_wal import ErrorWAL
+from ..common.protocol.dto import IdentidadProceso
 from .interfaz import ContextoRecepcion, ErrorPersistencia, ErrorRecepcion
+from .procesamiento import OperacionProcesamiento
 from .salidas_durables import crear_directorio_durable
 
 
 INICIAR = 1
 COMPLETAR = 2
+VINCULAR_OPERACION = 3
 BYTES_ID = 16
+BYTES_INSTANCIA = 4
 BYTES_HUELLA = 32
 MAX_BYTES_REGISTRO = 1 + BYTES_ID + BYTES_HUELLA
 
@@ -24,6 +28,7 @@ class _Particion:
     """Índice reconstruido y posición durable del historial que lo respalda."""
 
     registros: dict = field(default_factory=dict)
+    operaciones: dict = field(default_factory=dict)
     punto: PuntoWAL | None = None
 
     def aplicar(self, registro):
@@ -41,6 +46,14 @@ class _Particion:
             if anterior is None or anterior[1]:
                 raise ErrorPersistencia('Finalización sin recepción pendiente')
             self.registros[identificador] = (anterior[0], True)
+        elif tipo == VINCULAR_OPERACION and len(contenido) == 1 + 2 * BYTES_ID + BYTES_INSTANCIA:
+            anterior = self.registros.get(identificador)
+            operacion = UUID(bytes=contenido[1 + BYTES_ID:1 + 2 * BYTES_ID])
+            instancia = int.from_bytes(contenido[-BYTES_INSTANCIA:], 'big')
+            if (anterior is None or anterior[1] or identificador in self.operaciones
+                    or operacion.int == 0):
+                raise ErrorPersistencia('Vínculo de procesamiento inválido')
+            self.operaciones[identificador] = (operacion, instancia)
         else:
             raise ErrorPersistencia('Operación inválida en el registro de recepción')
 
@@ -58,6 +71,7 @@ class RecepcionesDurables:
             Path(configuracion.directorio_recepcion) / configuracion.proceso.grupo,
         )
         self._proceso = configuracion.proceso
+        self._instancias = configuracion.obtener_grupo(self._proceso.grupo).instancias
         self._cantidad = configuracion.particiones_recepcion
         self._conexion = conexion
         self._topologia = topologia
@@ -74,6 +88,44 @@ class RecepcionesDurables:
         if self._actual is None:
             raise ErrorRecepcion('No hay un lote en procesamiento')
         return self._actual
+
+    @property
+    def operacion_actual(self):
+        """Obtiene la operación del negocio vinculada a esta entrega, si existe."""
+        actual = self.actual
+        vinculo = self._particion.operaciones.get(actual.id_mensaje)
+        if vinculo is None:
+            return None
+        identificador, instancia = vinculo
+        if not 0 <= instancia < self._instancias:
+            raise ErrorPersistencia('El responsable persistido no pertenece al grupo configurado')
+        return OperacionProcesamiento(
+            identificador, IdentidadProceso(self._proceso.grupo, instancia),
+        )
+
+    def vincular_operacion(self, operacion):
+        """Persiste el vínculo a un plan durable antes de permitir sus efectos."""
+        actual = self.actual
+        if (type(operacion) is not OperacionProcesamiento
+                or type(operacion.id_operacion) is not UUID or operacion.id_operacion.int == 0
+                or type(operacion.responsable) is not IdentidadProceso
+                or operacion.responsable.grupo != self._proceso.grupo
+                or type(operacion.responsable.instancia) is not int
+                or not 0 <= operacion.responsable.instancia < self._instancias):
+            raise ErrorPersistencia('El plan requiere un UUID y un responsable válido del grupo')
+        if self._completada or self.operacion_actual is not None:
+            raise ErrorPersistencia('La entrega ya está completada o vinculada a una operación')
+        contenido = (bytes([VINCULAR_OPERACION]) + actual.id_mensaje.bytes
+                     + operacion.id_operacion.bytes
+                     + operacion.responsable.instancia.to_bytes(BYTES_INSTANCIA, 'big'))
+        try:
+            self._wal.registrar(contenido)
+        except (OSError, ErrorWAL) as error:
+            raise ErrorPersistencia('No se pudo vincular el plan de procesamiento') from error
+        self._particion.operaciones[actual.id_mensaje] = (
+            operacion.id_operacion, operacion.responsable.instancia,
+        )
+        return self.operacion_actual
 
     @contextmanager
     def recibir(self, sobre, cuerpo):

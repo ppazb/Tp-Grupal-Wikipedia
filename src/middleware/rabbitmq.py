@@ -138,7 +138,7 @@ class MiddlewareRabbitMQ(Middleware[Lote]):
             self._publicando = False
 
     def recibir(self, procesar, *, al_finalizar=None):
-        """Entrega datos y ejecuta al_finalizar, o entrega FinEntrada si no se indicó."""
+        """Entrega datos a un callback o procesador recuperable y atiende sus cierres."""
         self._validar_abierta()
         if self._interrumpida:
             raise OperacionInterrumpida("La comunicación fue interrumpida")

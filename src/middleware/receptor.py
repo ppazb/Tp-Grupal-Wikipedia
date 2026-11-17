@@ -2,7 +2,7 @@
 
 from functools import partial
 import logging
-from typing import Callable, Optional
+from typing import Callable, Optional, Union
 
 import pika
 
@@ -17,6 +17,7 @@ from .rechazos import ENTRADA_ERRORES, notificacion_rechazo
 from .topologia import TopologiaGrupos
 from .recepciones_durables import RecepcionesDurables
 from .turnos_recepcion import TurnosRecepcion
+from .procesamiento import ProcesadorRecuperable, ejecutar_procesamiento
 
 
 REGISTRO = logging.getLogger(__name__)
@@ -74,7 +75,7 @@ class ReceptorDatos:
         self._recepciones.cerrar()
 
     def recibir(
-        self, procesar: Callable[[Evento], None], *,
+        self, procesar: Union[Callable[[Evento], None], ProcesadorRecuperable], *,
         al_finalizar: Optional[Callable[[Entrada], None]] = None,
     ) -> None:
         """Atiende controles y entrega datos o ejecuta la finalización de una entrada."""
@@ -83,8 +84,10 @@ class ReceptorDatos:
             raise ErrorRecepcion("La recepción no admite llamadas reentrantes")
         if self._consumidores or self._pendiente is not None or self._cola_pendiente is not None:
             raise ErrorRecepcion("Quedaron recursos pendientes de limpieza; cerrar la conexión")
-        if not callable(procesar):
-            raise ErrorRecepcion("El procesador debe ser invocable")
+        if not callable(procesar) and not isinstance(procesar, ProcesadorRecuperable):
+            raise ErrorRecepcion("Se requiere un callback o un ProcesadorRecuperable")
+        if isinstance(procesar, ProcesadorRecuperable) and al_finalizar is None:
+            raise ErrorRecepcion('El procesador recuperable requiere al_finalizar para los cierres')
         if al_finalizar is not None and not callable(al_finalizar):
             raise ErrorRecepcion("El finalizador de entradas debe ser invocable")
         if self._detenido:
@@ -181,6 +184,9 @@ class ReceptorDatos:
                 return
             if self._coordinacion is not None:
                 self._coordinacion.validar_datos(sobre)
+            if (self._recepciones.operacion_actual is not None
+                    and not isinstance(procesar, ProcesadorRecuperable)):
+                raise ErrorRecepcion('La entrega requiere recuperar su operación de negocio vinculada')
             rechazar = sobre.contenido.esquema not in ruta.esquemas
             if rechazar:
                 self._notificar(sobre.entrada, sobre.contenido.esquema.value,
@@ -200,7 +206,13 @@ class ReceptorDatos:
             )
         try:
             if resultado.registros_validos:
-                procesar(Datos(sobre.entrada, sobre.contenido))
+                datos = Datos(sobre.entrada, sobre.contenido)
+                if isinstance(procesar, ProcesadorRecuperable):
+                    ejecutar_procesamiento(
+                        procesar, datos, self._recepciones, self._conexion.comprobar_apagado,
+                    )
+                else:
+                    procesar(datos)
         except BaseException as error:
             self._error_procesamiento = error
             raise
