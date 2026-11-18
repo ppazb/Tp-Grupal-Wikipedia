@@ -22,9 +22,9 @@ if repo_root not in sys.path:
 
 os.environ.setdefault("WIKI_MW_BROKER_HOST", "localhost")
 
-from src.middleware.cargador_configuracion import cargar_configuracion
+from src.middleware.configuracion.cargador import cargar_configuracion
 from src.middleware.rabbitmq import MiddlewareRabbitMQ
-from src.common.protocol.dto import Datos, Entrada, IdentidadProceso
+from src.common.protocol.dto import EnvioDatos, Datos, Entrada, IdentidadProceso
 from src.common.protocol.registros import Articulo, Idioma, Esquema, Lote
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -133,7 +133,7 @@ def main():
             total_enviados = len(lote_prueba.registros)
             logger.info("Publicando lote de %d artículos crudos hacia 'date_router' desde grupo 'gateway'...", total_enviados)
             entrada_cruda = Entrada(id_ejecucion, "articulos_crudos")
-            mw_gateway.publicar("date_router", Datos(entrada_cruda, lote_prueba))
+            mw_gateway.publicar(EnvioDatos.nuevo("date_router", Datos(entrada_cruda, lote_prueba)))
 
             logger.info("Emitiendo fin de datos (EOF) hacia 'date_router' para '%s'...", id_ejecucion)
             mw_gateway.finalizar_entrada("date_router", entrada_cruda)

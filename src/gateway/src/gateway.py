@@ -11,8 +11,8 @@ from dataclasses import replace
 from ...common.external_protocol import TipoFrame, decodificar_filas, enviar_frame, recibir_frame
 from ...common.protocol.dto import Datos, EnvioDatos, Entrada, IdentidadProceso
 from ...common.protocol.registros import Esquema, Lote
-from ...middleware.cargador_configuracion import cargar_configuracion
-from ...middleware.configuracion import ErrorConfiguracion
+from src.middleware.configuracion.cargador import cargar_configuracion
+from src.middleware.configuracion.modelos import ErrorConfiguracion
 from ...middleware.interfaz import ErrorMensaje, ErrorMiddleware, OperacionInterrumpida
 from ...middleware.rabbitmq import MiddlewareRabbitMQ
 from .articulos import articulo_desde_fila
@@ -65,25 +65,27 @@ class PublicadorMiddleware:
         self._detener = detener
         self._local = threading.local()
 
-    def _obtener(self):
+    def _obtener(self, id_ejecucion):
         if self._detener.is_set():
             raise OperacionInterrumpida("El gateway se está deteniendo")
         if not hasattr(self._local, 'middleware'):
             with ExitStack() as recursos:
                 aviso = recursos.enter_context(self._detener.aviso())
-                middleware = recursos.enter_context(MiddlewareRabbitMQ(self._configuracion, apagado=aviso))
+                middleware = recursos.enter_context(MiddlewareRabbitMQ(
+                    self._configuracion, apagado=aviso, ambito_publicacion=f"ejecucion-{id_ejecucion}",
+                ))
                 self._local.middleware = middleware
                 self._local.recursos = recursos.pop_all()
         return self._local.middleware
 
     def publicar(self, id_ejecucion, lote):
-        self._obtener().publicar_en_ramas(tuple(
-            EnvioDatos(ruta.destino, Datos(Entrada(id_ejecucion, ruta.entrada), lote))
+        self._obtener(id_ejecucion).publicar_en_ramas(tuple(
+            EnvioDatos.nuevo(ruta.destino, Datos(Entrada(id_ejecucion, ruta.entrada), lote))
             for ruta in self._rutas
         ))
 
     def finalizar(self, id_ejecucion):
-        middleware = self._obtener()
+        middleware = self._obtener(id_ejecucion)
         for ruta in self._rutas:
             middleware.finalizar_entrada(ruta.destino, Entrada(id_ejecucion, ruta.entrada))
         self.cerrar_cliente()
@@ -447,7 +449,7 @@ def _iniciar_receptor(configuracion, sesiones, detener):
     def recibir():
         try:
             with detener.aviso() as aviso:
-                with MiddlewareRabbitMQ(configuracion, apagado=aviso,
+                with MiddlewareRabbitMQ(configuracion, ambito_publicacion="resultados", apagado=aviso,
                                         informar_error=lambda datos: receptor.procesar(datos)) as middleware:
                     receptor = ReceptorResultados(middleware, sesiones, configuracion.limites.max_bytes_por_mensaje)
                     receptor.ejecutar(aviso)

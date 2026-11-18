@@ -3,6 +3,7 @@
 import argparse
 from copy import deepcopy
 import json
+import posixpath
 from pathlib import Path
 import subprocess
 from tempfile import NamedTemporaryFile
@@ -56,6 +57,21 @@ def validar_grupos(configuracion, servicios):
 
 def configurar_servicios(documento, configuracion, ruta):
     """Monta el JSON elegido y sincroniza broker y límite de frames de los clientes."""
+    directorio = configuracion['persistencia']['directorio']
+    if not isinstance(directorio, str) or not directorio.strip():
+        raise ValueError('persistencia.directorio debe ser texto no vacío')
+    destino_wal = posixpath.normpath(posixpath.join('/app', directorio))
+    if destino_wal in ('/', '/app', '/app/config'):
+        raise ValueError('El directorio de persistencia debe ser exclusivo para los datos')
+    recepcion = configuracion['persistencia']['directorio_recepcion']
+    if not isinstance(recepcion, str) or not recepcion.strip():
+        raise ValueError('persistencia.directorio_recepcion debe ser texto no vacío')
+    destino_recepcion = posixpath.normpath(posixpath.join('/app', recepcion))
+    if destino_recepcion == destino_wal or not destino_recepcion.startswith(destino_wal + '/'):
+        raise ValueError('El directorio de recepción debe estar dentro del volumen de middleware')
+    if type(configuracion['persistencia']['particiones_recepcion']) is not int or configuracion['persistencia']['particiones_recepcion'] < 1:
+        raise ValueError('particiones_recepcion debe ser un entero positivo')
+    documento.setdefault('volumes', {})['datos_middleware'] = {}
     broker = configuracion['broker']
     limite = configuracion['limites']['max_bytes_por_mensaje']
     if type(limite) is not int or limite < 1:
@@ -63,7 +79,7 @@ def configurar_servicios(documento, configuracion, ruta):
     puerto = broker['puerto']
     if type(puerto) is not int or not 1 <= puerto <= 65535:
         raise ValueError('El puerto del broker debe estar entre 1 y 65535')
-    for servicio in documento['services'].values():
+    for nombre, servicio in documento['services'].items():
         if 'deploy' in servicio:
             # Compose normaliza placement vacío, pero luego lo advierte como opción de Swarm.
             servicio['deploy'] = {k: v for k, v in servicio['deploy'].items() if v != {}}
@@ -71,6 +87,10 @@ def configurar_servicios(documento, configuracion, ruta):
         for volumen in servicio.get('volumes', []):
             if volumen['target'] == '/app/config':
                 volumen.update(source=str(ruta), target='/app/config/config.json')
+        if any(v['target'] == '/app/config/config.json' for v in servicio.get('volumes', [])):
+            servicio['volumes'].append({'type': 'volume', 'source': 'datos_middleware', 'target': destino_wal})
+            entorno['WIKI_MW_PERSISTENCIA_DIRECTORIO'] = posixpath.join(destino_wal, nombre)
+            entorno['WIKI_MW_PERSISTENCIA_DIRECTORIO_RECEPCION'] = destino_recepcion
         if 'WIKI_MW_BROKER_HOST' in entorno:
             entorno['WIKI_MW_BROKER_HOST'] = 'rabbitmq'
         if 'CLIENT_ID' in entorno:

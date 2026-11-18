@@ -6,7 +6,7 @@ import logging
 
 from src.common.protocol.dto import Entrada
 from src.common.runtime.apagado import Apagado
-from src.middleware.rechazos import ENTRADA_ERRORES
+from src.middleware.mensajes.rechazos import ENTRADA_ERRORES
 from src.middleware.interfaz import OperacionInterrumpida
 
 
@@ -29,7 +29,7 @@ def entorno_worker(configuracion, *, limpiar=None):
         if limpiar is not None:
             apagado.registrar_limpieza(limpiar)
         try:
-            with MiddlewareRabbitMQ(configuracion, apagado=apagado) as middleware:
+            with MiddlewareRabbitMQ(configuracion, ambito_publicacion="instancia", apagado=apagado) as middleware:
                 iniciado = True
                 yield middleware, apagado
         except OperacionInterrumpida:
@@ -154,7 +154,7 @@ class WorkerBase(Worker):
     """Abre el middleware desde configuración y adapta los callbacks de los nodos."""
 
     def __init__(self, ruta_configuracion):
-        from src.middleware.cargador_configuracion import cargar_configuracion
+        from src.middleware.configuracion.cargador import cargar_configuracion
 
         self.configuracion = cargar_configuracion(ruta_configuracion)
         self.middleware = None

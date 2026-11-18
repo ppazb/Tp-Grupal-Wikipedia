@@ -1,0 +1,322 @@
+"""Publicaciones pendientes y confirmaciones reconstruibles desde un WAL."""
+
+from dataclasses import dataclass
+from hashlib import sha256
+from pathlib import Path
+import os
+import logging
+from uuid import UUID, uuid4
+from urllib.parse import quote
+
+from src.common.io_adapters.state_storage import WAL
+from src.common.io_adapters.formato_wal import ErrorWAL
+from src.common.protocol.dto import SobreMensaje
+from src.common.protocol.primitivas import EscritorBinario, LectorBinario
+from src.middleware.interfaz import ErrorPersistencia
+from src.middleware.transporte.topologia import DestinoPublicacion, MAX_BYTES_NOMBRE_AMQP
+
+
+INICIAR = 1
+AGREGAR = 2
+COMPLETAR = 3
+CONFIRMAR = 4
+LIBERAR = 5
+INDIVIDUAL = 6
+HUELLA_CONFIRMADA = 7
+SEGUIMIENTO = 8
+PENDIENTE_COMPACTA = 9
+UMBRAL_COMPACTACION_BYTES = 16 * 1_000_000
+REGISTRO = logging.getLogger(__name__)
+BYTES_ID = 16
+# Cuatro nombres AMQP con prefijos, etiquetas y longitud del cuerpo.
+BYTES_METADATOS = 4 * (MAX_BYTES_NOMBRE_AMQP + 4) + BYTES_ID + 16
+
+
+@dataclass(frozen=True)
+class Publicacion:
+    """Sobre y destino exactos de una salida, conservados durante sus reintentos."""
+
+    grupo: str
+    destino: DestinoPublicacion
+    cuerpo: bytes
+    sobre: SobreMensaje
+
+    @property
+    def id_mensaje(self):
+        """Devuelve el identificador estable del sobre persistido."""
+        return self.sobre.id_mensaje
+
+
+def crear_directorio_durable(ruta):
+    """Crea directorios faltantes y sincroniza sus entradas antes de usarlos."""
+    ruta = Path(ruta).absolute()
+    faltantes = []
+    actual = ruta
+    while not actual.exists():
+        faltantes.append(actual)
+        actual = actual.parent
+    for directorio in reversed(faltantes):
+        directorio.mkdir(exist_ok=True)
+        descriptor = os.open(directorio.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+    return ruta
+
+
+class SalidasDurables:
+    """Registra grupos de salidas antes de enviarlos y retiene solo cuerpos pendientes.
+
+    INICIAR/AGREGAR/COMPLETAR hace visible el conjunto completo de ramas. Un grupo
+    incompleto al recuperar se descarta: ninguna de sus ramas pudo enviarse.
+    Las huellas de salidas confirmadas permiten reconocer IDs ya publicados.
+    """
+
+    def __init__(
+        self, configuracion, codificador, actualizar_seguimiento, liberar_seguimiento,
+        ambito, comprobar_detencion, guardar_seguimiento, recuperar_seguimiento,
+    ):
+        self._guardar_seguimiento = guardar_seguimiento
+        self._recuperar_seguimiento = recuperar_seguimiento
+        self._posicion_compactada = 0
+        self._codificador = codificador
+        self._actualizar_seguimiento = actualizar_seguimiento
+        self._liberar_seguimiento = liberar_seguimiento
+        self._proceso = configuracion.proceso
+        self._maximo = configuracion.limites.max_bytes_por_mensaje + BYTES_METADATOS
+        self._pendientes = {}
+        self._huellas = {}
+        self._grupo = None
+        self._provisionales = []
+        self._fallido = False
+        self._wal = None
+        if type(ambito) is not str or not ambito or '\x00' in ambito:
+            raise ErrorPersistencia('El ámbito de publicación debe ser texto no vacío sin NUL')
+        # El directorio identifica al servicio; el ámbito separa sus publicadores.
+        # El prefijo y el escape impiden interpretar el ámbito como una ruta.
+        nombre = ('publicaciones.wal' if ambito == 'instancia'
+                  else f'publicaciones-{quote(ambito, safe="")}.wal')
+        ruta = Path(configuracion.directorio_persistencia) / nombre
+        try:
+            crear_directorio_durable(ruta.parent)
+            self._wal = WAL(ruta, max_bytes_por_registro=self._maximo,
+                            comprobar_detencion=comprobar_detencion)
+            self._wal.recuperar(self._aplicar_registro_recuperado)
+            if self._grupo is not None:
+                REGISTRO.warning("Se descartó un grupo de salidas sin cierre durable: %s", self._grupo)
+            self._grupo = None
+            self._provisionales.clear()
+        except BaseException:
+            if self._wal is not None:
+                try:
+                    self._wal.cerrar()
+                except Exception:
+                    REGISTRO.exception("Falló el cierre del registro de salidas")
+            raise
+
+    def _codificar_publicacion(self, publicacion):
+        """Codifica el destino y cuerpo de una publicación para el WAL."""
+        escritor = EscritorBinario(self._maximo)
+        escritor.entero(AGREGAR, 1)
+        for nombre in (publicacion.grupo, publicacion.destino.exchange,
+                       publicacion.destino.clave, publicacion.destino.cola or ''):
+            if len(nombre.encode('utf-8')) > MAX_BYTES_NOMBRE_AMQP:
+                raise ErrorPersistencia('Nombre de publicación demasiado largo')
+            escritor.texto(nombre)
+        escritor.binario(publicacion.cuerpo)
+        return escritor.resultado()
+
+    def _decodificar_publicacion(self, lector):
+        """Reconstruye una publicación y valida que pertenezca al productor local."""
+        grupo, exchange, clave, cola = (lector.texto() for _ in range(4))
+        cuerpo = bytes(lector.bloque())
+        lector.finalizar()
+        resultado = self._codificador.decodificar(cuerpo)
+        if resultado.errores_por_registro or resultado.sobre.origen != self._proceso:
+            raise ErrorPersistencia('La publicación almacenada no corresponde a un sobre válido del productor')
+        return Publicacion(grupo, DestinoPublicacion(exchange, clave, cola or None), cuerpo, resultado.sobre)
+
+    def preparar(self, publicaciones):
+        """Persiste todas las ramas como conjunto antes de habilitar su transmisión."""
+        self._validar_registro_operativo()
+        nuevas = []
+        vistas = {}
+        for publicacion in publicaciones:
+            contenido = self._codificar_publicacion(publicacion)
+            huella = sha256(contenido).digest()
+            anterior = vistas.get(publicacion.id_mensaje, self._huellas.get(publicacion.id_mensaje))
+            if anterior is not None:
+                if anterior != huella:
+                    raise ErrorPersistencia('Se reutilizó un ID con otro destino o contenido')
+                continue
+            vistas[publicacion.id_mensaje] = huella
+            nuevas.append((publicacion, contenido, huella))
+        if not nuevas:
+            return
+        if len(nuevas) == 1:
+            self._persistir_registro(bytes([INDIVIDUAL]) + nuevas[0][1][1:])
+        else:
+            grupo = uuid4().bytes
+            self._persistir_registro(bytes([INICIAR]) + grupo)
+            for _, contenido, _ in nuevas:
+                self._persistir_registro(contenido)
+            self._persistir_registro(bytes([COMPLETAR]) + grupo)
+        try:
+            for publicacion, _, huella in nuevas:
+                self._incorporar_publicacion_pendiente(publicacion, huella)
+        except BaseException:
+            self._fallido = True
+            raise
+
+    def _incorporar_publicacion_pendiente(self, publicacion, huella, *, seguir=True):
+        """Registra la huella y el cuerpo pendiente y actualiza su seguimiento."""
+        if publicacion.id_mensaje in self._huellas:
+            raise ErrorPersistencia('ID repetido dentro del historial de salidas')
+        self._huellas[publicacion.id_mensaje] = huella
+        self._pendientes[publicacion.id_mensaje] = publicacion
+        if seguir:
+            self._actualizar_seguimiento(publicacion, False)
+
+    def confirmar(self, publicacion):
+        """Persiste la confirmación del broker antes de retirar el cuerpo pendiente."""
+        self._persistir_registro(bytes([CONFIRMAR]) + publicacion.id_mensaje.bytes)
+        self._aplicar_confirmacion(publicacion.id_mensaje)
+        if self._wal.punto_recuperacion.posicion - self._posicion_compactada >= UMBRAL_COMPACTACION_BYTES:
+            self.compactar()
+
+    def _aplicar_confirmacion(self, identificador):
+        """Actualiza el seguimiento y retira el cuerpo de una publicación confirmada."""
+        if identificador not in self._pendientes:
+            raise ErrorPersistencia('Confirmación sin una publicación pendiente')
+        publicacion = self._pendientes[identificador]
+        try:
+            self._actualizar_seguimiento(publicacion, True)
+            del self._pendientes[identificador]
+        except BaseException:
+            self._fallido = True
+            raise
+
+    def pendientes(self):
+        """Devuelve las salidas pendientes en orden de registro."""
+        self._validar_registro_operativo()
+        return tuple(self._pendientes.values())
+
+    def contiene_identificador(self, identificador):
+        """Indica si el identificador ya forma parte del historial de publicaciones."""
+        return identificador in self._huellas
+
+    def validar_liberacion(self, ejecucion):
+        """Rechaza la limpieza si quedan salidas locales pendientes de esa ejecución."""
+        if any(p.sobre.entrada.id_ejecucion == ejecucion for p in self.pendientes()):
+            raise ErrorPersistencia('No se puede liberar una ejecución con publicaciones pendientes')
+
+    def compactar(self):
+        """Retira cuerpos confirmados conservando huellas, pendientes y seguimiento."""
+        self._validar_registro_operativo()
+        try:
+            self._wal.compactar(self._registros_compactos())
+            self._posicion_compactada = self._wal.punto_recuperacion.posicion
+        except (ErrorWAL, OSError) as error:
+            self._fallido = True
+            raise ErrorPersistencia('No se pudo compactar el registro de publicaciones') from error
+        except BaseException:
+            self._fallido = True
+            raise
+
+    def _registros_compactos(self):
+        """Genera los registros necesarios para reconstruir el estado vigente."""
+        for identificador, huella in self._huellas.items():
+            if identificador not in self._pendientes:
+                yield bytes([HUELLA_CONFIRMADA]) + identificador.bytes + huella
+        for publicacion in self._pendientes.values():
+            yield bytes([PENDIENTE_COMPACTA]) + self._codificar_publicacion(publicacion)[1:]
+        # Las instantáneas incluyen también las salidas pendientes, sin contarlas dos veces.
+        for contenido in self._guardar_seguimiento(self._maximo - 1):
+            yield bytes([SEGUIMIENTO]) + contenido
+
+    def liberar(self, ejecucion):
+        """Registra el fin del seguimiento local sin eliminar huellas de mensajes."""
+        self.validar_liberacion(ejecucion)
+        escritor = EscritorBinario(self._maximo)
+        escritor.entero(LIBERAR, 1)
+        escritor.texto(ejecucion)
+        self._persistir_registro(escritor.resultado())
+        self._liberar_seguimiento(ejecucion)
+        self.compactar()
+
+    def _aplicar_registro_recuperado(self, registro):
+        """Reconstruye publicaciones, confirmaciones y seguimiento desde un registro WAL."""
+        lector = LectorBinario(registro.contenido)
+        tipo = lector.entero(1)
+        if tipo == HUELLA_CONFIRMADA:
+            identificador = UUID(int=lector.entero(BYTES_ID))
+            huella = lector.entero(32).to_bytes(32, 'big')
+            lector.finalizar()
+            if identificador in self._huellas or identificador.int == 0:
+                raise ErrorPersistencia('Huella confirmada duplicada o inválida')
+            self._huellas[identificador] = huella
+            return
+        if tipo == SEGUIMIENTO:
+            self._recuperar_seguimiento(lector)
+            return
+        if tipo in (INDIVIDUAL, PENDIENTE_COMPACTA):
+            self._grupo = None
+            self._provisionales.clear()
+            publicacion = self._decodificar_publicacion(lector)
+            huella = sha256(bytes([AGREGAR]) + registro.contenido[1:]).digest()
+            self._incorporar_publicacion_pendiente(publicacion, huella, seguir=tipo == INDIVIDUAL)
+            return
+        if tipo == AGREGAR:
+            if self._grupo is None:
+                raise ErrorPersistencia('Salida sin grupo de publicación')
+            publicacion = self._decodificar_publicacion(lector)
+            self._provisionales.append((publicacion, sha256(registro.contenido).digest()))
+            return
+        if tipo == LIBERAR:
+            ejecucion = lector.texto()
+            lector.finalizar()
+            self._liberar_seguimiento(ejecucion)
+            return
+        identificador = UUID(int=lector.entero(BYTES_ID))
+        lector.finalizar()
+        if tipo == INICIAR:
+            self._grupo = identificador
+            self._provisionales.clear()
+        elif tipo == COMPLETAR:
+            if self._grupo != identificador:
+                raise ErrorPersistencia('Cierre de grupo de publicación inconsistente')
+            for publicacion, huella in self._provisionales:
+                self._incorporar_publicacion_pendiente(publicacion, huella)
+            self._provisionales.clear()
+            self._grupo = None
+        elif tipo == CONFIRMAR:
+            self._aplicar_confirmacion(identificador)
+        else:
+            raise ErrorPersistencia('Operación de salidas desconocida')
+
+    def _validar_registro_operativo(self):
+        """Rechaza operaciones sobre un registro inhabilitado por un error."""
+        if self._fallido:
+            raise ErrorPersistencia('El registro de salidas falló; cerrar y recuperar')
+
+    def _persistir_registro(self, contenido):
+        """Sincroniza un registro WAL e inhabilita la instancia si la escritura falla."""
+        self._validar_registro_operativo()
+        try:
+            self._wal.registrar(contenido)
+        except (ErrorWAL, OSError) as error:
+            self._fallido = True
+            raise ErrorPersistencia("No se pudo persistir el estado de publicación") from error
+        except BaseException:
+            self._fallido = True
+            raise
+
+    def cerrar_registro(self):
+        """Cierra el WAL conservando todas las publicaciones registradas."""
+        if self._wal is not None:
+            self._wal.cerrar()
+        self._fallido = True
+        self._pendientes.clear()
+        self._huellas.clear()
+        self._provisionales.clear()

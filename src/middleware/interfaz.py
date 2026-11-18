@@ -1,13 +1,32 @@
 """Contrato de comunicación por grupos, independiente del transporte."""
 
 from abc import ABC, abstractmethod
-from typing import Callable, Generic, Optional
+from dataclasses import dataclass
+from typing import Callable, Generic, Optional, TYPE_CHECKING, Union
+from uuid import UUID
 
-from ..common.protocol.dto import Contenido, Datos, Entrada, Evento, FinEntrada
+from src.common.protocol.dto import Contenido, Datos, Entrada, EnvioDatos, Evento, IdentidadProceso
+
+if TYPE_CHECKING:
+    from src.middleware.procesamiento import ProcesadorRecuperable
+
+
+@dataclass(frozen=True)
+class ContextoRecepcion:
+    """Identidad del lote activo y aviso de un intento registrado anteriormente."""
+
+    id_mensaje: UUID
+    entrada: Entrada
+    origen: IdentidadProceso
+    reintento: bool
 
 
 class ErrorMiddleware(Exception):
     """Error de comunicación informado."""
+
+
+class ErrorPersistencia(ErrorMiddleware):
+    """El registro durable de comunicación no pudo completar una operación."""
 
 
 class ErrorConexion(ErrorMiddleware):
@@ -95,60 +114,40 @@ class ComunicacionGrupos(ABC, Generic[Contenido]):
     """
 
     @abstractmethod
-    def publicar(
-        self,
-        grupo: str,
-        datos: Datos[Contenido],
-        *,
-        clave_afinidad: Optional[str] = None,
-    ) -> None:
-        """Publica datos hacia un grupo lógico, esperando capacidad disponible.
+    def publicar(self, envio: EnvioDatos[Contenido]) -> None:
+        """Publica el envío identificado y espera capacidad; el retorno confirma aceptación del broker.
 
-        Sin clave de afinidad reparte entre consumidores; con clave selecciona un
-        destinatario estable durante la ejecución. El retorno indica aceptación
-        del transporte, no procesamiento remoto.
-        Puede elevar PublicacionRechazada, ErrorCapacidad, ErrorConexion,
-        ErrorMensaje, MiddlewareCerrado u OperacionInterrumpida.
-        """
+        Conserva el ID en reintentos y selecciona reparto o afinidad según el envío."""
 
     @abstractmethod
     def recibir(self, procesar: Callable[[Datos[Contenido]], None]) -> None:
-        """Espera y procesa un evento lógico del grupo receptor.
+        """Entrega datos válidos al procesador y confirma al retornar correctamente.
 
-        Invoca procesar sincrónicamente y confirma solo si retorna correctamente;
-        si falla, propaga su excepción original. Una detención permite retornar
-        sin entregar otro evento. No garantiza procesamiento exactamente una vez
-        ni orden global entre productores.
-        Los registros inválidos se notifican y los válidos se procesan. Puede
-        elevar ErrorConexion, ErrorMensaje, ErrorRecepcion o MiddlewareCerrado.
-        """
+        El procesador debe dejar efectos durables e idempotentes; las reentregas ya
+        completadas no ejecutan nuevamente el negocio. Propaga los errores originales."""
+
+    @property
+    def entrega_actual(self) -> ContextoRecepcion:
+        """Expone el ID durante el callback para persistir efectos idempotentes."""
+        raise NotImplementedError('El transporte debe exponer la identidad de la entrega activa')
 
     @abstractmethod
     def detener_recepcion(self) -> None:
-        """Solicita terminar la espera, sin cerrar la conexión ni publicar EOF.
-
-        Es idempotente. Deja terminar y confirmar el procesamiento en curso.
-        Las llamadas posteriores a recibir retornan sin entregar eventos.
-        La integración con señales debe realizarse fuera del manejador de señal.
-        """
+        """Cancela la espera de nuevas entregas y deja finalizar el procesamiento activo."""
 
     @abstractmethod
     def liberar_ejecucion(self, id_ejecucion: str) -> None:
-        """Libera el estado y los recursos locales exclusivos de una ejecución terminada.
+        """Libera recursos locales de una ejecución con procesamiento y salidas completos.
 
-        Requiere haber completado el procesamiento, las confirmaciones y las salidas.
-        Conserva los recursos compartidos. Repetir una liberación exitosa no tiene
-        efecto; ante fallos intenta las demás limpiezas, conserva las pendientes y
-        eleva ErrorRecursosEjecucion. No conserva un historial de ejecuciones.
-        """
+        El llamador garantiza resultados durables. Conserva la deduplicación y los
+        recursos compartidos; intenta las demás limpiezas si alguna falla."""
 
     @abstractmethod
     def publicar_en_ramas(self, envios) -> None:
-        """Publica salidas en orden, esperando capacidad por cada destino.
+        """Persiste las ramas y las publica en orden esperando capacidad por destino.
 
-        Una espera conserva la salida actual y no repite las confirmadas. Un
-        error posterior a un envío confirmado eleva ErrorPublicacionParcial.
-        """
+        Conserva los IDs y las confirmaciones; informa ErrorPublicacionParcial si
+        falla una salida después de haber confirmado otras."""
 
     @abstractmethod
     def registrar_recurso(self, id_ejecucion: str, nombre: str, liberar: Callable[[], None]) -> None:
@@ -158,14 +157,28 @@ class ComunicacionGrupos(ABC, Generic[Contenido]):
     def interrumpir(self) -> None:
         """Interrumpe esperas de recepción y publicación sin confirmar trabajo pendiente."""
 
-    @abstractmethod
-    def cerrar(self) -> None:
-        """Libera los recursos locales e impide nuevas operaciones de comunicación.
+    def compactar_estado(self) -> None:
+        """Reduce los historiales conservando pendientes e identidades completadas.
 
-        Repetir un cierre exitoso no tiene efecto. Si una limpieza falla, intenta
-        las restantes y eleva ErrorCierre. Se invoca secuencialmente, después de
-        detener la recepción; no publica EOF.
+        Requiere que las operaciones locales hayan retornado. No borra recursos
+        del negocio ni autoriza reutilizar IDs; no equivale al cierre de EOF.
         """
+        raise NotImplementedError('El transporte debe implementar su compactación')
+
+    def restablecer(self) -> None:
+        """Reconstruye el transporte y recupera pendientes fuera de operaciones activas.
+
+        No vuelve a ejecutar callbacks de negocio. Si falla, debe reintentarse
+        explícitamente o cerrarse la instancia antes de admitir trabajo nuevo.
+        No revierte una interrupción ni un cierre solicitado por la aplicación.
+        """
+        raise NotImplementedError('El transporte debe implementar su restablecimiento')
+
+    @abstractmethod
+    def cerrar_comunicacion(self) -> None:
+        """Libera los recursos de comunicación sin publicar EOF; repetirlo es seguro.
+
+        Intenta todas las limpiezas y propaga ErrorCierre si alguna falla."""
 
 
 class Middleware(ComunicacionGrupos[Contenido]):
@@ -173,52 +186,29 @@ class Middleware(ComunicacionGrupos[Contenido]):
 
     @abstractmethod
     def crear_presupuesto_lote(self, entrada, esquema):
-        """Devuelve un medidor incremental con el espacio disponible para registros.
-
-        Descuenta el sobre de la entrada y la cabecera del lote del máximo de
-        bytes configurado. No reserva permisos de cola ni publica mensajes.
-        """
+        """Calcula los bytes disponibles para registros descontando el sobre y la cabecera."""
 
     @abstractmethod
     def recibir(
-        self, procesar: Callable[[Evento[Contenido]], None], *,
+        self, procesar: Union[Callable[[Evento[Contenido]], None], 'ProcesadorRecuperable'], *,
         al_finalizar: Optional[Callable[[Entrada], None]] = None,
     ) -> None:
-        """Entrega datos y notifica el cierre consolidado de cada entrada.
+        """Procesa datos o el cierre consolidado de una entrada y confirma después del callback.
 
-        Con al_finalizar, procesar recibe solo Datos y al_finalizar recibe Entrada.
-        Sin ese callback, procesar recibe también los eventos FinEntrada.
-        La finalización es síncrona: puede publicar acumulados y luego cerrar sus
-        salidas con finalizar_entrada. El cierre recibido se confirma después de
-        que el callback retorna correctamente; sus errores se propagan.
-        Las salidas a cerrar y sus dependencias las determina el negocio.
-        Todas las réplicas deben recibir, incluso sin datos propios, para atender
-        la coordinación. FinEntrada cierra una dependencia, no toda la ejecución.
-        entradas_pendientes permite consultar las demás dependencias desde el callback.
-        """
+        Con al_finalizar, entrega allí los cierres; sin él, los entrega a procesar.
+        ProcesadorRecuperable exige al_finalizar y confirma datos mediante su operación
+        durable. Todas las réplicas deben consumir controles aunque no reciban datos."""
 
     @abstractmethod
     def entradas_pendientes(self, id_ejecucion: str) -> frozenset[str]:
-        """Devuelve nombres de entradas configuradas sin cierre consolidado recibido localmente.
+        """Devuelve las entradas configuradas sin cierre consolidado local.
 
-        Incluye entradas sin datos ni controles recibidos. Dentro del finalizador,
-        la entrada que lo activó ya no está pendiente, aunque el callback siga en
-        ejecución. Un conjunto vacío no significa que terminaron sus publicaciones
-        o las salidas del proceso. Es una consulta local sin espera ni mensajes.
-        Una ejecución desconocida o liberada tiene todas sus entradas pendientes;
-        un grupo sin entradas devuelve un conjunto vacío.
-        """
+        Incluye entradas sin actividad y excluye la del finalizador activo; no implica
+        que las publicaciones de los finalizadores hayan terminado."""
 
     @abstractmethod
     def finalizar_entrada(self, grupo: str, entrada: Entrada) -> None:
-        """Declara el fin de los aportes de este productor a un grupo y entrada.
+        """Publica al coordinador de destino el total final de lotes de esta entrada.
 
-        Se invoca después del último aporte, incluso si no hubo datos. Es
-        idempotente tras confirmación por productor, grupo y entrada. Anuncia el
-        total de lotes a la coordinadora del destino y bloquea nuevos aportes.
-        No implica que los demás productores terminaron ni que los datos ya
-        fueron procesados.
-        Cada destino y nombre de entrada se cierra por separado, incluso cuando
-        otras ramas comparten el mismo identificador de ejecución o nombre.
-        Puede elevar ErrorConexion, ErrorMensaje o MiddlewareCerrado.
-        """
+        Admite cero aportes, impide nuevos datos y conserva el cierre en reintentos.
+        Cada productor cierra por separado cada destino y entrada."""

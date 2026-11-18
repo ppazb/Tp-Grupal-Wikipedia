@@ -1,64 +1,94 @@
-"""Inicialización única de la topología y sus permisos antes de iniciar procesos."""
+"""Inicialización y recuperación de la topología antes de habilitar los procesos."""
 
 import argparse
 
 import pika
 
-from .broker_connection import ConexionBroker
-from .capacidad import COLA_INEXISTENTE, publicar_permiso
-from .cargador_configuracion import cargar_configuracion
-from .interfaz import ErrorCapacidad
-from .queue_handler import declarar_cola
-from .topologia import PREFIJO_RECURSOS, TopologiaGrupos
+from src.middleware.transporte.conexion import ConexionBroker
+from src.middleware.transporte.capacidad import COLA_INEXISTENTE
+from src.middleware.transporte.permisos import publicar_permiso
+from src.middleware.configuracion.cargador import cargar_configuracion
+from src.middleware.interfaz import ErrorCapacidad
+from src.middleware.transporte.declaraciones import declarar_cola
+from src.middleware.transporte.topologia import PREFIJO_RECURSOS, TopologiaGrupos
 
 
-COLA_BLOQUEO = f"{PREFIJO_RECURSOS}.capacidad.inicializador"
-COLA_INICIADA = f"{PREFIJO_RECURSOS}.capacidad.iniciada"
+COLA_BLOQUEO = f'{PREFIJO_RECURSOS}.capacidad.inicializador'
+COLA_INICIADA = f'{PREFIJO_RECURSOS}.capacidad.iniciada'
 
 
 def inicializar_capacidad(configuracion):
-    """Declara colas vacías y carga permisos una sola vez por despliegue.
+    """Completa una preparación interrumpida sin alterar despliegues habilitados.
 
-    Un bloqueo exclusivo impide inicializadores simultáneos. La marca durable
-    impide duplicar permisos, incluso si una inicialización anterior quedó parcial.
-    Requiere un virtual host dedicado con la topología de datos vacía.
+    El bloqueo exclusivo serializa inicializadores. La marca final solo existe
+    después de confirmar todos los avisos y turnos. Antes de ella no pueden
+    abrirse los workers; sus colas auxiliares se reconstruyen si quedó un parcial.
     """
     topologia = TopologiaGrupos(configuracion)
     with ConexionBroker(configuracion.broker) as conexion:
         try:
             canal = conexion.canal
             canal.queue_declare(queue=COLA_BLOQUEO, exclusive=True, auto_delete=True)
-            _comprobar_sin_inicializar(conexion)
-            canal.queue_declare(queue=COLA_INICIADA, durable=True)
+            if _existe_cola(conexion, topologia.marca_capacidad()):
+                return
+            canal.confirm_delivery()
+            _validar_preparacion(canal, topologia.marca_capacidad())
             topologia.declarar(conexion)
             for cola in topologia.colas_datos():
                 estado = canal.queue_declare(queue=cola, passive=True).method
                 if estado.message_count or estado.consumer_count:
-                    raise ErrorCapacidad("La inicialización requiere colas de datos vacías y sin consumidores")
-            canal.confirm_delivery()
+                    raise ErrorCapacidad('La inicialización requiere datos vacíos y sin consumidores')
+            auxiliares = list(topologia.turnos_recepcion())
             for cola in topologia.colas_datos():
-                permisos = topologia.cola_capacidad(cola)
-                declarar_cola(canal, permisos, configuracion.limites.max_mensajes_por_cola)
-                estado = canal.queue_declare(queue=permisos, passive=True).method
-                if estado.message_count or estado.consumer_count:
-                    raise ErrorCapacidad("La cola de permisos debe estar vacía y sin consumidores")
-                for _ in range(configuracion.limites.max_mensajes_por_cola):
-                    publicar_permiso(canal, permisos)
+                aviso = topologia.cola_capacidad(cola)
+                # Los avisos son intercambiables: conservar el último no pierde trabajo.
+                canal.queue_declare(queue=aviso, durable=True, arguments={
+                    'x-queue-type': 'classic', 'x-max-length': 1, 'x-overflow': 'drop-head',
+                })
+                auxiliares.append(aviso)
+                turno = topologia.cola_turno_capacidad(cola)
+                declarar_cola(canal, turno, 1)
+                auxiliares.append(turno)
+            for cola in topologia.turnos_recepcion():
+                declarar_cola(canal, cola, 1)
+            for cola in auxiliares:
+                estado = canal.queue_declare(queue=cola, passive=True).method
+                if estado.consumer_count:
+                    raise ErrorCapacidad('Hay consumidores antes de completar la inicialización')
+            for cola in auxiliares:
+                canal.queue_purge(queue=cola)
+                publicar_permiso(canal, cola)
             canal.queue_declare(queue=topologia.marca_capacidad(), durable=True)
         except (pika.exceptions.AMQPError, OSError) as error:
-            raise ErrorCapacidad("Falló la inicialización de capacidad; no iniciar los procesos") from error
+            raise ErrorCapacidad('Falló la inicialización; puede reintentarse antes de iniciar los procesos') from error
 
 
-def _comprobar_sin_inicializar(conexion):
+def _validar_preparacion(canal, marca):
+    """Conserva la configuración de una preparación para impedir reintentos incompatibles."""
+    canal.queue_declare(queue=COLA_INICIADA, durable=True)
+    entrega, _, cuerpo = canal.basic_get(queue=COLA_INICIADA, auto_ack=False)
+    esperado = marca.encode('utf-8')
+    if entrega is not None:
+        canal.basic_nack(delivery_tag=entrega.delivery_tag, requeue=True)
+        if cuerpo != esperado:
+            raise ErrorCapacidad('La preparación existente pertenece a otra configuración de capacidad')
+        return
+    canal.basic_publish(
+        exchange='', routing_key=COLA_INICIADA, body=esperado, mandatory=True,
+        properties=pika.BasicProperties(delivery_mode=pika.spec.PERSISTENT_DELIVERY_MODE),
+    )
+
+
+def _existe_cola(conexion, nombre):
+    """Consulta la existencia de una cola sin crearla."""
     canal = conexion.crear_canal()
     try:
-        canal.queue_declare(queue=COLA_INICIADA, passive=True)
+        canal.queue_declare(queue=nombre, passive=True)
+        return True
     except pika.exceptions.ChannelClosedByBroker as error:
         if error.reply_code == COLA_INEXISTENTE:
-            return
+            return False
         raise
-    else:
-        raise ErrorCapacidad("El despliegue ya tiene una inicialización iniciada; no se duplican permisos")
     finally:
         if canal.is_open:
             canal.close()
@@ -66,11 +96,11 @@ def _comprobar_sin_inicializar(conexion):
 
 def main():
     """Carga la configuración indicada y prepara el despliegue antes de los workers."""
-    argumentos = argparse.ArgumentParser(description="Inicializar permisos de comunicación")
-    argumentos.add_argument("configuracion", help="Ruta al archivo JSON del despliegue")
+    argumentos = argparse.ArgumentParser(description='Inicializar capacidad de comunicación')
+    argumentos.add_argument('configuracion', help='Ruta al archivo JSON del despliegue')
     opciones = argumentos.parse_args()
     inicializar_capacidad(cargar_configuracion(opciones.configuracion))
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

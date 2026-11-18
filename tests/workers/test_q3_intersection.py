@@ -20,8 +20,8 @@ class _MiddlewareFalso:
     def crear_presupuesto_lote(self, entrada, esquema):
         return _Presupuesto()
 
-    def publicar(self, grupo, datos):
-        self.publicados.append(datos)
+    def publicar(self, envio):
+        self.publicados.append(envio.datos)
 
     def finalizar_entrada(self, grupo, entrada):
         self.finalizadas.append((grupo, entrada))

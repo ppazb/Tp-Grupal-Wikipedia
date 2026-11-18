@@ -4,7 +4,7 @@ import argparse
 import logging
 
 from src.common.protocol.registros import Esquema
-from src.middleware.cargador_configuracion import cargar_configuracion
+from src.middleware.configuracion.cargador import cargar_configuracion
 from src.workers.base_worker import destinos_errores, entorno_worker
 from src.workers.arranque import agregar_argumentos_comunicacion, validar_rutas
 from .worker import WorkerFrecuencia

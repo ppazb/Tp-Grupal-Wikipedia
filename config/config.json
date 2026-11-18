@@ -1,4 +1,9 @@
 {
+  "persistencia": {
+    "directorio": "data/middleware",
+    "directorio_recepcion": "data/middleware/recepciones",
+    "particiones_recepcion": 16
+  },
   "broker": {
     "host": "rabbitmq",
     "puerto": 5672,

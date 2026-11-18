@@ -1,8 +1,9 @@
 """Estructuras compartidas por los procesos y el protocolo de comunicación."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import IntEnum
 from typing import Generic, Optional, TypeVar, Union
+from uuid import UUID, uuid4
 
 from .registros import ErrorDecodificacionRegistro, Lote
 
@@ -35,11 +36,19 @@ class EnvioDatos(Generic[Contenido]):
     """Describe una salida hacia un grupo y su clave opcional de afinidad.
 
     La clave se aplica al lote completo. Es una estructura local de publicación.
+    id_mensaje identifica esta salida y se conserva al reenviar el mismo envío.
+    Cada rama independiente tiene su propio identificador.
     """
 
     grupo: str #topic
     datos: Datos[Contenido]
     clave_afinidad: Optional[str] = None #routing key
+    id_mensaje: UUID = field(kw_only=True)
+
+    @classmethod
+    def nuevo(cls, grupo, datos, clave_afinidad=None):
+        """Crea una publicación nueva; conservarla permite reenviar el mismo ID."""
+        return cls(grupo, datos, clave_afinidad, id_mensaje=uuid4())
 
 
 @dataclass(frozen=True)
@@ -101,12 +110,20 @@ class SobreMensaje:
     DATOS transporta un Lote. EOF transporta un CierreProductor e indica
     que el productor terminó sus aportes para esa entrada. La coordinación usa
     PrepararCierre, AvanceReplica y contenido nulo para FIN_ENTRADA.
+    id_mensaje distingue publicaciones y se conserva al codificar o recuperar
+    el mismo sobre. Su reconstrucción exige indicar el ID original.
     """
 
     entrada: Entrada
     tipo: TipoMensaje
     origen: IdentidadProceso
     contenido: Union[Lote, CierreProductor, PrepararCierre, AvanceReplica, None]
+    id_mensaje: UUID
+
+    @classmethod
+    def nuevo(cls, entrada, tipo, origen, contenido):
+        """Crea un sobre para un mensaje nuevo, con una identidad independiente."""
+        return cls(entrada, tipo, origen, contenido, uuid4())
 
 
 @dataclass(frozen=True)

@@ -50,3 +50,6 @@ input/
 version-secuencial.ipynb
 /docker-compose.yaml
 /registros/
+
+# Estado durable local de las publicaciones.
+/data/middleware/
