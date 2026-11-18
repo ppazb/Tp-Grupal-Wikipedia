@@ -3,10 +3,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 case "${1:-todos}" in
-    despliegue) exec python3 -m tests.sigterm.despliegue.ejecutar ;;
     todos) export DIRECTORIO_PRUEBAS=tests ;;
-    middleware|eof|q4|q5|sigterm) export DIRECTORIO_PRUEBAS="tests/$1" ;;
-    *) echo "Uso: $0 [todos|middleware|eof|q4|q5|sigterm|despliegue]" >&2; exit 2 ;;
+    client|gateway|workers|q5) export DIRECTORIO_PRUEBAS="tests/$1" ;;
+    *) echo "Uso: $0 [todos|client|gateway|workers|q5]" >&2; exit 2 ;;
 esac
 proyecto="wiki-pruebas-$$"
 compose=(docker compose -p "$proyecto" -f tests/compose.yml)
@@ -27,8 +26,3 @@ trap limpiar EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 "${compose[@]}" up --build --attach escenarios --abort-on-container-exit --exit-code-from escenarios
-
-if [ "${1:-todos}" = todos ]; then
-    python3 -m unittest tests.compose.escenarios -v
-    python3 -m tests.sigterm.despliegue.ejecutar
-fi

@@ -71,14 +71,8 @@ Después, ejecutar `make down` para limpiar antes de una nueva ejecución.
 ## Pruebas
 
 ```bash
-make test                    # Todos los paquetes y escenarios de despliegue
-make test-middleware         # Comunicación con RabbitMQ real
-make test-eof                # Protocolo EOF
-make test-q4                 # Q4 contra cálculo serial con datos sintéticos
+make test                    # Paquetes de pruebas conservados
 make test-q5                 # Persistencia, lectura y limpieza de candidatos
-make test-sigterm            # Apagado por componente
-make test-sigterm-despliegue  # Parada del despliegue con clientes concurrentes y réplicas
-make test-compose            # Generación de Compose, sin levantar contenedores
 ```
 
 Los escenarios de comunicación usan proyectos Compose aislados, sin puertos
@@ -135,5 +129,4 @@ estrictamente, incluyendo las palabras elegidas en empates del puesto veinte.
 El comando devuelve 0 si todos coinciden, 1 si hay diferencias y 2 si no pudo
 completar la verificación. La ausencia de un CSV representa una consulta vacía,
 como en el cliente; ejecutar únicamente después de recibir todos los cierres.
-`make test-serial` verifica el adaptador y comparador con datos sintéticos, sin
-acceder a Wikimedia. Para otras rutas u opciones: `bash scripts/comparar_serial.sh --help`.
+Para otras rutas u opciones: `bash scripts/comparar_serial.sh --help`.

@@ -30,7 +30,7 @@ with patch.dict(os.environ, _entorno_del_gateway_en_el_compose()):
     from src.gateway.src.articulos import articulo_desde_fila
     from src.gateway.src.gateway import ServidorGateway
     from src.gateway.src.resultados import ReceptorResultados, RegistroSesiones
-from src.middleware.cargador_configuracion import cargar_configuracion
+from src.middleware.configuracion.cargador import cargar_configuracion
 
 MAX_BYTES = 65536
 

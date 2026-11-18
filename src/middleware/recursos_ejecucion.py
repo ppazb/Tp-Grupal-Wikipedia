@@ -3,7 +3,7 @@
 import logging
 from typing import Callable
 
-from .interfaz import ErrorRecursosEjecucion
+from src.middleware.interfaz import ErrorRecursosEjecucion
 
 
 REGISTRO = logging.getLogger(__name__)
@@ -76,10 +76,11 @@ class RecursosPorEjecucion:
             ) from primer_error
 
     def _validar_disponible(self):
+        """Rechaza modificaciones durante la liberación de recursos."""
         if self._liberando:
             raise ErrorRecursosEjecucion("No se puede modificar el registro durante una limpieza")
 
-    def cerrar(self):
+    def liberar_todas_las_ejecuciones(self):
         """Intenta liberar todas las ejecuciones y conserva las limpiezas fallidas."""
         self._validar_disponible()
         errores = []
@@ -93,5 +94,6 @@ class RecursosPorEjecucion:
 
     @staticmethod
     def _validar_identificador(valor):
+        """Comprueba que el identificador tenga un formato válido."""
         if type(valor) is not str or not valor.strip():
             raise ErrorRecursosEjecucion("La ejecución y el recurso deben tener nombres no vacíos")

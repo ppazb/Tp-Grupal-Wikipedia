@@ -4,8 +4,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from uuid import UUID
 
-from ..common.protocol.dto import IdentidadProceso
-from .interfaz import ErrorPersistencia
+from src.common.protocol.dto import IdentidadProceso
+from src.middleware.interfaz import ErrorPersistencia
 
 
 @dataclass(frozen=True)
@@ -35,41 +35,28 @@ class ProcesadorRecuperable(ABC):
 
     @abstractmethod
     def preparar(self, contexto, datos) -> OperacionProcesamiento:
-        """Persiste el plan completo y devuelve su referencia después de sincronizarlo.
+        """Persiste cambios y salidas del plan sin ejecutarlos y devuelve su referencia.
 
-        Repetir la llamada para contexto.id_mensaje recupera la misma operación,
-        incluso si la primera escritura terminó sin devolver su resultado.
-        El plan incluye los cambios recuperables y las publicaciones con sus
-        contenidos, destinos, IDs y productor originales. No ejecuta sus efectos.
-        La referencia conserva al responsable original, también si otra réplica
-        encuentra un plan persistido antes de que se vinculara a la recepción.
-        """
+        Repetir por ID de entrada recupera la misma operación, sus IDs de salida y
+        el productor original, incluso desde otra réplica."""
 
     @abstractmethod
     def aplicar(self, contexto, operacion: OperacionProcesamiento) -> None:
         """Aplica durablemente los cambios del plan sin repetir efectos ya aplicados.
 
-        Debe poder recuperar lo que ejecutó otra réplica y restaurar el estado
-        aunque el mensaje de entrada ya haya sido confirmado y no se reentregue.
-        """
+        Recupera también efectos de otra réplica o de entradas ya confirmadas."""
 
     @abstractmethod
     def publicar_pendientes(self, contexto, operacion: OperacionProcesamiento) -> None:
-        """Completa las salidas del plan conservando su identidad y productor.
+        """Completa las salidas del plan mediante el middleware y espera su confirmación durable.
 
-        Usa el middleware, sin exponer conexiones al negocio. Al retornar todas
-        las salidas tienen confirmación durable; un reintento recupera las mismas
-        publicaciones, no genera nuevos IDs. Si ejecuta otra réplica debe resolver
-        el publicador original, sin cambiar el origen del sobre al publicador local.
-        """
+        Los reintentos conservan contenido, destino, ID y productor original."""
 
     @abstractmethod
     def confirmar(self, contexto, operacion: OperacionProcesamiento) -> ConfirmacionProcesamiento:
-        """Persiste el cierre de la operación antes de devolver su confirmación.
+        """Persiste y devuelve la confirmación de cambios recuperables y salidas confirmadas.
 
-        Solo confirma si los cambios son recuperables y las salidas están
-        confirmadas durablemente. Repetir devuelve la misma confirmación.
-        """
+        Repetir la operación devuelve la misma confirmación."""
 
 
 def ejecutar_procesamiento(procesador, datos, recepciones, comprobar_detencion):

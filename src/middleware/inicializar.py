@@ -4,13 +4,13 @@ import argparse
 
 import pika
 
-from .broker_connection import ConexionBroker
-from .capacidad import COLA_INEXISTENTE
-from .permisos import publicar_permiso
-from .cargador_configuracion import cargar_configuracion
-from .interfaz import ErrorCapacidad
-from .queue_handler import declarar_cola
-from .topologia import PREFIJO_RECURSOS, TopologiaGrupos
+from src.middleware.transporte.conexion import ConexionBroker
+from src.middleware.transporte.capacidad import COLA_INEXISTENTE
+from src.middleware.transporte.permisos import publicar_permiso
+from src.middleware.configuracion.cargador import cargar_configuracion
+from src.middleware.interfaz import ErrorCapacidad
+from src.middleware.transporte.declaraciones import declarar_cola
+from src.middleware.transporte.topologia import PREFIJO_RECURSOS, TopologiaGrupos
 
 
 COLA_BLOQUEO = f'{PREFIJO_RECURSOS}.capacidad.inicializador'
@@ -29,7 +29,7 @@ def inicializar_capacidad(configuracion):
         try:
             canal = conexion.canal
             canal.queue_declare(queue=COLA_BLOQUEO, exclusive=True, auto_delete=True)
-            if _existe(conexion, topologia.marca_capacidad()):
+            if _existe_cola(conexion, topologia.marca_capacidad()):
                 return
             canal.confirm_delivery()
             _validar_preparacion(canal, topologia.marca_capacidad())
@@ -79,7 +79,8 @@ def _validar_preparacion(canal, marca):
     )
 
 
-def _existe(conexion, nombre):
+def _existe_cola(conexion, nombre):
+    """Consulta la existencia de una cola sin crearla."""
     canal = conexion.crear_canal()
     try:
         canal.queue_declare(queue=nombre, passive=True)

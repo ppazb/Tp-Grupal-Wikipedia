@@ -1,7 +1,9 @@
-from ..common.protocol.dto import EnvioDatos
-from .cargador_configuracion import cargar_configuracion
-from .codificacion import CodificadorMensajes
-from .configuracion import (
+"""Tipos y contratos públicos de comunicación por grupos."""
+
+from src.common.protocol.dto import EnvioDatos, FinEntrada
+from src.middleware.configuracion.cargador import cargar_configuracion
+from src.middleware.mensajes.codificacion import CodificadorMensajes
+from src.middleware.configuracion.modelos import (
     ConfiguracionBroker,
     ConfiguracionComunicacion,
     ConfiguracionGrupo,
@@ -10,7 +12,7 @@ from .configuracion import (
     LimitesComunicacion,
     Ruta,
 )
-from .interfaz import (
+from src.middleware.interfaz import (
     ComunicacionGrupos,
     ContextoRecepcion,
     Datos,
@@ -29,14 +31,13 @@ from .interfaz import (
     ErrorSeguimientoEntrada,
     ErrorTopologia,
     Evento,
-    FinEntrada,
     Middleware,
     MiddlewareCerrado,
     PublicacionRechazada,
     OperacionInterrumpida,
 )
-from .recursos_ejecucion import RecursosPorEjecucion
-from .procesamiento import (
+from src.middleware.recursos_ejecucion import RecursosPorEjecucion
+from src.middleware.procesamiento import (
     ConfirmacionProcesamiento,
     OperacionProcesamiento,
     ProcesadorRecuperable,
