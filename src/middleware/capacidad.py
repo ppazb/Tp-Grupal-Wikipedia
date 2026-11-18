@@ -137,6 +137,10 @@ class CapacidadDatos:
         self._cancelar_consumidor()
         self._turnos.detener()
 
+    def compactar(self):
+        """Compacta reservas compartidas sin modificar la capacidad disponible."""
+        self._registro.compactar()
+
     def cerrar(self):
         """Descarta índices locales; los canales los cierra la conexión propietaria."""
         self._registro.cerrar()

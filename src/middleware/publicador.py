@@ -7,8 +7,8 @@ from uuid import UUID, uuid4
 
 import pika
 
-from ..common.protocol.dto import CierreProductor, Datos, EnvioDatos, SobreMensaje, TipoMensaje
-from ..common.protocol.primitivas import ErrorSerializacion
+from ..common.protocol.dto import CierreProductor, Datos, Entrada, EnvioDatos, SobreMensaje, TipoMensaje
+from ..common.protocol.primitivas import ErrorSerializacion, EscritorBinario
 from ..common.io_adapters.formato_wal import ErrorWAL
 from .broker_connection import ConexionBroker
 from .capacidad import CABECERA_CAPACIDAD, CABECERA_RESERVA, VERSION_CAPACIDAD, CapacidadDatos
@@ -67,7 +67,7 @@ class PublicadorDatos:
         try:
             self._durables = SalidasDurables(
                 configuracion, self._codificador, self._seguir_salida, self._liberar_seguimiento,
-                ambito, conexion.comprobar_apagado,
+                ambito, conexion.comprobar_apagado, self._guardar_seguimiento, self._recuperar_seguimiento,
             )
         except (ErrorWAL, OSError, ErrorSerializacion) as error:
             raise ErrorPersistencia("No se pudo recuperar el registro de salidas") from error
@@ -127,6 +127,36 @@ class PublicadorDatos:
     def liberar_ejecucion(self, id_ejecucion):
         """Elimina contadores y cierres de una ejecución cuya limpieza autorizó el llamador."""
         self._durables.liberar(id_ejecucion)
+
+    def validar_liberacion(self, id_ejecucion):
+        """Verifica que la ejecución no conserve publicaciones sin confirmar."""
+        self._durables.validar_liberacion(id_ejecucion)
+
+    def compactar(self):
+        """Compacta las publicaciones sin modificar los totales ni sus identidades."""
+        self._durables.compactar()
+
+    def _guardar_seguimiento(self, maximo):
+        for (grupo, entrada), estado in self._salidas.items():
+            escritor = EscritorBinario(maximo)
+            for texto in (grupo, entrada.id_ejecucion, entrada.nombre):
+                escritor.texto(texto)
+            escritor.entero(estado.total, 8)
+            escritor.entero(int(estado.cierre_iniciado), 1)
+            escritor.entero(int(estado.cierre_confirmado), 1)
+            escritor.agregar(estado.id_cierre.bytes)
+            yield escritor.resultado()
+
+    def _recuperar_seguimiento(self, lector):
+        grupo = lector.texto()
+        entrada = Entrada(lector.texto(), lector.texto())
+        total, iniciado, confirmado = lector.entero(8), lector.entero(1), lector.entero(1)
+        identificador = UUID(int=lector.entero(16))
+        lector.finalizar()
+        self._configuracion.obtener_ruta(self._configuracion.proceso.grupo, grupo, entrada.nombre)
+        if iniciado not in (0, 1) or confirmado not in (0, 1) or confirmado > iniciado or not identificador.int:
+            raise ErrorPersistencia('Seguimiento compacto inválido')
+        self._salidas[(grupo, entrada)] = _EstadoSalida(total, bool(iniciado), bool(confirmado), identificador)
 
     def _liberar_seguimiento(self, id_ejecucion):
         self._salidas = {

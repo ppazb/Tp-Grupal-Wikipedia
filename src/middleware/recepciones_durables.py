@@ -17,6 +17,7 @@ from .salidas_durables import crear_directorio_durable
 INICIAR = 1
 COMPLETAR = 2
 VINCULAR_OPERACION = 3
+RECEPCION_COMPLETADA = 4
 BYTES_ID = 16
 BYTES_INSTANCIA = 4
 BYTES_HUELLA = 32
@@ -37,10 +38,10 @@ class _Particion:
             raise ErrorPersistencia('Registro de recepción incompleto')
         tipo = contenido[0]
         identificador = UUID(bytes=contenido[1:1 + BYTES_ID])
-        if tipo == INICIAR and len(contenido) == MAX_BYTES_REGISTRO:
+        if tipo in (INICIAR, RECEPCION_COMPLETADA) and len(contenido) == MAX_BYTES_REGISTRO:
             if identificador in self.registros:
                 raise ErrorPersistencia('Inicio repetido en el registro de recepción')
-            self.registros[identificador] = (contenido[1 + BYTES_ID:], False)
+            self.registros[identificador] = (contenido[1 + BYTES_ID:], tipo == RECEPCION_COMPLETADA)
         elif tipo == COMPLETAR and len(contenido) == 1 + BYTES_ID:
             anterior = self.registros.get(identificador)
             if anterior is None or anterior[1]:
@@ -141,6 +142,8 @@ class RecepcionesDurables:
                          max_bytes_por_registro=MAX_BYTES_REGISTRO,
                          comprobar_detencion=self._conexion.comprobar_apagado) as wal:
                     particion = self._particiones.setdefault(numero, _Particion())
+                    if particion.punto is not None and not wal.conserva_punto(particion.punto):
+                        particion = self._particiones[numero] = _Particion()
                     wal.recuperar(particion.aplicar, desde=particion.punto)
                     huella = sha256(cuerpo).digest()
                     anterior = particion.registros.get(sobre.id_mensaje)
@@ -186,6 +189,35 @@ class RecepcionesDurables:
         huella, _ = self._particion.registros[actual.id_mensaje]
         self._particion.registros[actual.id_mensaje] = (huella, True)
         self._completada = True
+
+    def compactar(self):
+        """Resume particiones bajo sus turnos; conserva IDs y vínculos pendientes."""
+        if self._actual is not None:
+            raise ErrorRecepcion('No se puede compactar una recepción activa')
+        for numero in range(self._cantidad):
+            cola = self._topologia.cola_turno_recepcion(self._proceso.grupo, numero)
+            with self._turnos.adquirir(cola):
+                try:
+                    with WAL(self._directorio / f'recepciones-{numero}.wal',
+                             max_bytes_por_registro=MAX_BYTES_REGISTRO,
+                             comprobar_detencion=self._conexion.comprobar_apagado) as wal:
+                        particion = _Particion()
+                        wal.recuperar(particion.aplicar)
+                        wal.compactar(self._registros_compactos(particion))
+                except (OSError, ErrorWAL) as error:
+                    raise ErrorPersistencia('No se pudo compactar la recepción') from error
+                finally:
+                    self._particiones.pop(numero, None)
+
+    @staticmethod
+    def _registros_compactos(particion):
+        for identificador, (huella, completa) in particion.registros.items():
+            tipo = RECEPCION_COMPLETADA if completa else INICIAR
+            yield bytes([tipo]) + identificador.bytes + huella
+            if not completa and identificador in particion.operaciones:
+                operacion, instancia = particion.operaciones[identificador]
+                yield (bytes([VINCULAR_OPERACION]) + identificador.bytes
+                       + operacion.bytes + instancia.to_bytes(BYTES_INSTANCIA, 'big'))
 
     def cerrar(self):
         """Descarta índices locales; conserva el historial compartido para reentregas."""

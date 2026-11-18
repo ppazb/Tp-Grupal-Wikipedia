@@ -22,6 +22,10 @@ COMPLETAR = 3
 CONFIRMAR = 4
 LIBERAR = 5
 INDIVIDUAL = 6
+HUELLA_CONFIRMADA = 7
+SEGUIMIENTO = 8
+PENDIENTE_COMPACTA = 9
+UMBRAL_COMPACTACION_BYTES = 16 * 1024 * 1024
 REGISTRO = logging.getLogger(__name__)
 BYTES_ID = 16
 # Cuatro nombres AMQP con prefijos, etiquetas y longitud del cuerpo.
@@ -68,7 +72,11 @@ class SalidasDurables:
     Las huellas de salidas confirmadas permiten reconocer IDs ya publicados.
     """
 
-    def __init__(self, configuracion, codificador, aplicar, liberar, ambito, comprobar):
+    def __init__(self, configuracion, codificador, aplicar, liberar, ambito, comprobar,
+                 guardar_seguimiento, recuperar_seguimiento):
+        self._guardar_seguimiento = guardar_seguimiento
+        self._recuperar_seguimiento = recuperar_seguimiento
+        self._posicion_compactada = 0
         self._codificador = codificador
         self._aplicar = aplicar
         self._liberar = liberar
@@ -156,17 +164,20 @@ class SalidasDurables:
             self._fallido = True
             raise
 
-    def _incorporar(self, publicacion, huella):
+    def _incorporar(self, publicacion, huella, *, seguir=True):
         if publicacion.id_mensaje in self._huellas:
             raise ErrorPersistencia('ID repetido dentro del historial de salidas')
         self._huellas[publicacion.id_mensaje] = huella
         self._pendientes[publicacion.id_mensaje] = publicacion
-        self._aplicar(publicacion, False)
+        if seguir:
+            self._aplicar(publicacion, False)
 
     def confirmar(self, publicacion):
         """Persiste la confirmación del broker antes de retirar el cuerpo pendiente."""
         self._registrar(bytes([CONFIRMAR]) + publicacion.id_mensaje.bytes)
         self._resolver(publicacion.id_mensaje)
+        if self._wal.punto_recuperacion.posicion - self._posicion_compactada >= UMBRAL_COMPACTACION_BYTES:
+            self.compactar()
 
     def _resolver(self, identificador):
         if identificador not in self._pendientes:
@@ -187,25 +198,64 @@ class SalidasDurables:
     def contiene(self, identificador):
         return identificador in self._huellas
 
-    def liberar(self, ejecucion):
-        """Registra el fin del seguimiento local sin eliminar huellas de mensajes."""
+    def validar_liberacion(self, ejecucion):
+        """Rechaza la limpieza si quedan salidas locales pendientes de esa ejecución."""
         if any(p.sobre.entrada.id_ejecucion == ejecucion for p in self.pendientes()):
             raise ErrorPersistencia('No se puede liberar una ejecución con publicaciones pendientes')
+
+    def compactar(self):
+        """Retira cuerpos confirmados conservando huellas, pendientes y seguimiento."""
+        self._validar()
+        try:
+            self._wal.compactar(self._registros_compactos())
+            self._posicion_compactada = self._wal.punto_recuperacion.posicion
+        except (ErrorWAL, OSError) as error:
+            self._fallido = True
+            raise ErrorPersistencia('No se pudo compactar el registro de publicaciones') from error
+        except BaseException:
+            self._fallido = True
+            raise
+
+    def _registros_compactos(self):
+        for identificador, huella in self._huellas.items():
+            if identificador not in self._pendientes:
+                yield bytes([HUELLA_CONFIRMADA]) + identificador.bytes + huella
+        for publicacion in self._pendientes.values():
+            yield bytes([PENDIENTE_COMPACTA]) + self._codificar(publicacion)[1:]
+        # Las instantáneas incluyen también las salidas pendientes, sin contarlas dos veces.
+        for contenido in self._guardar_seguimiento(self._maximo - 1):
+            yield bytes([SEGUIMIENTO]) + contenido
+
+    def liberar(self, ejecucion):
+        """Registra el fin del seguimiento local sin eliminar huellas de mensajes."""
+        self.validar_liberacion(ejecucion)
         escritor = EscritorBinario(self._maximo)
         escritor.entero(LIBERAR, 1)
         escritor.texto(ejecucion)
         self._registrar(escritor.resultado())
         self._liberar(ejecucion)
+        self.compactar()
 
     def _recuperar(self, registro):
         lector = LectorBinario(registro.contenido)
         tipo = lector.entero(1)
-        if tipo == INDIVIDUAL:
+        if tipo == HUELLA_CONFIRMADA:
+            identificador = UUID(int=lector.entero(BYTES_ID))
+            huella = lector.entero(32).to_bytes(32, 'big')
+            lector.finalizar()
+            if identificador in self._huellas or identificador.int == 0:
+                raise ErrorPersistencia('Huella confirmada duplicada o inválida')
+            self._huellas[identificador] = huella
+            return
+        if tipo == SEGUIMIENTO:
+            self._recuperar_seguimiento(lector)
+            return
+        if tipo in (INDIVIDUAL, PENDIENTE_COMPACTA):
             self._grupo = None
             self._provisionales.clear()
             publicacion = self._decodificar(lector)
             huella = sha256(bytes([AGREGAR]) + registro.contenido[1:]).digest()
-            self._incorporar(publicacion, huella)
+            self._incorporar(publicacion, huella, seguir=tipo == INDIVIDUAL)
             return
         if tipo == AGREGAR:
             if self._grupo is None:

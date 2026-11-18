@@ -164,7 +164,9 @@ class ComunicacionGrupos(ABC, Generic[Contenido]):
         Conserva los recursos compartidos. Repetir una liberación exitosa no tiene
         efecto; ante fallos intenta las demás limpiezas, conserva las pendientes y
         eleva ErrorRecursosEjecucion. La liberación lógica conserva el historial
-        durable de publicación; no equivale a compactarlo.
+        de deduplicación; compacta las salidas para retirar cuerpos confirmados.
+        El llamador debe garantizar el cierre local y la durabilidad de los
+        resultados antes de liberar recursos. No verifica un cierre global durable.
         """
 
     @abstractmethod
@@ -184,6 +186,14 @@ class ComunicacionGrupos(ABC, Generic[Contenido]):
     @abstractmethod
     def interrumpir(self) -> None:
         """Interrumpe esperas de recepción y publicación sin confirmar trabajo pendiente."""
+
+    def compactar_estado(self) -> None:
+        """Reduce los historiales conservando pendientes e identidades completadas.
+
+        Requiere que las operaciones locales hayan retornado. No borra recursos
+        del negocio ni autoriza reutilizar IDs; no equivale al cierre de EOF.
+        """
+        raise NotImplementedError('El transporte debe implementar su compactación')
 
     def restablecer(self) -> None:
         """Reconstruye el transporte y recupera pendientes fuera de operaciones activas.

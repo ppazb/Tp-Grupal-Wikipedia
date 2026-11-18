@@ -6,8 +6,9 @@ import logging
 import os
 from pathlib import Path
 from threading import RLock
+from uuid import uuid4
 
-from .archivos import escribir_completo
+from .archivos import ArchivoTruncado, escribir_completo, leer_completo
 from .formato_wal import (
     ColaIncompleta, ErrorWAL, MAX_LONGITUD, MAX_SECUENCIA, WALOcupado,
     delimitar_registro, leer_registro,
@@ -15,6 +16,8 @@ from .formato_wal import (
 
 
 REGISTRO = logging.getLogger(__name__)
+FIRMA_COMPACTACION = b'WALC'
+BYTES_GENERACION = 16
 
 
 @dataclass(frozen=True)
@@ -25,6 +28,7 @@ class PuntoWAL:
     inodo: int
     posicion: int
     siguiente: int
+    generacion: bytes | None = None
 
 
 class WAL:
@@ -47,20 +51,27 @@ class WAL:
         self._pid = os.getpid()
         self._mutex = RLock()
         self._archivo = None
+        self._bloqueo = None
         self._recuperado = False
         self._operando = False
         self._fallido = False
         self._siguiente = 1
+        self._generacion = None
+        self._inicio = 0
         self._abrir()
 
     def _abrir(self):
         try:
             self._comprobar()
-            self._archivo = self._ruta.open('a+b', buffering=0)
+            self._bloqueo = self._ruta.with_name(self._ruta.name + '.lock').open('a+b', buffering=0)
             try:
-                fcntl.flock(self._archivo.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(self._bloqueo.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError as error:
                 raise WALOcupado(f'El WAL ya está en uso: {self._ruta}') from error
+            self._archivo = self._ruta.open('a+b', buffering=0)
+            self._leer_generacion()
+            # Un temporal de una compactación interrumpida nunca es el historial activo.
+            self._ruta.with_name(self._ruta.name + '.compactando').unlink(missing_ok=True)
             # fsync del archivo no persiste por sí solo su entrada en el directorio.
             os.fsync(self._archivo.fileno())
             descriptor = os.open(self._ruta.parent, os.O_RDONLY | os.O_DIRECTORY)
@@ -71,6 +82,23 @@ class WAL:
         except BaseException:
             self._cerrar_tras_error()
             raise
+
+    def _leer_generacion(self):
+        """Identifica reemplazos aunque el sistema de archivos reutilice un inodo."""
+        self._archivo.seek(0)
+        try:
+            firma = leer_completo(self._archivo, len(FIRMA_COMPACTACION), admitir_fin=True)
+        except ArchivoTruncado:
+            firma = None  # La recuperación recortará el primer registro incompleto.
+        if firma == FIRMA_COMPACTACION:
+            try:
+                self._generacion = bytes(leer_completo(self._archivo, BYTES_GENERACION))
+            except ArchivoTruncado as error:
+                raise ErrorWAL('Cabecera de compactación incompleta') from error
+            self._inicio = len(FIRMA_COMPACTACION) + BYTES_GENERACION
+        else:
+            self._generacion, self._inicio = None, 0
+        self._archivo.seek(self._inicio)
 
     def recuperar(self, aplicar, *, desde=None):
         """Aplica registros en orden y recorta solo una cola incompleta.
@@ -91,12 +119,13 @@ class WAL:
                 raise TypeError('aplicar debe ser invocable')
             self._operando = True
             try:
-                inicio, secuencia = 0, 1
+                inicio, secuencia = self._inicio, 1
                 if desde is not None:
                     estado = os.fstat(self._archivo.fileno())
                     if (type(desde) is not PuntoWAL
+                            or desde.generacion != self._generacion
                             or (desde.dispositivo, desde.inodo) != (estado.st_dev, estado.st_ino)
-                            or not 0 <= desde.posicion <= estado.st_size
+                            or not self._inicio <= desde.posicion <= estado.st_size
                             or desde.siguiente < 1):
                         raise ErrorWAL('El punto de recuperación no pertenece al historial disponible')
                     inicio, secuencia = desde.posicion, desde.siguiente
@@ -120,7 +149,7 @@ class WAL:
             if not self._recuperado:
                 raise ErrorWAL('Recuperar el WAL antes de obtener una posición')
             estado = os.fstat(self._archivo.fileno())
-            return PuntoWAL(estado.st_dev, estado.st_ino, self._archivo.tell(), self._siguiente)
+            return PuntoWAL(estado.st_dev, estado.st_ino, self._archivo.tell(), self._siguiente, self._generacion)
 
     def _recorrer(self, aplicar, secuencia):
         while True:
@@ -173,6 +202,66 @@ class WAL:
             finally:
                 self._operando = False
 
+    def conserva_punto(self, punto):
+        """Indica si un índice incremental corresponde al archivo vigente."""
+        self._validar_proceso()
+        with self._mutex:
+            self._validar_disponible()
+            estado = os.fstat(self._archivo.fileno())
+            return (type(punto) is PuntoWAL
+                    and punto.generacion == self._generacion
+                    and (punto.dispositivo, punto.inodo) == (estado.st_dev, estado.st_ino)
+                    and self._inicio <= punto.posicion <= estado.st_size)
+
+    def compactar(self, contenidos):
+        """Reemplaza el historial por registros equivalentes bajo el bloqueo estable.
+
+        El iterable se escribe incrementalmente. Antes del reemplazo una caída
+        conserva el original; después queda el compacto completo. Un error exige
+        cerrar y recuperar para resolver qué versión quedó instalada.
+        """
+        self._validar_proceso()
+        with self._mutex:
+            self._validar_disponible()
+            if not self._recuperado:
+                raise ErrorWAL('Recuperar antes de compactar')
+            self._operando = True
+            temporal = self._ruta.with_name(self._ruta.name + '.compactando')
+            try:
+                siguiente = 1
+                generacion = uuid4().bytes
+                with temporal.open('wb', buffering=0) as archivo:
+                    escribir_completo(archivo, FIRMA_COMPACTACION + generacion, self._comprobar_detencion)
+                    for contenido in contenidos:
+                        self._comprobar()
+                        if type(contenido) is not bytes or len(contenido) > self._max_bytes:
+                            raise ErrorWAL('Contenido inválido al compactar')
+                        if siguiente > MAX_SECUENCIA:
+                            raise ErrorWAL('Se agotó la secuencia al compactar')
+                        cabecera, cierre = delimitar_registro(siguiente, contenido)
+                        for parte in (cabecera, contenido, cierre):
+                            escribir_completo(archivo, parte, self._comprobar_detencion)
+                        siguiente += 1
+                    os.fsync(archivo.fileno())
+                self._comprobar()
+                os.replace(temporal, self._ruta)
+                descriptor = os.open(self._ruta.parent, os.O_RDONLY | os.O_DIRECTORY)
+                try:
+                    os.fsync(descriptor)
+                finally:
+                    os.close(descriptor)
+                self._archivo.close()
+                self._archivo = self._ruta.open('a+b', buffering=0)
+                self._archivo.seek(0, os.SEEK_END)
+                self._siguiente = siguiente
+                self._generacion = generacion
+                self._inicio = len(FIRMA_COMPACTACION) + BYTES_GENERACION
+            except BaseException:
+                self._fallido = True
+                raise
+            finally:
+                self._operando = False
+
     def _validar_proceso(self):
         if os.getpid() != self._pid:
             raise ErrorWAL('Abrir un WAL propio después de crear el proceso')
@@ -195,8 +284,13 @@ class WAL:
         with self._mutex:
             if self._operando:
                 raise ErrorWAL('No se puede cerrar el WAL desde una operación activa')
-            if self._archivo is not None:
-                self._archivo.close()
+            self._fallido = True
+            try:
+                if self._archivo is not None:
+                    self._archivo.close()
+            finally:
+                if self._bloqueo is not None:
+                    self._bloqueo.close()
 
     def _cerrar_tras_error(self):
         try:

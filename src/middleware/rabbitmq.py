@@ -253,6 +253,16 @@ class MiddlewareRabbitMQ(Middleware[Lote]):
         self._validar_abierta()
         self._recursos.registrar(id_ejecucion, nombre, liberar)
 
+    def compactar_estado(self):
+        """Compacta WALs sin operaciones locales activas ni borrar IDs de deduplicación."""
+        self._validar_abierta()
+        if self._recibiendo or self._publicando:
+            raise ErrorRecursosEjecucion('La compactación requiere operaciones locales finalizadas')
+        self._publicador.compactar()
+        if self._receptor is not None:
+            self._receptor.compactar()
+        self._capacidad.compactar()
+
     def liberar_ejecucion(self, id_ejecucion):
         """Libera una ejecución sin modificar colas ni recursos compartidos."""
         self._validar_abierta()
@@ -260,6 +270,7 @@ class MiddlewareRabbitMQ(Middleware[Lote]):
             raise ErrorRecursosEjecucion("No se puede liberar una ejecución durante una operación")
         if self._coordinacion is not None:
             self._coordinacion.validar_liberacion(id_ejecucion)
+        self._publicador.validar_liberacion(id_ejecucion)
         self._recursos.liberar_ejecucion(id_ejecucion)
         self._publicador.liberar_ejecucion(id_ejecucion)
         if self._coordinacion is not None:

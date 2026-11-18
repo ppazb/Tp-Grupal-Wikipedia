@@ -71,6 +71,10 @@ class ReceptorDatos:
         """Expone la identidad del lote que está ejecutando el negocio."""
         return self._recepciones.actual
 
+    def compactar(self):
+        """Compacta el registro de recepción conservando la deduplicación."""
+        self._recepciones.compactar()
+
     def cerrar(self):
         """Libera los índices locales sin borrar el historial de mensajes procesados."""
         self._recepciones.cerrar()

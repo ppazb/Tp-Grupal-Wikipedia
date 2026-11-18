@@ -16,6 +16,8 @@ from .salidas_durables import crear_directorio_durable
 RESERVAR = 1
 CONSUMIR = 2
 CANCELAR = 3
+RESERVA_CONSUMIDA = 4
+RESERVA_CANCELADA = 5
 BYTES_ID = 16
 BYTES_HUELLA = 32
 MAX_BYTES_REGISTRO = 1 + BYTES_ID + BYTES_HUELLA
@@ -45,7 +47,12 @@ class _EstadoCola:
         if identificador.int == 0:
             raise ErrorCapacidad('Identificador de reserva nulo')
         anterior = self.mensajes.get(identificador)
-        if tipo == RESERVAR and len(contenido) == MAX_BYTES_REGISTRO:
+        if tipo in (RESERVA_CONSUMIDA, RESERVA_CANCELADA) and len(contenido) == MAX_BYTES_REGISTRO:
+            if anterior is not None:
+                raise ErrorCapacidad('Reserva compacta repetida')
+            estado = CONSUMIR if tipo == RESERVA_CONSUMIDA else CANCELAR
+            self.mensajes[identificador] = (contenido[1 + BYTES_ID:], estado)
+        elif tipo == RESERVAR and len(contenido) == MAX_BYTES_REGISTRO:
             huella = contenido[1 + BYTES_ID:]
             if anterior is not None and (anterior[0] != huella or anterior[1] != CANCELAR):
                 raise ErrorCapacidad('Reserva repetida o con otro contenido')
@@ -85,6 +92,8 @@ class RegistroReservas:
                          max_bytes_por_registro=MAX_BYTES_REGISTRO,
                          comprobar_detencion=self._conexion.comprobar_apagado) as wal:
                     estado = self._estados.setdefault(cola, _EstadoCola(self._limite))
+                    if estado.punto is not None and not wal.conserva_punto(estado.punto):
+                        estado = self._estados[cola] = _EstadoCola(self._limite)
                     wal.recuperar(estado.aplicar, desde=estado.punto)
                     yield ReservaAbierta(estado, wal)
                     estado.punto = wal.punto_recuperacion
@@ -94,6 +103,12 @@ class RegistroReservas:
             except BaseException:
                 self._estados.pop(cola, None)
                 raise
+
+    def compactar(self):
+        """Resume cada cola bajo exclusión, sin eliminar reservas ni resoluciones."""
+        for cola in self._topologia.colas_datos():
+            with self.abrir(cola) as reserva:
+                reserva.compactar()
 
     def cerrar(self):
         """Descarta índices locales sin borrar reservas ni resoluciones durables."""
@@ -141,6 +156,15 @@ class ReservaAbierta:
         if anterior[1] != RESERVAR:
             raise ErrorCapacidad('La devolución contradice una resolución anterior')
         self._registrar(bytes([tipo]) + identificador.bytes)
+
+    def compactar(self):
+        """Conserva una operación por ID con su estado final y huella."""
+        self._wal.compactar(self._registros_compactos())
+
+    def _registros_compactos(self):
+        tipos = {RESERVAR: RESERVAR, CONSUMIR: RESERVA_CONSUMIDA, CANCELAR: RESERVA_CANCELADA}
+        for identificador, (huella, estado) in self._estado.mensajes.items():
+            yield bytes([tipos[estado]]) + identificador.bytes + huella
 
     def _consultar(self, identificador, cuerpo):
         if type(identificador) is not UUID or identificador.int == 0 or type(cuerpo) is not bytes:
