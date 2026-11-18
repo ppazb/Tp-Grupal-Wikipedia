@@ -185,6 +185,15 @@ class ComunicacionGrupos(ABC, Generic[Contenido]):
     def interrumpir(self) -> None:
         """Interrumpe esperas de recepción y publicación sin confirmar trabajo pendiente."""
 
+    def restablecer(self) -> None:
+        """Reconstruye el transporte y recupera pendientes fuera de operaciones activas.
+
+        No vuelve a ejecutar callbacks de negocio. Si falla, debe reintentarse
+        explícitamente o cerrarse la instancia antes de admitir trabajo nuevo.
+        No revierte una interrupción ni un cierre solicitado por la aplicación.
+        """
+        raise NotImplementedError('El transporte debe implementar su restablecimiento')
+
     @abstractmethod
     def cerrar(self) -> None:
         """Libera los recursos locales e impide nuevas operaciones de comunicación.
