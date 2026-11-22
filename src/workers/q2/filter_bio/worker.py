@@ -1,5 +1,5 @@
 from src.workers.base_worker import WorkerBase
-from src.common.protocol.dto import EnvioDatos, Datos, Entrada
+from src.common.protocol.dto import Datos, Entrada
 from src.common.protocol.registros import Esquema, Lote, SolicitudImagen
 
 
@@ -35,7 +35,7 @@ class FilterBioQ2(WorkerBase):
         if solicitudes:
             entrada = Entrada(id_ejecucion, "biografias_q2")
             lote = Lote(Esquema.SOLICITUD_IMAGEN, tuple(solicitudes))
-            self.middleware.publicar(EnvioDatos.nuevo("q2_image_downloader", Datos(entrada, lote)))
+            self.middleware.publicar(self.envio("q2_image_downloader", Datos(entrada, lote)))
 
     def al_finalizar(self, entrada: Entrada) -> None:
         """Propaga (EOF) hacia el descargador de imágenes."""

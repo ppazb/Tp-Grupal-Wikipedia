@@ -1,6 +1,6 @@
 """Worker de Frecuencia: aportes por abstract, parciales y cierre de cada ejecución."""
 
-from src.common.protocol.dto import EnvioDatos, Datos, Entrada
+from src.common.protocol.dto import Datos, Entrada
 from src.common.protocol.registros import Esquema
 from src.workers.base_worker import Worker
 from .parciales import EmisorParciales
@@ -48,7 +48,7 @@ class WorkerFrecuencia(Worker):
 
     def _emitir(self, id_ejecucion, lote):
         datos = Datos(Entrada(id_ejecucion, self._entrada_salida), lote)
-        self._middleware.publicar(EnvioDatos.nuevo(
+        self._middleware.publicar(self.envio(
             self._grupo_salida, datos, clave_afinidad=id_ejecucion,
         ))
 

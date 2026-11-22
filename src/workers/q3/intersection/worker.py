@@ -1,5 +1,5 @@
 from src.workers.base_worker import WorkerBase
-from src.common.protocol.dto import EnvioDatos, Datos, Entrada
+from src.common.protocol.dto import Datos, Entrada
 from src.common.protocol.registros import Esquema, Idioma, Lote, Palabra
 
 
@@ -69,7 +69,7 @@ class IntersectionQ3(WorkerBase):
         if ejecucion.pendientes:
             entrada = Entrada(id_ejecucion, ENTRADA_RESULTADOS)
             lote = Lote(Esquema.PALABRA, tuple(ejecucion.pendientes))
-            self.middleware.publicar(EnvioDatos.nuevo(GRUPO_RESULTADOS, Datos(entrada, lote)))
+            self.middleware.publicar(self.envio(GRUPO_RESULTADOS, Datos(entrada, lote)))
         ejecucion.pendientes = []
         ejecucion.presupuesto = None
 

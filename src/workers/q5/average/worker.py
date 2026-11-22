@@ -3,7 +3,7 @@ from src.middleware.interfaz import OperacionInterrumpida
 from typing import Dict
 
 from src.workers.base_worker import WorkerBase
-from src.common.protocol.dto import EnvioDatos, Datos, Entrada
+from src.common.protocol.dto import Datos, Entrada
 from src.common.protocol.registros import Esquema, Lote, CantidadPalabras, ResumenHistorico
 
 logger = logging.getLogger(__name__)
@@ -55,7 +55,9 @@ class AverageQ5Worker(WorkerBase):
         lote_resumen = Lote(Esquema.RESUMEN_HISTORICO, (resumen,))
 
         try:
-            self.middleware.publicar(EnvioDatos.nuevo("q5_comparator", Datos(entrada_resumen, lote_resumen)))
+            self.middleware.publicar(self.envio(
+                "q5_comparator", Datos(entrada_resumen, lote_resumen), clave_afinidad=id_ejecucion,
+            ))
             self.middleware.finalizar_entrada("q5_comparator", entrada_resumen)
         except OperacionInterrumpida:
             raise

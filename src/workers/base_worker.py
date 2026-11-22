@@ -3,14 +3,23 @@
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
 import logging
+import zlib
 
-from src.common.protocol.dto import Entrada
+from src.common.protocol.dto import Entrada, EnvioDatos
 from src.common.runtime.apagado import Apagado
 from src.middleware.rechazos import ENTRADA_ERRORES
 from src.middleware.interfaz import OperacionInterrumpida
 
 
 REGISTRO = logging.getLogger(__name__)
+
+
+def instancia_de(clave, cantidad):
+    """Réplica (0..cantidad-1) que le corresponde a una clave; igual en todos los procesos.
+
+    No usa hash() de Python, que cambia entre procesos por PYTHONHASHSEED.
+    """
+    return zlib.crc32(clave.encode("utf-8")) % cantidad
 
 
 def comprobar_apagado(apagado):
@@ -50,6 +59,10 @@ class Worker(ABC):
     # ejecución: el destino no la da por completa hasta recibir el EOF de todos sus productores.
     destinos_errores = ()
 
+    # Valores por defecto de clase: permiten usar envio() sin pasar por __init__ (tests).
+    _middleware = None
+    _indice_salida = 0
+
     def __init__(self, middleware):
         self._middleware = middleware
         self._detenido = False
@@ -58,6 +71,7 @@ class Worker(ABC):
         self._limpiezas = []
         self._cerrado = False
         self._clientes_vistos = set()
+        self._indice_salida = 0
         self.registrar_limpieza(self._clientes_vistos.clear)
 
     def ejecutar(self, apagado=None):
@@ -112,8 +126,36 @@ class Worker(ABC):
         if errores:
             raise ExceptionGroup("Falló la limpieza del worker", errores)
 
+    def id_lote_actual(self):
+        """ID (id_entrada) del lote de entrada que se está procesando."""
+        entrega = getattr(self._middleware, 'entrega_actual', None)
+        if entrega is None:
+            raise RuntimeError('No hay un lote en procesamiento')
+        return entrega.id_entrada
+
+    def envio(self, grupo, datos, *, clave_afinidad=None, instancia=None):
+        """Arma una salida con identidad determinística: (id_entrada, indice).
+
+        id_entrada es el del lote de entrada que se procesa o, al cerrar una
+        entrada, 'eof:<id_ejecucion>'. indice cuenta las salidas de ese id_entrada
+        en el orden en que se arman, así que reprocesar el mismo lote en el mismo
+        orden produce los mismos identificadores.
+        """
+        entrega = getattr(self._middleware, 'entrega_actual', None)
+        if entrega is not None:
+            id_entrada = entrega.id_entrada
+        else:
+            id_entrada = f'eof:{datos.entrada.id_ejecucion}'
+        indice = self._indice_salida
+        self._indice_salida += 1
+        return EnvioDatos.nuevo(
+            grupo, datos, clave_afinidad,
+            id_entrada=id_entrada, indice=indice, instancia=instancia,
+        )
+
     def _procesar(self, datos):
         self.comprobar_detencion()
+        self._indice_salida = 0
         self.procesar(datos)
         self.comprobar_detencion()
 
@@ -124,6 +166,7 @@ class Worker(ABC):
 
     def _finalizar(self, entrada):
         self.comprobar_detencion()
+        self._indice_salida = 0
         self.finalizar_entrada(entrada)
         self.comprobar_detencion()
         if not self._middleware.entradas_pendientes(entrada.id_ejecucion):
