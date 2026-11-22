@@ -2,6 +2,7 @@
 
 import logging
 import os
+from pathlib import Path
 
 from ..common.protocol.dto import EnvioDatos, SobreMensaje
 from ..common.protocol.registros import Esquema, Lote
@@ -33,9 +34,10 @@ class MiddlewareRabbitMQ(Middleware[Lote]):
     Su uso como contexto cierra conexión y recursos incluso ante excepciones.
     apagado es un componente Apagado abierto por el proceso: debe permanecer
     abierto hasta salir del contexto del middleware. No emite EOF al detenerse.
+    directorio_eof es una raíz opcional: usa EOF_WAL_DIR o data/eof si se omite.
     """
 
-    def __init__(self, configuracion, *, informar_error=None, apagado=None):
+    def __init__(self, configuracion, *, informar_error=None, apagado=None, directorio_eof=None):
         self._proceso_propietario = os.getpid()
         self._identidad = configuracion.proceso
         self._conexion = ConexionBroker(configuracion.broker, apagado=apagado)
@@ -65,6 +67,9 @@ class MiddlewareRabbitMQ(Middleware[Lote]):
             if topologia.colas_recepcion() is not None:
                 self._coordinacion = CoordinacionCierre(
                     configuracion, topologia, self._publicar_control_nuevo,
+                    directorio=Path(directorio_eof if directorio_eof is not None
+                                    else os.environ.get('EOF_WAL_DIR', 'data/eof'))
+                    / self._identidad.grupo / str(self._identidad.instancia),
                 )
                 self._receptor = ReceptorDatos(
                     configuracion, self._conexion, informar_error=notificador,
@@ -214,7 +219,10 @@ class MiddlewareRabbitMQ(Middleware[Lote]):
         try:
             if self._publicador is not None:
                 self._publicador.descartar_seguimiento()
-            for liberar in (self._recursos.cerrar, self._conexion.cerrar):
+            limpiezas = [self._recursos.cerrar, self._conexion.cerrar]
+            if self._coordinacion is not None:
+                limpiezas.append(self._coordinacion.cerrar_registro)
+            for liberar in limpiezas:
                 try:
                     liberar()
                 except BaseException as error:

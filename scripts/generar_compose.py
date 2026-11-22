@@ -79,6 +79,12 @@ def configurar_servicios(documento, configuracion, ruta):
         if 'WIKI_MW_BROKER_HOST' in entorno:
             entorno['WIKI_MW_BROKER_HOST'] = 'rabbitmq'
         if 'WIKI_MW_PROCESO_GRUPO' in entorno or 'GATEWAY_GROUP' in entorno:
+            volumen_eof = f'eof_{nombre}'
+            documento.setdefault('volumes', {})[volumen_eof] = {}
+            servicio.setdefault('volumes', []).append({
+                'type': 'volume', 'source': volumen_eof, 'target': '/app/data/eof',
+            })
+            entorno['EOF_WAL_DIR'] = '/app/data/eof'
             entorno['CONTAINER_NAME'] = nombre
             entorno.setdefault('HEALTH_CHECKER_TARGETS', DESTINOS_HEALTH_CHECKER)
             entorno.setdefault('HEARTBEAT_INTERVAL', INTERVALO_HEARTBEAT)

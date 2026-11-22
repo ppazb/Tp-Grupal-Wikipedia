@@ -6,6 +6,7 @@ from ..common.protocol.dto import (
     AvanceReplica, Entrada, FinEntrada, IdentidadProceso, PrepararCierre, TipoMensaje,
 )
 from .eof_manager import SeguimientoEntradas
+from .persistencia_eof import CambioEOF, RegistroEOF
 from .interfaz import ErrorMensajeInvalido, ErrorSeguimientoEntrada
 
 
@@ -30,7 +31,7 @@ class CoordinacionCierre:
     barrera y cuando se resuelve un lote posterior, nunca durante la ingesta previa.
     """
 
-    def __init__(self, configuracion, topologia, emitir):
+    def __init__(self, configuracion, topologia, emitir, *, directorio):
         self._proceso = configuracion.proceso
         self._cantidad = configuracion.obtener_grupo(self._proceso.grupo).instancias
         self._topologia = topologia
@@ -41,9 +42,18 @@ class CoordinacionCierre:
             for ruta in configuracion.rutas if ruta.destino == self._proceso.grupo
         }
         self._barreras = {}
+        self._registro = RegistroEOF(directorio, configuracion)
+        self._inutilizable = False
+        try:
+            for cambio in self._registro.recuperar():
+                self._aplicar_cambio(*cambio)
+        except BaseException:
+            self._registro.cerrar_registro()
+            raise
 
     def validar_datos(self, sobre):
         """Comprueba que un lote pertenezca a una entrada todavía abierta del grupo."""
+        self._comprobar_disponible()
         if sobre.origen not in self._productores.get(sobre.entrada.nombre, ()):
             raise ErrorMensajeInvalido("El productor no pertenece a la entrada")
         estado = self._barreras.get(sobre.entrada)
@@ -56,13 +66,14 @@ class CoordinacionCierre:
         estado = self._estado(sobre.entrada)
         # El receptor procesa secuencialmente: durante el trabajo del negocio no
         # evalúa controles. Un lote sin resolver no aporta al contador de la barrera.
-        self._seguimiento.registrar_lote(sobre.entrada, sobre.origen)
-        self._seguimiento.resolver_lote(sobre.entrada)
+        self._seguimiento.validar_lote(sobre.entrada, sobre.origen)
+        self._registrar_cambio(CambioEOF.LOTE_RESUELTO, sobre.entrada, productor=sobre.origen)
         if estado.preparada:
             self._informar_avance(sobre.entrada, estado)
 
     def recibir_control(self, sobre):
         """Aplica un control válido y devuelve FinEntrada cuando el cierre es entregable."""
+        self._comprobar_disponible()
         self._validar_control(sobre)
         entrada = sobre.entrada
         estado = self._estado(entrada)
@@ -75,20 +86,24 @@ class CoordinacionCierre:
         else:
             if not estado.preparada:
                 raise ErrorSeguimientoEntrada("El cierre consolidado requiere preparación")
-            estado.fin_recibido = True
+            if not estado.fin_recibido:
+                self._registrar_cambio(CambioEOF.FIN_RECIBIDO, entrada)
             if not estado.fin_entregado:
                 return FinEntrada(entrada)
         return None
 
     def confirmar_fin(self, entrada):
         """Registra que el negocio terminó de atender el cierre local de la entrada."""
+        self._comprobar_disponible()
         estado = self._barreras[entrada]
         if not estado.fin_recibido:
             raise ErrorSeguimientoEntrada("La entrada no recibió su cierre consolidado")
-        estado.fin_entregado = True
+        if not estado.fin_entregado:
+            self._registrar_cambio(CambioEOF.FIN_ENTREGADO, entrada)
 
     def validar_liberacion(self, id_ejecucion):
         """Exige atender todas las entradas configuradas de una ejecución con actividad."""
+        self._comprobar_disponible()
         estados = [self._barreras.get(Entrada(id_ejecucion, nombre)) for nombre in self._productores]
         if any(estado is not None for estado in estados) and any(
             estado is None or not estado.fin_entregado for estado in estados
@@ -97,6 +112,7 @@ class CoordinacionCierre:
 
     def entradas_pendientes(self, id_ejecucion):
         """Devuelve entradas sin cierre consolidado local, incluidas las que no tuvieron actividad."""
+        self._comprobar_disponible()
         pendientes = set()
         for nombre in self._productores:
             estado = self._barreras.get(Entrada(id_ejecucion, nombre))
@@ -107,9 +123,7 @@ class CoordinacionCierre:
     def liberar_ejecucion(self, id_ejecucion):
         """Libera los contadores y barreras de una ejecución con cierres locales atendidos."""
         self.validar_liberacion(id_ejecucion)
-        self._seguimiento.liberar_ejecucion(id_ejecucion)
-        self._barreras = {entrada: estado for entrada, estado in self._barreras.items()
-                          if entrada.id_ejecucion != id_ejecucion}
+        self._registrar_cambio(CambioEOF.LIBERAR_EJECUCION, Entrada(id_ejecucion, ""))
 
     def _estado(self, entrada):
         self._seguimiento.registrar_ejecucion(entrada.id_ejecucion)
@@ -138,20 +152,22 @@ class CoordinacionCierre:
 
     def _recibir_eof(self, sobre, estado):
         entrada = sobre.entrada
-        self._seguimiento.registrar_cierre(entrada, sobre.origen, sobre.contenido.total_lotes)
+        total_productor = sobre.contenido.total_lotes
+        if self._seguimiento.validar_cierre(entrada, sobre.origen, total_productor):
+            self._registrar_cambio(CambioEOF.CIERRE_PRODUCTOR, entrada,
+                                  productor=sobre.origen, valor=total_productor)
         total = self._seguimiento.consultar(entrada).total_esperado
         if total is not None and not estado.preparacion_enviada:
             self._emitir(TipoMensaje.PREPARAR_CIERRE, entrada, PrepararCierre(total))
-            estado.total = total
-            estado.preparacion_enviada = True
+            self._registrar_cambio(CambioEOF.PREPARACION_ENVIADA, entrada, valor=total)
 
     def _preparar(self, entrada, estado, total):
         if estado.total is not None and estado.total != total:
             raise ErrorSeguimientoEntrada("La barrera recibió dos totales diferentes")
         if self._seguimiento.consultar(entrada).lotes_resueltos > total:
             raise ErrorSeguimientoEntrada("Los lotes locales superan el total de la barrera")
-        estado.total = total
-        estado.preparada = True
+        if not estado.preparada:
+            self._registrar_cambio(CambioEOF.PREPARADA, entrada, valor=total)
         self._informar_avance(entrada, estado)
 
     def _informar_avance(self, entrada, estado):
@@ -161,7 +177,7 @@ class CoordinacionCierre:
         if resueltos != estado.ultimo_avance:
             self._emitir(TipoMensaje.AVANCE_REPLICA, entrada, AvanceReplica(resueltos),
                          self._coordinadora(entrada))
-            estado.ultimo_avance = resueltos
+            self._registrar_cambio(CambioEOF.AVANCE_ENVIADO, entrada, valor=resueltos)
 
     def _recibir_avance(self, sobre, estado):
         if not estado.preparacion_enviada:
@@ -174,8 +190,60 @@ class CoordinacionCierre:
         total = estado.total_resuelto - anterior + nuevo
         if total > estado.total:
             raise ErrorSeguimientoEntrada("Las réplicas resolvieron más lotes que los anunciados")
-        estado.avances[instancia] = nuevo
-        estado.total_resuelto = total
+        if instancia not in estado.avances or nuevo != anterior:
+            self._registrar_cambio(CambioEOF.AVANCE_RECIBIDO, sobre.entrada,
+                                  instancia=instancia, valor=nuevo)
         if len(estado.avances) == self._cantidad and total == estado.total and not estado.fin_enviado:
             self._emitir(TipoMensaje.FIN_ENTRADA, sobre.entrada, None)
+            self._registrar_cambio(CambioEOF.FIN_ENVIADO, sobre.entrada)
+
+    def cerrar_registro(self):
+        """Libera el WAL de coordinación sin borrar el estado recuperable."""
+        self._inutilizable = True
+        self._registro.cerrar_registro()
+
+    def _comprobar_disponible(self):
+        """Rechaza operaciones después del cierre o de un error de persistencia."""
+        if self._inutilizable:
+            raise ErrorSeguimientoEntrada('El estado de EOF requiere cerrar y recuperar la instancia')
+
+    def _registrar_cambio(self, cambio, entrada, *, productor=None, valor=0, instancia=0):
+        """Sincroniza una transición y la aplica al seguimiento en memoria."""
+        self._comprobar_disponible()
+        try:
+            self._registro.registrar(cambio, entrada, productor=productor, valor=valor, instancia=instancia)
+            self._aplicar_cambio(cambio, entrada, productor, valor, instancia)
+        except BaseException:
+            self._inutilizable = True
+            raise
+
+    def _aplicar_cambio(self, cambio, entrada, productor, valor, instancia):
+        """Reconstruye una transición local sin publicar mensajes ni ejecutar el negocio."""
+        if cambio is CambioEOF.LIBERAR_EJECUCION:
+            self._seguimiento.liberar_ejecucion(entrada.id_ejecucion)
+            self._barreras = {clave: estado for clave, estado in self._barreras.items()
+                              if clave.id_ejecucion != entrada.id_ejecucion}
+            return
+        estado = self._estado(entrada)
+        if cambio is CambioEOF.LOTE_RESUELTO:
+            self._seguimiento.registrar_lote(entrada, productor)
+            self._seguimiento.resolver_lote(entrada)
+        elif cambio is CambioEOF.CIERRE_PRODUCTOR:
+            self._seguimiento.registrar_cierre(entrada, productor, valor)
+        elif cambio is CambioEOF.PREPARACION_ENVIADA:
+            estado.total = valor
+            estado.preparacion_enviada = True
+        elif cambio is CambioEOF.PREPARADA:
+            estado.total = valor
+            estado.preparada = True
+        elif cambio is CambioEOF.AVANCE_ENVIADO:
+            estado.ultimo_avance = valor
+        elif cambio is CambioEOF.AVANCE_RECIBIDO:
+            estado.total_resuelto += valor - estado.avances.get(instancia, 0)
+            estado.avances[instancia] = valor
+        elif cambio is CambioEOF.FIN_ENVIADO:
             estado.fin_enviado = True
+        elif cambio is CambioEOF.FIN_RECIBIDO:
+            estado.fin_recibido = True
+        elif cambio is CambioEOF.FIN_ENTREGADO:
+            estado.fin_entregado = True

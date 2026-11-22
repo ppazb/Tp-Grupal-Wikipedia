@@ -3,7 +3,6 @@
 from dataclasses import dataclass, field
 
 from ..common.protocol.dto import Entrada, IdentidadProceso
-from ..common.protocol.primitivas import BYTES_U64
 from .interfaz import ErrorSeguimientoEntrada
 
 
@@ -77,6 +76,11 @@ class SeguimientoEntradas:
 
     def registrar_lote(self, entrada, productor):
         """Registra un lote local, admitiendo datos que llegaron después de su EOF de control."""
+        self.validar_lote(entrada, productor)
+        self._estado(entrada).lotes_recibidos += 1
+
+    def validar_lote(self, entrada, productor):
+        """Comprueba que el siguiente lote pueda contabilizarse sin modificar el estado."""
         estado = self._estado(entrada)
         self._validar_productor(entrada.nombre, productor)
         nuevo_total = estado.lotes_recibidos + 1
@@ -84,7 +88,6 @@ class SeguimientoEntradas:
         if len(estado.cierres) == len(self._productores[entrada.nombre]):
             if nuevo_total > estado.total_anunciado:
                 raise ErrorSeguimientoEntrada("Los lotes locales exceden el total anunciado")
-        estado.lotes_recibidos = nuevo_total
 
     def resolver_lote(self, entrada):
         """Marca la resolución de un lote local previamente registrado."""
@@ -95,20 +98,27 @@ class SeguimientoEntradas:
 
     def registrar_cierre(self, entrada, productor, total_lotes):
         """Registra un total final por productor; un cierre idéntico repetido no altera el estado."""
+        if not self.validar_cierre(entrada, productor, total_lotes):
+            return
+        estado = self._estado(entrada)
+        estado.cierres[productor] = total_lotes
+        estado.total_anunciado += total_lotes
+
+    def validar_cierre(self, entrada, productor, total_lotes):
+        """Valida el cierre y devuelve si aporta un productor nuevo, sin modificar el estado."""
         estado = self._estado(entrada)
         self._validar_productor(entrada.nombre, productor)
         self._validar_cantidad(total_lotes)
         if productor in estado.cierres:
             if estado.cierres[productor] != total_lotes:
                 raise ErrorSeguimientoEntrada("El productor anunció dos totales finales distintos")
-            return
+            return False
         nuevo_total = estado.total_anunciado + total_lotes
         self._validar_cantidad(nuevo_total)
         ultimo = len(estado.cierres) + 1 == len(self._productores[entrada.nombre])
         if ultimo and nuevo_total < estado.lotes_recibidos:
             raise ErrorSeguimientoEntrada("El total final es menor que los lotes recibidos localmente")
-        estado.cierres[productor] = total_lotes
-        estado.total_anunciado = nuevo_total
+        return True
 
     def consultar(self, entrada):
         """Devuelve una copia inmutable del seguimiento de la entrada."""
