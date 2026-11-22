@@ -12,6 +12,7 @@ from .interfaz import ErrorMensajeInvalido, ErrorSeguimientoEntrada
 
 @dataclass
 class _Barrera:
+    lotes_resueltos: set[tuple[IdentidadProceso, str, int]] = field(default_factory=set)
     total: int | None = None
     preparacion_enviada: bool = False
     preparada: bool = False
@@ -52,22 +53,31 @@ class CoordinacionCierre:
             raise
 
     def validar_datos(self, sobre):
-        """Comprueba que un lote pertenezca a una entrada todavía abierta del grupo."""
+        """Valida el productor y admite reentregas conocidas de una entrada cerrada."""
         self._comprobar_disponible()
         if sobre.origen not in self._productores.get(sobre.entrada.nombre, ()):
             raise ErrorMensajeInvalido("El productor no pertenece a la entrada")
         estado = self._barreras.get(sobre.entrada)
-        if estado is not None and estado.fin_recibido:
+        if estado is not None and estado.fin_recibido and not self.lote_resuelto(sobre):
             raise ErrorSeguimientoEntrada("Se recibieron datos después del cierre consolidado")
 
+    def lote_resuelto(self, sobre):
+        """Consulta si esta réplica ya registró la resolución durable de la entrada identificada."""
+        self._comprobar_disponible()
+        estado = self._barreras.get(sobre.entrada)
+        identidad = (sobre.origen, sobre.id_entrada, sobre.indice)
+        return estado is not None and identidad in estado.lotes_resueltos
+
     def resolver_lote(self, sobre):
-        """Cuenta un lote tras resolver su entrega y las salidas o rechazos asociados."""
+        """Registra una sola contribución por lote y completa el aviso de avance correspondiente."""
         self.validar_datos(sobre)
         estado = self._estado(sobre.entrada)
         # El receptor procesa secuencialmente: durante el trabajo del negocio no
         # evalúa controles. Un lote sin resolver no aporta al contador de la barrera.
-        self._seguimiento.validar_lote(sobre.entrada, sobre.origen)
-        self._registrar_cambio(CambioEOF.LOTE_RESUELTO, sobre.entrada, productor=sobre.origen)
+        if not self.lote_resuelto(sobre):
+            self._seguimiento.validar_lote(sobre.entrada, sobre.origen)
+            self._registrar_cambio(CambioEOF.LOTE_RESUELTO, sobre.entrada, productor=sobre.origen,
+                                  id_entrada=sobre.id_entrada, indice=sobre.indice)
         if estado.preparada:
             self._informar_avance(sobre.entrada, estado)
 
@@ -207,17 +217,19 @@ class CoordinacionCierre:
         if self._inutilizable:
             raise ErrorSeguimientoEntrada('El estado de EOF requiere cerrar y recuperar la instancia')
 
-    def _registrar_cambio(self, cambio, entrada, *, productor=None, valor=0, instancia=0):
+    def _registrar_cambio(self, cambio, entrada, *, productor=None, valor=0, instancia=0,
+                         id_entrada=None, indice=0):
         """Sincroniza una transición y la aplica al seguimiento en memoria."""
         self._comprobar_disponible()
         try:
-            self._registro.registrar(cambio, entrada, productor=productor, valor=valor, instancia=instancia)
-            self._aplicar_cambio(cambio, entrada, productor, valor, instancia)
+            self._registro.registrar(cambio, entrada, productor=productor, valor=valor,
+                                     instancia=instancia, id_entrada=id_entrada, indice=indice)
+            self._aplicar_cambio(cambio, entrada, productor, valor, instancia, id_entrada, indice)
         except BaseException:
             self._inutilizable = True
             raise
 
-    def _aplicar_cambio(self, cambio, entrada, productor, valor, instancia):
+    def _aplicar_cambio(self, cambio, entrada, productor, valor, instancia, id_entrada, indice):
         """Reconstruye una transición local sin publicar mensajes ni ejecutar el negocio."""
         if cambio is CambioEOF.LIBERAR_EJECUCION:
             self._seguimiento.liberar_ejecucion(entrada.id_ejecucion)
@@ -226,8 +238,11 @@ class CoordinacionCierre:
             return
         estado = self._estado(entrada)
         if cambio is CambioEOF.LOTE_RESUELTO:
-            self._seguimiento.registrar_lote(entrada, productor)
-            self._seguimiento.resolver_lote(entrada)
+            identidad = (productor, id_entrada, indice)
+            if identidad not in estado.lotes_resueltos:
+                self._seguimiento.registrar_lote(entrada, productor)
+                self._seguimiento.resolver_lote(entrada)
+                estado.lotes_resueltos.add(identidad)
         elif cambio is CambioEOF.CIERRE_PRODUCTOR:
             self._seguimiento.registrar_cierre(entrada, productor, valor)
         elif cambio is CambioEOF.PREPARACION_ENVIADA:

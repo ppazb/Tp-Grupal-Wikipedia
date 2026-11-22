@@ -27,6 +27,8 @@ class ReceptorDatos:
     capacidad de salida. informar_error retorna cuando el aviso fue aceptado.
     Los controles de coordinación se atienden internamente entre entregas.
     Los consumidores del canal pertenecen exclusivamente a esta instancia.
+    El callback debe retornar con sus efectos recuperables y salidas completadas;
+    una excepción conserva la entrega para reintentar. EOF se persiste antes del ACK.
     """
 
     def __init__(
@@ -161,6 +163,10 @@ class ReceptorDatos:
                 )
             if self._coordinacion is not None:
                 self._coordinacion.validar_datos(sobre)
+                if self._coordinacion.lote_resuelto(sobre):
+                    self._coordinacion.resolver_lote(sobre)
+                    self._resolver(canal, rechazar=False)
+                    return
             contabilizable = True
             if sobre.contenido.esquema not in ruta.esquemas:
                 raise ErrorMensajeInvalido(
@@ -169,9 +175,7 @@ class ReceptorDatos:
                     esquema=sobre.contenido.esquema.value,
                 )
         except ErrorMensajeInvalido as error:
-            self._rechazar_mensaje(canal, error)
-            if contabilizable and self._coordinacion is not None:
-                self._coordinacion.resolver_lote(sobre)
+            self._rechazar_mensaje(canal, error, sobre=sobre if contabilizable else None)
             return
         for error in resultado.errores_por_registro:
             self._notificar(
@@ -189,9 +193,9 @@ class ReceptorDatos:
             raise
         finally:
             self.entrega_actual = None
-        self._resolver(canal, rechazar=False)
         if self._coordinacion is not None:
             self._coordinacion.resolver_lote(sobre)
+        self._resolver(canal, rechazar=False)
 
     def _procesar_control(self, canal, cuerpo, procesar, al_finalizar):
         try:
@@ -253,7 +257,8 @@ class ReceptorDatos:
             self._error_procesamiento = error
             raise
 
-    def _rechazar_mensaje(self, canal, error):
+    def _rechazar_mensaje(self, canal, error, *, sobre=None):
+        """Notifica el rechazo y persiste su aporte identificable antes de retirar la entrega."""
         if error.entrada is not None and error.origen is not None:
             try:
                 self._validar_origen(error)
@@ -263,6 +268,8 @@ class ReceptorDatos:
                 self._notificar(error.entrada, error.esquema, str(error))
         else:
             REGISTRO.warning("Mensaje inválido sin ejecución identificable: %s", error)
+        if sobre is not None and self._coordinacion is not None:
+            self._coordinacion.resolver_lote(sobre)
         self._resolver(canal, rechazar=True)
 
     def _cancelar_consumidores(self, canal):

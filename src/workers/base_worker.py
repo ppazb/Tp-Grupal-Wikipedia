@@ -65,7 +65,6 @@ def entorno_worker(configuracion, *, limpiar=None):
                 REGISTRO.info("Worker detenido por solicitud de apagado")
 
 
-
 class Worker(ABC):
     """Conecta callbacks de negocio con un middleware proporcionado por el proceso.
 
@@ -203,7 +202,12 @@ class Worker(ABC):
 
     @abstractmethod
     def procesar(self, datos):
-        """Procesa los registros de una entrada."""
+        """Procesa la entrada y retorna con sus efectos recuperables y salidas completadas.
+
+        Un worker con estado persiste efecto e identidad antes de retornar; ante
+        reentrega reconoce esa identidad sin repetir efectos. Un worker sin estado
+        completa sus publicaciones antes de retornar. Los errores deben propagarse.
+        """
 
     @abstractmethod
     def finalizar_entrada(self, entrada):

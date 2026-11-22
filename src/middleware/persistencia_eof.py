@@ -14,7 +14,7 @@ MAX_BYTES_REGISTRO = 16_000_000
 
 class CambioEOF(IntEnum):
     CONFIGURACION = 0
-    LOTE_RESUELTO = 1
+    LOTE_RESUELTO = 11
     CIERRE_PRODUCTOR = 2
     PREPARACION_ENVIADA = 3
     PREPARADA = 4
@@ -72,7 +72,8 @@ class RegistroEOF:
             self._wal.cerrar()
             raise
 
-    def registrar(self, cambio, entrada, *, productor=None, valor=0, instancia=0):
+    def registrar(self, cambio, entrada, *, productor=None, valor=0, instancia=0,
+                  id_entrada=None, indice=0):
         """Escribe y sincroniza una transición antes de devolver el control."""
         escritor = EscritorBinario(MAX_BYTES_REGISTRO)
         escritor.entero(cambio.value, BYTES_U8)
@@ -81,6 +82,9 @@ class RegistroEOF:
         if cambio in CON_PRODUCTOR:
             escritor.texto(productor.grupo)
             escritor.entero(productor.instancia, BYTES_U32)
+        if cambio is CambioEOF.LOTE_RESUELTO:
+            escritor.texto(id_entrada)
+            escritor.entero(indice, BYTES_U32)
         if cambio is CambioEOF.AVANCE_RECIBIDO:
             escritor.entero(instancia, BYTES_U32)
         if cambio in CON_VALOR:
@@ -101,10 +105,12 @@ class RegistroEOF:
                 productor = None
                 if cambio in CON_PRODUCTOR:
                     productor = IdentidadProceso(lector.texto(), lector.entero(BYTES_U32))
+                id_entrada = lector.texto() if cambio is CambioEOF.LOTE_RESUELTO else None
+                indice = lector.entero(BYTES_U32) if cambio is CambioEOF.LOTE_RESUELTO else 0
                 instancia = lector.entero(BYTES_U32) if cambio is CambioEOF.AVANCE_RECIBIDO else 0
                 valor = lector.entero(BYTES_U64) if cambio in CON_VALOR else 0
                 lector.finalizar()
-                yield cambio, entrada, productor, valor, instancia
+                yield cambio, entrada, productor, valor, instancia, id_entrada, indice
         finally:
             registros.close()
 
