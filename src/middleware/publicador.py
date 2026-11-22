@@ -2,8 +2,7 @@
 
 import hashlib
 from collections.abc import Sequence
-from dataclasses import dataclass, field
-from uuid import UUID, uuid4
+from dataclasses import dataclass
 
 import pika
 
@@ -28,7 +27,6 @@ class _EstadoSalida:
     total: int = 0
     cierre_iniciado: bool = False
     cierre_confirmado: bool = False
-    id_cierre: UUID = field(default_factory=uuid4)
 
 
 class PublicadorDatos:
@@ -96,7 +94,9 @@ class PublicadorDatos:
         if self._publicando:
             raise ErrorMiddleware("No se puede cerrar una entrada durante una publicación")
         # Codificar primero valida la identidad incluso cuando no hubo datos.
-        sobre = SobreMensaje.nuevo(entrada, TipoMensaje.EOF, self._configuracion.proceso, CierreProductor(0))
+        id_cierre = f"eof:{entrada.id_ejecucion}"
+        sobre = SobreMensaje(entrada, TipoMensaje.EOF, self._configuracion.proceso,
+                             CierreProductor(0), id_cierre, 0)
         self._codificador.codificar(sobre)
         instancia = self._topologia.instancia_coordinadora(grupo, entrada)
         destino = self._topologia.destino_control(grupo, entrada.nombre, instancia)
@@ -105,7 +105,7 @@ class PublicadorDatos:
             return
         cuerpo = self._codificador.codificar(SobreMensaje(
             entrada, TipoMensaje.EOF, self._configuracion.proceso, CierreProductor(estado.total),
-            estado.id_cierre,
+            id_cierre, 0,
         ))
         estado.cierre_iniciado = True
         self._publicando = True
@@ -169,7 +169,8 @@ class PublicadorDatos:
             tipo=TipoMensaje.DATOS,
             origen=self._configuracion.proceso,
             contenido=envio.datos.contenido,
-            id_mensaje=envio.id_mensaje,
+            id_entrada=envio.id_entrada,
+            indice=envio.indice,
         )
         cuerpo = self._codificador.codificar(sobre)
         estado = self._salidas.get((envio.grupo, sobre.entrada))
@@ -188,6 +189,14 @@ class PublicadorDatos:
 
     def _instancia_destinataria(self, envio):
         clave = envio.clave_afinidad
+        if envio.instancia is not None:
+            # La instancia se elige directamente: no se hashea ni se combina con una clave.
+            if clave is not None:
+                raise ErrorMensaje("La instancia y la clave de afinidad no se pueden combinar")
+            cantidad = self._configuracion.obtener_grupo(envio.grupo).instancias
+            if type(envio.instancia) is not int or not 0 <= envio.instancia < cantidad:
+                raise ErrorMensaje("La instancia destinataria no pertenece al grupo")
+            return envio.instancia
         if clave is None:
             return None
         if type(clave) is not str or not clave:

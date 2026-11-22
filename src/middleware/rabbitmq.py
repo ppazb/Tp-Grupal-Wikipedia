@@ -101,6 +101,11 @@ class MiddlewareRabbitMQ(Middleware[Lote]):
         sobre = SobreMensaje.nuevo(entrada, tipo, self._identidad, contenido)
         self._publicador.publicar_control(sobre, instancia)
 
+    @property
+    def entrega_actual(self):
+        """Identidad del lote en procesamiento dentro del callback de recibir; si no, None."""
+        return None if self._receptor is None else self._receptor.entrega_actual
+
     def publicar(self, envio):
         """Publica un envío identificado sin generar ni reemplazar su ID."""
         self.publicar_en_ramas((envio,))

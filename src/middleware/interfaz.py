@@ -194,6 +194,15 @@ class Middleware(ComunicacionGrupos[Contenido]):
         entradas_pendientes permite consultar las demás dependencias desde el callback.
         """
 
+    @property
+    @abstractmethod
+    def entrega_actual(self):
+        """Identidad (EntregaActual) del lote que se procesa dentro de recibir.
+
+        Fuera del procesamiento de un lote, o durante un cierre, es None. Permite
+        publicar las salidas con identificadores derivados del lote de entrada.
+        """
+
     @abstractmethod
     def entradas_pendientes(self, id_ejecucion: str) -> frozenset[str]:
         """Devuelve nombres de entradas configuradas sin cierre consolidado recibido localmente.

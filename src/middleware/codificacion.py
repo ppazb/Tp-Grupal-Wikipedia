@@ -1,7 +1,5 @@
 """Codificación del sobre binario y separación de rechazos por registro."""
 
-from uuid import UUID
-
 from ..common.protocol.dto import (
     AvanceReplica, CierreProductor, Entrada, IdentidadProceso, PrepararCierre,
     ResultadoDecodificacion, SobreMensaje, TipoMensaje,
@@ -16,7 +14,8 @@ from .interfaz import ErrorMensaje, ErrorMensajeInvalido
 from .presupuesto_lote import PresupuestoLote
 
 
-BYTES_ID_MENSAJE = 16
+# Tope del id_entrada: permite reservar su espacio al medir el presupuesto de un lote.
+MAX_BYTES_ID_ENTRADA = 128
 
 
 class CodificadorMensajes:
@@ -56,7 +55,8 @@ class CodificadorMensajes:
 
     def _escribir_cabecera(self, escritor, sobre):
         escritor.entero(sobre.tipo.value, BYTES_U8)
-        escritor.entero(sobre.id_mensaje.int, BYTES_ID_MENSAJE)
+        escritor.texto(sobre.id_entrada)
+        escritor.entero(sobre.indice, BYTES_U32)
         escritor.texto(sobre.entrada.id_ejecucion)
         escritor.texto(sobre.entrada.nombre)
         escritor.texto(sobre.origen.grupo)
@@ -65,8 +65,9 @@ class CodificadorMensajes:
 
     def crear_presupuesto_lote(self, entrada, origen, esquema):
         """Reserva el tamaño del sobre y la cabecera para construir un lote por bytes."""
-        # Solo se mide el ancho fijo del ID; este sobre no se publica.
-        sobre = SobreMensaje(entrada, TipoMensaje.DATOS, origen, Lote(esquema, ()), UUID(int=1))
+        # Se reserva el id_entrada más largo permitido; este sobre no se publica.
+        sobre = SobreMensaje(entrada, TipoMensaje.DATOS, origen, Lote(esquema, ()),
+                             "x" * MAX_BYTES_ID_ENTRADA, 0)
         _validar_sobre(sobre)
         try:
             escritor = EscritorBinario(
@@ -89,9 +90,10 @@ class CodificadorMensajes:
         try:
             lector = LectorBinario(cuerpo, comprobar_detencion=self._comprobar_detencion)
             tipo = TipoMensaje(lector.entero(BYTES_U8))
-            id_mensaje = UUID(int=lector.entero(BYTES_ID_MENSAJE))
-            if id_mensaje.int == 0:
-                raise ErrorSerializacion("El identificador del mensaje no puede ser nulo")
+            id_entrada = lector.texto()
+            indice = lector.entero(BYTES_U32)
+            if not _id_entrada_valido(id_entrada):
+                raise ErrorSerializacion("El id_entrada del mensaje es inválido")
             id_ejecucion = lector.texto()
             nombre = lector.texto()
             grupo = lector.texto()
@@ -117,7 +119,7 @@ class CodificadorMensajes:
                 )
                 contenido.finalizar()
                 errores = ()
-            sobre = SobreMensaje(entrada, tipo, origen, lote, id_mensaje)
+            sobre = SobreMensaje(entrada, tipo, origen, lote, id_entrada, indice)
             return ResultadoDecodificacion(sobre, errores)
         except (ErrorSerializacion, ValueError) as error:
             detalle = str(error) if isinstance(error, ErrorSerializacion) else "Tipo o esquema desconocido"
@@ -144,13 +146,23 @@ def _validar_texto(valor):
         raise ErrorMensaje("Se esperaba un identificador de texto no vacío")
 
 
+def _id_entrada_valido(valor):
+    try:
+        return (type(valor) is str and bool(valor) and not valor.isspace()
+                and len(valor.encode("utf-8")) <= MAX_BYTES_ID_ENTRADA)
+    except UnicodeError:
+        return False
+
+
 def _validar_sobre(sobre):
     if type(sobre) is not SobreMensaje or type(sobre.entrada) is not Entrada:
         raise ErrorMensaje("Se esperaba un SobreMensaje con Entrada")
     if type(sobre.origen) is not IdentidadProceso or type(sobre.tipo) is not TipoMensaje:
         raise ErrorMensaje("El sobre debe identificar origen y tipo de mensaje")
-    if type(sobre.id_mensaje) is not UUID or sobre.id_mensaje.int == 0:
-        raise ErrorMensaje("El mensaje debe tener un UUID no nulo")
+    if not _id_entrada_valido(sobre.id_entrada):
+        raise ErrorMensaje("El mensaje debe tener un id_entrada de texto no vacío y acotado")
+    if type(sobre.indice) is not int or not 0 <= sobre.indice < 2 ** (8 * BYTES_U32):
+        raise ErrorMensaje("El índice del mensaje debe ser un entero u32")
     for texto in (sobre.entrada.id_ejecucion, sobre.entrada.nombre, sobre.origen.grupo):
         _validar_texto(texto)
     contenidos = {

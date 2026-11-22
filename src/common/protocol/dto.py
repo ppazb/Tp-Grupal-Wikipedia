@@ -3,7 +3,7 @@
 from dataclasses import dataclass, field
 from enum import IntEnum
 from typing import Generic, Optional, TypeVar, Union
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 from .registros import ErrorDecodificacionRegistro, Lote
 
@@ -36,19 +36,28 @@ class EnvioDatos(Generic[Contenido]):
     """Describe una salida hacia un grupo y su clave opcional de afinidad.
 
     La clave se aplica al lote completo. Es una estructura local de publicación.
-    id_mensaje identifica esta salida y se conserva al reenviar el mismo envío.
-    Cada rama independiente tiene su propio identificador.
+    id_entrada e indice identifican esta salida: id_entrada es el ID del lote de
+    entrada que la generó e indice su posición entre las salidas de ese lote. Se
+    conservan al reenviar el mismo envío; si un lote se reprocesa y publica en el
+    mismo orden, produce los mismos identificadores.
+    instancia elige la réplica destinataria directamente, sin hashear; no se
+    combina con clave_afinidad.
     """
 
     grupo: str #topic
     datos: Datos[Contenido]
     clave_afinidad: Optional[str] = None #routing key
-    id_mensaje: UUID = field(kw_only=True)
+    id_entrada: str = field(kw_only=True)
+    indice: int = field(kw_only=True, default=0)
+    instancia: Optional[int] = field(kw_only=True, default=None)
 
     @classmethod
-    def nuevo(cls, grupo, datos, clave_afinidad=None):
-        """Crea una publicación nueva; conservarla permite reenviar el mismo ID."""
-        return cls(grupo, datos, clave_afinidad, id_mensaje=uuid4())
+    def nuevo(cls, grupo, datos, clave_afinidad=None, *, id_entrada=None, indice=0, instancia=None):
+        """Crea una publicación; sin id_entrada genera una identidad propia nueva."""
+        if id_entrada is None:
+            id_entrada = str(uuid4())
+        return cls(grupo, datos, clave_afinidad,
+                   id_entrada=id_entrada, indice=indice, instancia=instancia)
 
 
 @dataclass(frozen=True)
@@ -110,20 +119,23 @@ class SobreMensaje:
     DATOS transporta un Lote. EOF transporta un CierreProductor e indica
     que el productor terminó sus aportes para esa entrada. La coordinación usa
     PrepararCierre, AvanceReplica y contenido nulo para FIN_ENTRADA.
-    id_mensaje distingue publicaciones y se conserva al codificar o recuperar
-    el mismo sobre. Su reconstrucción exige indicar el ID original.
+    id_entrada e indice identifican el mensaje y se conservan al codificar o
+    recuperar el mismo sobre. Su reconstrucción exige indicar los originales.
     """
 
     entrada: Entrada
     tipo: TipoMensaje
     origen: IdentidadProceso
     contenido: Union[Lote, CierreProductor, PrepararCierre, AvanceReplica, None]
-    id_mensaje: UUID
+    id_entrada: str
+    indice: int = 0
 
     @classmethod
-    def nuevo(cls, entrada, tipo, origen, contenido):
-        """Crea un sobre para un mensaje nuevo, con una identidad independiente."""
-        return cls(entrada, tipo, origen, contenido, uuid4())
+    def nuevo(cls, entrada, tipo, origen, contenido, *, id_entrada=None, indice=0):
+        """Crea un sobre; sin id_entrada genera una identidad independiente."""
+        if id_entrada is None:
+            id_entrada = str(uuid4())
+        return cls(entrada, tipo, origen, contenido, id_entrada, indice)
 
 
 @dataclass(frozen=True)
@@ -137,3 +149,17 @@ class ResultadoDecodificacion:
     def registros_validos(self):
         """Devuelve los registros aceptados; un EOF no contiene registros."""
         return self.sobre.contenido.registros if self.sobre.tipo is TipoMensaje.DATOS else ()
+
+
+@dataclass(frozen=True)
+class EntregaActual:
+    """Identidad del lote que el worker está procesando.
+
+    Sirve para que las salidas se publiquen con (id_entrada, indice) derivados
+    de este lote y, si se reprocesa, repitan los mismos identificadores.
+    """
+
+    entrada: Entrada
+    origen: IdentidadProceso
+    id_entrada: str
+    indice: int
