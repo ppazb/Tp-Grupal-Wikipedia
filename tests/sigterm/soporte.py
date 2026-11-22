@@ -134,8 +134,11 @@ def ejecutar_worker(configuracion, eventos, modo, continuar):
     def procesar_observado(worker, datos):
         procesar_original(worker, datos)
         if modo in ('activo', 'http_completo'):
-            if grupo in ('top_n', 'q5_comparator'):
+            if grupo == 'top_n':
                 assert any(p.is_file() for p in disco.rglob('*')), 'No se ejercitó almacenamiento'
+            if grupo == 'q5_comparator':
+                # el comparator guarda su estado en el WAL de la ejecucion (cerradas.log existe siempre)
+                assert any(p.is_file() and p.name != 'cerradas.log' for p in wal.rglob('*')), 'No se ejercitó el WAL'
             eventos.put('procesado_sin_ack')
             if not continuar.wait(PLAZO_PROCESO):
                 raise AssertionError('El padre no liberó el callback observado')

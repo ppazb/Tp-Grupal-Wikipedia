@@ -36,7 +36,6 @@ class ObservadorComputo:
             'descarga': '_leer_imagen',
             'fragmentos': '_publicar_imagen',
             'tokenizacion': 'extract_non_stopwords_from_abstract',
-            'almacenamiento': 'guardar_candidatos',
         }
         if self.modo in origenes:
             original = Worker.comprobar_detencion

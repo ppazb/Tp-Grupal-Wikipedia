@@ -159,10 +159,9 @@ class Promedio(EscenariosWorker, EscenarioRabbitMQ):
 
 
 class Comparador(EscenariosWorker, EscenarioRabbitMQ):
+    # Sin prueba de apagado durante la escritura: ahora guarda en el WAL, que no tiene un
+    # punto de cancelacion (cada append es corto y atomico)
     grupo = 'q5_comparator'
-
-    def test_sigterm_durante_escritura(self):
-        self.comprobar_apagado('almacenamiento')
 
 
 class ConjuntoReplicas(EscenarioRabbitMQ):

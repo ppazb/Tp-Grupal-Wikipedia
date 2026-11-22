@@ -57,13 +57,16 @@ class ComparatorQ5Worker(WorkerBase):
         if self._wals.esta_cerrada(id_ejecucion):
             return
         entrega = self.middleware.entrega_actual
-        registros = list(datos.contenido.registros)
 
         if datos.entrada.nombre == ENTRADA_CANDIDATOS:
             # si el lote ya lo procese lo descarto
             if self._dedup_candidatos.es_duplicado(entrega):
                 return
-            candidatos = [r for r in registros if isinstance(r, Candidato)]
+            candidatos = []
+            for registro in datos.contenido.registros:
+                self.comprobar_detencion()
+                if isinstance(registro, Candidato):
+                    candidatos.append(registro)
             if id_ejecucion in self._resumenes:
                 # ya tengo el promedio: evaluo y publico al toque, en el wal solo guardo la identidad
                 self._publicar_mayores(id_ejecucion, candidatos, self._promedio(id_ejecucion))
@@ -80,7 +83,7 @@ class ComparatorQ5Worker(WorkerBase):
         elif datos.entrada.nombre == ENTRADA_RESUMEN:
             if self._dedup_resumen.es_duplicado(entrega):
                 return
-            resumenes = [r for r in registros if isinstance(r, ResumenHistorico)]
+            resumenes = [r for r in datos.contenido.registros if isinstance(r, ResumenHistorico)]
             if not resumenes:
                 return
             suma, articulos = resumenes[-1].suma, resumenes[-1].articulos

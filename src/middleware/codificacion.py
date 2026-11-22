@@ -15,7 +15,7 @@ from .presupuesto_lote import PresupuestoLote
 
 
 # Tope del id_entrada: permite reservar su espacio al medir el presupuesto de un lote.
-MAX_BYTES_ID_ENTRADA = 128
+MAX_BYTES_ID_ENTRADA = 48
 
 
 class CodificadorMensajes:
