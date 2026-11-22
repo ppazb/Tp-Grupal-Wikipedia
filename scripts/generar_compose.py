@@ -100,6 +100,14 @@ def generar_clientes(servicios, cantidad):
         servicios[nombre] = servicio
 
 
+def separar_volumenes_wal(documento, servicio, instancia):
+    """Cada réplica necesita su propio volumen de WAL: no se comparte entre réplicas."""
+    for volumen in servicio.get('volumes', []):
+        if volumen.get('type') == 'volume' and volumen['source'].startswith('wal_'):
+            volumen['source'] = f"{volumen['source']}_{instancia}"
+            documento.setdefault('volumes', {})[volumen['source']] = {}
+
+
 def generar(configuracion, plantilla, ruta, clientes):
     """Conserva las opciones de cada servicio y asigna instancias de cero a N menos uno."""
     documento = deepcopy(plantilla)
@@ -114,6 +122,8 @@ def generar(configuracion, plantilla, ruta, clientes):
             servicio = deepcopy(original)
             servicio.setdefault('deploy', {})['replicas'] = 1
             servicio['environment']['WIKI_MW_PROCESO_INSTANCIA'] = str(instancia)
+            if instancia:
+                separar_volumenes_wal(documento, servicio, instancia)
             servicios[destino] = servicio
     generar_clientes(servicios, clientes)
     configurar_servicios(documento, configuracion, ruta)

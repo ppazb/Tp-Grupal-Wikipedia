@@ -69,7 +69,8 @@ class EscenariosCompose(unittest.TestCase):
             self.assertEqual(servicios[nombre]['profiles'], ['clientes'])
         self.assertEqual(servicios['rabbitmq']['environment']['RABBITMQ_DEFAULT_USER'], 'prueba')
         self.assertEqual(servicios['rabbitmq']['environment']['RABBITMQ_DEFAULT_VHOST'], '/prueba')
-        self.assertIn('/app/data/temp', [v['target'] for v in servicios['q5_comparator']['volumes']])
+        for nombre in ('q2_filter_bio', 'q3_intersection', 'q5_average', 'q5_comparator'):
+            self.assertIn('/app/data/wal', [v['target'] for v in servicios[nombre]['volumes']])
 
     def test_clientes_variables_comparten_entrada_y_tienen_identidades_independientes(self):
         for cantidad in (3, 5, 1):

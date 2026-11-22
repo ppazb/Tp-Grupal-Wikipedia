@@ -98,7 +98,7 @@ def escenario(base, informe, opciones, proyecto):
             ejecutar([*compose, 'run', '--rm', '--no-deps', 'preparador'], salida=registro)
             ejecutar([*compose, 'up', '-d', *aplicaciones], salida=registro,
                      plazo=opciones['plazo_arranque_segundos'])
-            discos = {'top_n-0', 'q5_comparator-0'}
+            discos = {'top_n-0'}
             observador.esperar(
                 lambda avisos: set(aplicaciones) <= nodos(avisos, 'activo')
                 and discos <= nodos(avisos, 'disco'), opciones['plazo_arranque_segundos'])

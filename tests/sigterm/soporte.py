@@ -143,7 +143,8 @@ def ejecutar_worker(configuracion, eventos, modo, continuar):
 
     with TemporaryDirectory(prefix='sigterm-worker-') as temporal, ExitStack() as recursos:
         archivo, disco, nltk = preparar_archivos(configuracion, temporal)
-        recursos.enter_context(patch.dict(os.environ, {'TEMP_DIR': str(disco), 'NLTK_DATA': str(nltk), 'BATCH_SIZE_Q5': '1'}))
+        wal = Path(temporal) / 'wal'
+        recursos.enter_context(patch.dict(os.environ, {'WAL_DIR': str(wal), 'NLTK_DATA': str(nltk)}))
         modulo = importlib.import_module(f'src.workers.{MODULOS[grupo]}.main')
         argumentos = ['worker', str(archivo)]
         if grupo in ('frecuencias', 'top_n'):

@@ -7,6 +7,11 @@ networks:
 
 volumes:
   datos_broker:
+  # un volumen por réplica para el WAL de cada worker con estado (el generador crea los de las réplicas)
+  wal_q2_filter_bio:
+  wal_q3_intersection:
+  wal_q5_average:
+  wal_q5_comparator:
 
 x-worker-base: &worker-base
   build:
@@ -173,10 +178,14 @@ services:
     build:
       context: .
       dockerfile: src/workers/q2/filter_bio/Dockerfile
+    volumes:
+      - ./config:/app/config:ro
+      - wal_q2_filter_bio:/app/data/wal
     environment:
       - WIKI_MW_BROKER_HOST=rabbitmq
       - WIKI_MW_PROCESO_GRUPO=q2_filter_bio
       - WIKI_MW_PROCESO_INSTANCIA=0
+      - WAL_DIR=/app/data/wal
     deploy:
       replicas: 1
 
@@ -204,10 +213,14 @@ services:
     build:
       context: .
       dockerfile: src/workers/q3/intersection/Dockerfile
+    volumes:
+      - ./config:/app/config:ro
+      - wal_q3_intersection:/app/data/wal
     environment:
       - WIKI_MW_BROKER_HOST=rabbitmq
       - WIKI_MW_PROCESO_GRUPO=q3_intersection
       - WIKI_MW_PROCESO_INSTANCIA=0
+      - WAL_DIR=/app/data/wal
     deploy:
       replicas: 1
 
@@ -241,10 +254,14 @@ services:
     build:
       context: .
       dockerfile: src/workers/q5/average/Dockerfile
+    volumes:
+      - ./config:/app/config:ro
+      - wal_q5_average:/app/data/wal
     environment:
       - WIKI_MW_BROKER_HOST=rabbitmq
       - WIKI_MW_PROCESO_GRUPO=q5_average
       - WIKI_MW_PROCESO_INSTANCIA=0
+      - WAL_DIR=/app/data/wal
     deploy:
       replicas: 1
 
@@ -255,11 +272,11 @@ services:
       dockerfile: src/workers/q5/comparator/Dockerfile
     volumes:
       - ./config:/app/config:ro
-      - ./data/temp:/app/data/temp:rw
+      - wal_q5_comparator:/app/data/wal
     environment:
       - WIKI_MW_BROKER_HOST=rabbitmq
       - WIKI_MW_PROCESO_GRUPO=q5_comparator
       - WIKI_MW_PROCESO_INSTANCIA=0
-      - BATCH_SIZE_Q5=1000
+      - WAL_DIR=/app/data/wal
     deploy:
       replicas: 1
