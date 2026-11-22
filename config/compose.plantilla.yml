@@ -280,7 +280,10 @@ services:
     environment:
       - HEALTH_CHECKER_ID=1
       - HEALTH_CHECKER_PORT=8000
+      - HEALTH_CHECKER_HEARTBEAT_PORT=8001
       - HEALTH_CHECKER_PEERS=1:health_checker-1:8000,2:health_checker-2:8000,3:health_checker-3:8000
+      - WORKER_HEARTBEAT_TIMEOUT=4.0
+      - WORKER_CHECK_INTERVAL=0.5
       - LOG_LEVEL=INFO
 
   health_checker-2:
@@ -288,7 +291,10 @@ services:
     environment:
       - HEALTH_CHECKER_ID=2
       - HEALTH_CHECKER_PORT=8000
+      - HEALTH_CHECKER_HEARTBEAT_PORT=8001
       - HEALTH_CHECKER_PEERS=1:health_checker-1:8000,2:health_checker-2:8000,3:health_checker-3:8000
+      - WORKER_HEARTBEAT_TIMEOUT=4.0
+      - WORKER_CHECK_INTERVAL=0.5
       - LOG_LEVEL=INFO
 
   health_checker-3:
@@ -296,5 +302,8 @@ services:
     environment:
       - HEALTH_CHECKER_ID=3
       - HEALTH_CHECKER_PORT=8000
+      - HEALTH_CHECKER_HEARTBEAT_PORT=8001
       - HEALTH_CHECKER_PEERS=1:health_checker-1:8000,2:health_checker-2:8000,3:health_checker-3:8000
+      - WORKER_HEARTBEAT_TIMEOUT=4.0
+      - WORKER_CHECK_INTERVAL=0.5
       - LOG_LEVEL=INFO

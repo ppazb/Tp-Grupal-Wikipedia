@@ -21,21 +21,28 @@ def comprobar_apagado(apagado):
 
 @contextmanager
 def entorno_worker(configuracion, *, limpiar=None):
-    """Abre señales y transporte; consume solo interrupciones solicitadas por apagado."""
+    """Abre señales, emisor de latidos y transporte; consume interrupciones por apagado."""
+    from src.common.runtime.latidos import iniciar_latidos_desde_entorno
     from src.middleware.rabbitmq import MiddlewareRabbitMQ
 
     iniciado = False
+    nombre_defecto = (
+        f"{configuracion.proceso.grupo}"
+        if configuracion.proceso.instancia == 0
+        else f"{configuracion.proceso.grupo}-{configuracion.proceso.instancia}"
+    )
     with Apagado() as apagado:
         if limpiar is not None:
             apagado.registrar_limpieza(limpiar)
-        try:
-            with MiddlewareRabbitMQ(configuracion, apagado=apagado) as middleware:
-                iniciado = True
-                yield middleware, apagado
-        except OperacionInterrumpida:
-            if not iniciado or not apagado.solicitado:
-                raise
-            REGISTRO.info("Worker detenido por solicitud de apagado")
+        with iniciar_latidos_desde_entorno(nombre_defecto=nombre_defecto, apagado=apagado):
+            try:
+                with MiddlewareRabbitMQ(configuracion, apagado=apagado) as middleware:
+                    iniciado = True
+                    yield middleware, apagado
+            except OperacionInterrumpida:
+                if not iniciado or not apagado.solicitado:
+                    raise
+                REGISTRO.info("Worker detenido por solicitud de apagado")
 
 
 

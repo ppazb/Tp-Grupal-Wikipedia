@@ -70,6 +70,8 @@ class BullyElection:
         self._last_leader_heartbeat = time.time() #tiempo desde el ultimo check
         self._ok_received = threading.Event() #evento para manejar el ok
         self._coordinator_received = threading.Event() #evento para acepta al coordinador
+        self._stop_event = threading.Event() #evento para detener bucles sin usar sleep
+        self._election_in_progress = False
 
         self._running = False #en un inciio no hay eleccion
         self._socket: Optional[socket.socket] = None #conexion udp
@@ -98,6 +100,7 @@ class BullyElection:
             if self._running:
                 return
             self._running = True
+            self._stop_event.clear()
 
             self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM) #declaro socket udp con ip4
             self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1) #para reusar la dir enc aso de caida
@@ -141,6 +144,9 @@ class BullyElection:
             if not self._running:
                 return
             self._running = False
+            self._stop_event.set()
+            self._ok_received.set()
+            self._coordinator_received.set()
 
         if self._socket:
             try:
@@ -162,8 +168,19 @@ class BullyElection:
         if target_id not in self.peers or not self._socket:
             return
         host, port = self.peers[target_id]
+        payload = msg.encode("utf-8")
         try:
-            self._socket.sendto(msg.encode("utf-8"), (host, port))
+            enviados = self._socket.sendto(payload, (host, port))
+            if enviados != len(payload):
+                logger.warning(
+                    "BullyNode %d: envío parcial a nodo %d (%s:%d): %d/%d bytes",
+                    self.node_id,
+                    target_id,
+                    host,
+                    port,
+                    enviados,
+                    len(payload),
+                )
         except OSError as e:
             logger.debug("BullyNode %d: error enviando a nodo %d (%s:%d): %s", self.node_id, target_id, host, port, e)
 
@@ -178,49 +195,54 @@ class BullyElection:
     def start_election(self) -> None:
         """Dispara el proceso de elección Bully."""
         with self._lock:
-            if not self._running:
+            if not self._running or self._election_in_progress:
                 return
+            self._election_in_progress = True
             self._state = NodeState.CANDIDATE
-            #seteamos la flags a false
             self._ok_received.clear()
             self._coordinator_received.clear()
             logger.info("BullyNode %d: iniciando ELECCIÓN", self.node_id)
 
-        higher_peers = [pid for pid in self.peers if pid > self.node_id]
+        try:
+            higher_peers = [pid for pid in self.peers if pid > self.node_id]
 
-        if not higher_peers:
-            # Nadie tiene mayor ID que yo: soy el líder inmediatamente
-            self._declare_leader()
-            return
-
-        # Enviar ELECTION a todos los nodos con mayor ID
-        msg = f"{self.MSG_ELECTION}:{self.node_id}"
-        self._broadcast(msg, only_higher=True)
-
-        # Esperar respuesta 'OK' de algún nodo de mayor ID
-        received_ok = self._ok_received.wait(timeout=self.election_timeout)
-
-        with self._lock:
-            if not self._running or self._state != NodeState.CANDIDATE:
+            if not higher_peers:
+                # Nadie tiene mayor ID que yo: soy el líder inmediatamente
+                self._declare_leader()
                 return
 
-        if not received_ok:
-            # Ningún nodo mayor respondió: soy el líder
-            logger.info("BullyNode %d: no recibió OK de nodos superiores. Asumiendo LIDERAZGO", self.node_id)
-            self._declare_leader()
-        else:
-            # Al menos un nodo superior respondió: esperar que anuncie COORDINATOR
-            logger.debug("BullyNode %d: recibió OK. Esperando mensaje COORDINATOR...", self.node_id)
-            received_coord = self._coordinator_received.wait(timeout=self.coordinator_timeout)
+            # Enviar ELECTION a todos los nodos con mayor ID
+            msg = f"{self.MSG_ELECTION}:{self.node_id}"
+            self._broadcast(msg, only_higher=True)
+
+            # Esperar respuesta 'OK' de algún nodo de mayor ID
+            received_ok = self._ok_received.wait(timeout=self.election_timeout)
 
             with self._lock:
                 if not self._running or self._state != NodeState.CANDIDATE:
                     return
 
-            if not received_coord:
-                # El nodo superior no completó la elección a tiempo (pudo caer): reintentar
-                logger.warning("BullyNode %d: timeout esperando COORDINATOR. Reiniciando elección", self.node_id)
-                self.start_election()
+            if not received_ok:
+                # Ningún nodo mayor respondió: soy el líder
+                logger.info("BullyNode %d: no recibió OK de nodos superiores. Asumiendo LIDERAZGO", self.node_id)
+                self._declare_leader()
+            else:
+                # Al menos un nodo superior respondió: esperar que anuncie COORDINATOR
+                logger.debug("BullyNode %d: recibió OK. Esperando mensaje COORDINATOR...", self.node_id)
+                received_coord = self._coordinator_received.wait(timeout=self.coordinator_timeout)
+
+                with self._lock:
+                    if not self._running or self._state != NodeState.CANDIDATE:
+                        return
+
+                if not received_coord:
+                    logger.warning("BullyNode %d: timeout esperando COORDINATOR. Reintentará en próximo ciclo", self.node_id)
+                    with self._lock:
+                        if self._state == NodeState.CANDIDATE:
+                            self._state = NodeState.FOLLOWER
+        finally:
+            with self._lock:
+                self._election_in_progress = False
 
     def _declare_leader(self) -> None:
         """Declara a este nodo como líder e informa a todos los demás."""
@@ -268,13 +290,15 @@ class BullyElection:
 
     def _dispatch_msg(self, tipo: str, sender_id: int) -> None:
         if tipo == self.MSG_ELECTION:
-            # Un nodo con menor ID convocó elección: responder OK y disputar si corresponde
+            # Un nodo con menor ID convocó elección: responder OK y disputar o reafirmar liderazgo
             if sender_id < self.node_id:
                 self._send_msg(sender_id, f"{self.MSG_OK}:{self.node_id}")
-                # Si no éramos candidatos ni líder, lanzamos nuestra propia elección
                 with self._lock:
-                    iniciar = (self._state == NodeState.FOLLOWER)
-                if iniciar:
+                    es_lider = (self._state == NodeState.LEADER)
+                    iniciar = (self._state == NodeState.FOLLOWER and not self._election_in_progress)
+                if es_lider:
+                    self._send_msg(sender_id, f"{self.MSG_COORDINATOR}:{self.node_id}")
+                elif iniciar:
                     threading.Thread(
                         target=self.start_election, name=f"bully-elect-response-{self.node_id}", daemon=True
                     ).start()
@@ -307,27 +331,31 @@ class BullyElection:
                     logger.error("Error en callback on_leader_change: %s", e)
 
         elif tipo == self.MSG_HEARTBEAT:
+            callback = None
             with self._lock:
-                if sender_id == self._leader_id:
+                if sender_id == self._leader_id and self._state == NodeState.FOLLOWER:
                     self._last_leader_heartbeat = time.time()
-                elif sender_id > self.node_id and self._state == NodeState.LEADER:
-                    # Un nodo de mayor ID está enviando heartbeats como líder: ceder liderazgo
+                elif sender_id > self.node_id:
+                    # Un nodo de mayor ID está activo como líder: reconocerlo y pasar a FOLLOWER
+                    cambio_lider = (self._leader_id != sender_id or self._state != NodeState.FOLLOWER)
                     self._leader_id = sender_id
                     self._state = NodeState.FOLLOWER
                     self._last_leader_heartbeat = time.time()
-                    callback = self.on_leader_change
-                    logger.info("BullyNode %d cede liderazgo al nodo superior %d", self.node_id, sender_id)
-                    if callback:
-                        try:
-                            callback(sender_id, False)
-                        except Exception as e:
-                            logger.error("Error en callback on_leader_change: %s", e)
+                    self._coordinator_received.set()
+                    self._ok_received.set()
+                    if cambio_lider:
+                        callback = self.on_leader_change
+                        logger.info("BullyNode %d reconoce liderazgo del nodo superior %d por latido", self.node_id, sender_id)
+            if callback:
+                try:
+                    callback(sender_id, False)
+                except Exception as e:
+                    logger.error("Error en callback on_leader_change: %s", e)
 
 
     def _heartbeat_loop(self) -> None:
         """El líder envía periódicamente latidos a todos sus seguidores."""
-        while self._running:
-            time.sleep(self.heartbeat_interval)
+        while not self._stop_event.wait(timeout=self.heartbeat_interval):
             with self._lock:
                 es_lider = (self._state == NodeState.LEADER)
 
@@ -337,8 +365,7 @@ class BullyElection:
 
     def _watchdog_loop(self) -> None:
         """Los seguidores vigilan periódicamente que el líder siga emitiendo latidos."""
-        while self._running:
-            time.sleep(0.5)
+        while not self._stop_event.wait(timeout=0.5):
             with self._lock:
                 if self._state == NodeState.LEADER:
                     continue
