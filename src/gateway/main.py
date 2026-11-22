@@ -6,6 +6,7 @@ from src.middleware.configuracion import ErrorConfiguracion
 from src.middleware.interfaz import ErrorMiddleware
 from src.gateway.src.gateway import ejecutar_gateway
 from src.common.runtime.apagado import Apagado
+from src.common.runtime.latidos import iniciar_latidos_desde_entorno
 from src.gateway.src.apagado import DetencionGateway
 
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
@@ -18,7 +19,8 @@ def main() -> int:
         with Apagado() as apagado:
             detener = DetencionGateway()
             apagado.registrar_limpieza(detener.set)
-            return ejecutar_gateway(detener, apagado)
+            with iniciar_latidos_desde_entorno(nombre_defecto="gateway", apagado=apagado):
+                return ejecutar_gateway(detener, apagado)
 
     except (ErrorMiddleware, ErrorConfiguracion) as error:
         logging.getLogger('gateway').error("No se pudo iniciar o ejecutar el gateway: %s", error)
