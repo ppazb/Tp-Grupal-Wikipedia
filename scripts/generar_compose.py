@@ -54,6 +54,12 @@ def validar_grupos(configuracion, servicios):
     return workers
 
 
+DESTINOS_HEALTH_CHECKER = (
+    'health_checker-1:8001,health_checker-2:8001,health_checker-3:8001'
+)
+INTERVALO_HEARTBEAT = '1.0'
+
+
 def configurar_servicios(documento, configuracion, ruta):
     """Monta el JSON elegido y sincroniza broker y límite de frames de los clientes."""
     broker = configuracion['broker']
@@ -63,16 +69,19 @@ def configurar_servicios(documento, configuracion, ruta):
     puerto = broker['puerto']
     if type(puerto) is not int or not 1 <= puerto <= 65535:
         raise ValueError('El puerto del broker debe estar entre 1 y 65535')
-    for servicio in documento['services'].values():
-        if 'deploy' in servicio:
-            # Compose normaliza placement vacío, pero luego lo advierte como opción de Swarm.
-            servicio['deploy'] = {k: v for k, v in servicio['deploy'].items() if v != {}}
+    for nombre, servicio in documento['services'].items():
+        servicio.pop('deploy', None)
+        servicio['container_name'] = nombre
         entorno = servicio.setdefault('environment', {})
         for volumen in servicio.get('volumes', []):
             if volumen['target'] == '/app/config':
                 volumen.update(source=str(ruta), target='/app/config/config.json')
         if 'WIKI_MW_BROKER_HOST' in entorno:
             entorno['WIKI_MW_BROKER_HOST'] = 'rabbitmq'
+        if 'WIKI_MW_PROCESO_GRUPO' in entorno or 'GATEWAY_GROUP' in entorno:
+            entorno['CONTAINER_NAME'] = nombre
+            entorno.setdefault('HEALTH_CHECKER_TARGETS', DESTINOS_HEALTH_CHECKER)
+            entorno.setdefault('HEARTBEAT_INTERVAL', INTERVALO_HEARTBEAT)
         if 'CLIENT_ID' in entorno:
             entorno['MAX_FRAME_BYTES'] = str(limite)
             servicio['profiles'] = [PERFIL_CLIENTES]
