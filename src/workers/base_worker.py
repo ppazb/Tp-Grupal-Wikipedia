@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 from contextlib import contextmanager
 import logging
 import zlib
+from uuid import NAMESPACE_URL, uuid5
 
 from src.common.protocol.dto import Entrada, EnvioDatos
 from src.common.runtime.apagado import Apagado
@@ -20,6 +21,16 @@ def instancia_de(clave, cantidad):
     No usa hash() de Python, que cambia entre procesos por PYTHONHASHSEED.
     """
     return zlib.crc32(clave.encode("utf-8")) % cantidad
+
+
+def id_de_salidas(entrega):
+    """id_entrada de las salidas de un lote: identifica al lote recibido completo.
+
+    Usa el id_entrada y el indice del lote: dos lotes hermanos (mismo id_entrada, distinto
+    indice) producen salidas con ids distintos. Es determinístico: reprocesar el mismo
+    lote da el mismo id.
+    """
+    return str(uuid5(NAMESPACE_URL, f"{entrega.id_entrada}:{entrega.indice}"))
 
 
 def comprobar_apagado(apagado):
@@ -133,19 +144,27 @@ class Worker(ABC):
             raise RuntimeError('No hay un lote en procesamiento')
         return entrega.id_entrada
 
+    def _grupo_propio(self):
+        """Grupo de este proceso."""
+        configuracion = getattr(self, 'configuracion', None)
+        if configuracion is not None:
+            return configuracion.proceso.grupo
+        return self._middleware.identidad.grupo
+
     def envio(self, grupo, datos, *, clave_afinidad=None, instancia=None):
         """Arma una salida con identidad determinística: (id_entrada, indice).
 
-        id_entrada es el del lote de entrada que se procesa o, al cerrar una
-        entrada, 'eof:<id_ejecucion>'. indice cuenta las salidas de ese id_entrada
+        id_entrada identifica al lote de entrada que se procesa completo (ver id_de_salidas) o,
+        al cerrar una entrada, es 'eof:<grupo>:<id_ejecucion>' (el grupo evita que dos grupos
+        que publican al cierre compartan ID). indice cuenta las salidas de ese id_entrada
         en el orden en que se arman, así que reprocesar el mismo lote en el mismo
         orden produce los mismos identificadores.
         """
         entrega = getattr(self._middleware, 'entrega_actual', None)
         if entrega is not None:
-            id_entrada = entrega.id_entrada
+            id_entrada = id_de_salidas(entrega)
         else:
-            id_entrada = f'eof:{datos.entrada.id_ejecucion}'
+            id_entrada = f'eof:{self._grupo_propio()}:{datos.entrada.id_ejecucion}'
         indice = self._indice_salida
         self._indice_salida += 1
         return EnvioDatos.nuevo(

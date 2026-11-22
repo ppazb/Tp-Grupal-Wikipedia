@@ -6,12 +6,20 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from types import SimpleNamespace
+
 from src.common.io_adapters.wal import WAL
 from src.common.protocol.dto import Datos, Entrada, EntregaActual, IdentidadProceso
 from src.common.protocol.registros import Lote
+from src.workers.base_worker import id_de_salidas
 
 CONFIG_BASE = Path(__file__).parents[1] / 'sigterm' / 'config.json'
 ORIGEN = IdentidadProceso('productor', 0)
+
+
+def id_salida(id_entrada, indice=0):
+    """id_entrada con el que salen las salidas del lote recibido (id_entrada, indice)."""
+    return id_de_salidas(SimpleNamespace(id_entrada=id_entrada, indice=indice))
 
 
 class Presupuesto:

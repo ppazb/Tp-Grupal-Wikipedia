@@ -5,7 +5,7 @@ from src.common.protocol.dto import Entrada
 from src.common.protocol.registros import Esquema, Idioma, Lote, PalabraIdioma
 from src.workers.q3.intersection.worker import ENTRADA_RESULTADOS, GRUPO_RESULTADOS, IntersectionQ3
 from src.workers.wal_ejecuciones import ARCHIVO_CERRADAS
-from tests.workers.soporte import PruebaConWal
+from tests.workers.soporte import PruebaConWal, id_salida
 
 EN, FR = Idioma.INGLES, Idioma.FRANCES
 ENTRADA = Entrada('ej1', 'palabras_idioma')
@@ -39,7 +39,7 @@ class TestIntersectionQ3(PruebaConWal):
         worker = self.nuevo_worker()
         worker.middleware.registros_por_mensaje = 1  # un mensaje por palabra
         self.entregar(worker, ENTRADA, lote(('a', EN), ('a', FR), ('b', EN), ('b', FR)), 'L1')
-        self.assertEqual(self.ids(worker), [('L1', 0), ('L1', 1)])
+        self.assertEqual(self.ids(worker), [(id_salida('L1'), 0), (id_salida('L1'), 1)])
 
     def test_cierra_la_salida_hacia_el_gateway(self):
         worker = self.nuevo_worker()

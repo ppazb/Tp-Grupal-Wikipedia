@@ -102,6 +102,11 @@ class MiddlewareRabbitMQ(Middleware[Lote]):
         self._publicador.publicar_control(sobre, instancia)
 
     @property
+    def identidad(self):
+        """Identidad (grupo e instancia) de este proceso."""
+        return self._identidad
+
+    @property
     def entrega_actual(self):
         """Identidad del lote en procesamiento dentro del callback de recibir; si no, None."""
         return None if self._receptor is None else self._receptor.entrega_actual

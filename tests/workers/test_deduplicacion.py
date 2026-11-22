@@ -81,6 +81,23 @@ class TestDedupDesdeAfinidad(PruebasComunes, unittest.TestCase):
         self.assertTrue(self.dedup.es_duplicado(entrega('L1', 0)))
         self.assertTrue(self.dedup.es_duplicado(entrega(f'L{LOTES_RECORDADOS}', 0)))
 
+    def test_la_ventana_es_por_ejecucion_y_origen(self):
+        self.dedup.registrar(entrega('L0', 0, ejecucion='ej1'))
+        # otra ejecucion del mismo origen llena su propia ventana: no desplaza a L0 de ej1
+        for numero in range(LOTES_RECORDADOS + 1):
+            self.dedup.registrar(entrega(f'X{numero}', 0, ejecucion='ej2'))
+        self.assertTrue(self.dedup.es_duplicado(entrega('L0', 0, ejecucion='ej1')))
+        self.assertFalse(self.dedup.es_duplicado(entrega('X0', 0, ejecucion='ej2')))  # este si se olvido
+
+    def test_cerrar_ejecucion_libera_sus_ventanas(self):
+        self.dedup.registrar(entrega('L1', 0, origen=ORIGEN_A, ejecucion='ej1'))
+        self.dedup.registrar(entrega('L1', 0, origen=ORIGEN_B, ejecucion='ej1'))
+        self.dedup.registrar(entrega('L1', 0, ejecucion='ej2'))
+        self.dedup.cerrar_ejecucion('ej1')
+        self.assertFalse(self.dedup.es_duplicado(entrega('L1', 0, origen=ORIGEN_A, ejecucion='ej1')))
+        self.assertFalse(self.dedup.es_duplicado(entrega('L1', 0, origen=ORIGEN_B, ejecucion='ej1')))
+        self.assertTrue(self.dedup.es_duplicado(entrega('L1', 0, ejecucion='ej2')))
+
     def test_actualizar_un_lote_no_ocupa_otro_lugar(self):
         for numero in range(LOTES_RECORDADOS):
             self.dedup.registrar(entrega(f'L{numero}', 0))

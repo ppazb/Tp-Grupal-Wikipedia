@@ -53,13 +53,12 @@ class DedupDesdeCompartida:
 
 
 class DedupDesdeAfinidad:
-    """
-    Por cada origen, los últimos LOTES_RECORDADOS (id_entrada, max_indice)
+    """Por cada (ejecución, origen), los últimos LOTES_RECORDADOS (id_entrada, max_indice).
 
     Con afinidad el reproceso lo hace siempre la misma réplica, y un productor
     que se reinicia solo puede reprocesar los lotes que tenía sin confirmar.
-    Los lotes recordados dependen del prefetch, que es la cantidad de lotes que 
-    un productor puede tener sin confirmar
+    La memoria es fija por ejecución: al llenarse, se olvida el lote más viejo, y al cerrar
+    la ejecución se libera su ventana.
     """
 
     def __init__(self):
@@ -70,8 +69,8 @@ class DedupDesdeAfinidad:
         return maximo is not None and entrega.indice <= maximo
 
     def registrar(self, entrega):
-        recientes = self._recientes.setdefault(entrega.origen, deque(maxlen=LOTES_RECORDADOS))
-        clave = self._clave(entrega)
+        recientes = self._recientes.setdefault(self._ventana(entrega), deque(maxlen=LOTES_RECORDADOS))
+        clave = _clave(entrega.id_entrada)
         for posicion, (clave_guardada, maximo) in enumerate(recientes):
             if clave_guardada == clave:
                 recientes[posicion] = (clave, max(maximo, entrega.indice))
@@ -79,16 +78,17 @@ class DedupDesdeAfinidad:
         recientes.append((clave, entrega.indice))
 
     def cerrar_ejecucion(self, id_ejecucion):
-        """No hace nada: la memoria ya es fija. Existe para usar ambas dedup igual"""
+        """Libera las ventanas de una ejecución terminada."""
+        for ventana in [v for v in self._recientes if v[0] == id_ejecucion]:
+            del self._recientes[ventana]
 
     def _maximo(self, entrega):
-        clave = self._clave(entrega)
-        for clave_guardada, maximo in self._recientes.get(entrega.origen, ()):
+        clave = _clave(entrega.id_entrada)
+        for clave_guardada, maximo in self._recientes.get(self._ventana(entrega), ()):
             if clave_guardada == clave:
                 return maximo
         return None
 
     @staticmethod
-    def _clave(entrega):
-        # Incluye la ejecucion ya q un mismo id_entrada no tiene q chocar entre ejecuciones
-        return _clave(f"{entrega.entrada.id_ejecucion}\0{entrega.id_entrada}")
+    def _ventana(entrega):
+        return (entrega.entrada.id_ejecucion, entrega.origen)
