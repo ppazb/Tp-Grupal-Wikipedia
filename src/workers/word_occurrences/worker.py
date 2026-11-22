@@ -1,9 +1,8 @@
 import logging
 from src.middleware.interfaz import OperacionInterrumpida
-import zlib
 from typing import List
 
-from src.workers.base_worker import WorkerBase
+from src.workers.base_worker import WorkerBase, instancia_de
 from src.common.protocol.dto import Datos, Entrada
 from src.common.protocol.registros import (
     Esquema, Lote, Palabra, PalabraIdioma, CantidadPalabras, Candidato, TextoArticulo
@@ -20,6 +19,7 @@ class WordOccurrencesWorker(WorkerBase):
         super().__init__(ruta_configuracion)
         # Las palabras se reparten entre las instancias de Q3 según su hash
         self._particiones_q3 = self.configuracion.obtener_grupo("q3_intersection").instancias
+        self._instancias_frecuencias = self.configuracion.obtener_grupo("frecuencias").instancias
 
     def procesar(self, datos: Datos) -> None:
         id_ejecucion = datos.entrada.id_ejecucion
@@ -45,11 +45,12 @@ class WordOccurrencesWorker(WorkerBase):
             for pal in palabras_no_stop:
                 self.comprobar_detencion()
                 unicas.add(pal)
-            for pal in unicas:
+            # sorted: el orden de un set cambia entre procesos y las salidas deben repetirse igual
+            for pal in sorted(unicas):
                 self.comprobar_detencion()
                 palabras_q4.append(Palabra(palabra=pal))
                 # dato para Q3: la misma palabra siempre va a la misma partición
-                pares_q3[zlib.crc32(pal.encode("utf-8")) % self._particiones_q3].add((pal, articulo.idioma))
+                pares_q3[instancia_de(pal, self._particiones_q3)].add((pal, articulo.idioma))
 
             # datos para Q5 según el período del artículo (conteo total de palabras no-stop)
             if entrada_nombre == "textos_historicos":
@@ -60,23 +61,34 @@ class WordOccurrencesWorker(WorkerBase):
         # Hacia Q5 Average (históricos), Q5 Comparator (candidatos), Q4 Frecuencias (palabras únicas por
         # abstract) y Q3 Intersección (pares palabra-idioma). Cada salida se parte en los mensajes que
         # hagan falta para respetar el tamaño máximo.
-        self._publicar_por_presupuesto("q5_average", Entrada(id_ejecucion, "cantidades_historicas"), Esquema.CANTIDAD_PALABRAS, cantidades_q5)
-        self._publicar_por_presupuesto("q5_comparator", Entrada(id_ejecucion, "candidatos"), Esquema.CANDIDATO, candidatos_q5)
-        self._publicar_por_presupuesto("frecuencias", Entrada(id_ejecucion, "palabras"), Esquema.PALABRA, palabras_q4)
+        # Q5 recibe por afinidad de ejecución; frecuencias por afinidad de lote y Q3 por palabra.
+        # El orden de publicación es fijo para que reprocesar el lote repita los mismos IDs.
+        self._publicar_por_presupuesto(
+            "q5_average", Entrada(id_ejecucion, "cantidades_historicas"), Esquema.CANTIDAD_PALABRAS,
+            cantidades_q5, clave_afinidad=id_ejecucion,
+        )
+        self._publicar_por_presupuesto(
+            "q5_comparator", Entrada(id_ejecucion, "candidatos"), Esquema.CANDIDATO,
+            candidatos_q5, clave_afinidad=id_ejecucion,
+        )
+        self._publicar_por_presupuesto(
+            "frecuencias", Entrada(id_ejecucion, "palabras"), Esquema.PALABRA, palabras_q4,
+            instancia=instancia_de(self.id_lote_actual(), self._instancias_frecuencias),
+        )
         for particion, pares in enumerate(pares_q3):
             self._publicar_por_presupuesto(
                 "q3_intersection", Entrada(id_ejecucion, "palabras_idioma"), Esquema.PALABRA_IDIOMA,
                 [PalabraIdioma(palabra, idioma) for palabra, idioma in sorted(pares)],
-                clave_afinidad=str(particion),
+                instancia=particion,
             )
 
     def _publicar_por_presupuesto(self, grupo: str, entrada: Entrada, esquema: Esquema, registros: list,
-                                  clave_afinidad: str = None) -> None:
+                                  clave_afinidad: str = None, instancia: int = None) -> None:
         """
         Publica los registros en tantos lotes como haga falta para no superar max_bytes_por_mensaje.
 
         Se llena cada mensaje según el presupuesto de bytes del middleware; con clave de afinidad,
-        todos van a la misma instancia del destino.
+        todos van a la misma instancia del destino (por clave de afinidad o por instancia directa).
         """
         if not registros:
             return
@@ -85,15 +97,17 @@ class WordOccurrencesWorker(WorkerBase):
         for registro in registros:
             self.comprobar_detencion()
             if not presupuesto.admitir(registro):
-                self.middleware.publicar(grupo, Datos(entrada, Lote(esquema, tuple(pendientes))),
-                                         clave_afinidad=clave_afinidad)
+                self.middleware.publicar(self.envio(
+                    grupo, Datos(entrada, Lote(esquema, tuple(pendientes))),
+                    clave_afinidad=clave_afinidad, instancia=instancia))
                 pendientes = []
                 presupuesto = self.middleware.crear_presupuesto_lote(entrada, esquema)
                 if not presupuesto.admitir(registro):
                     raise ValueError(f"Un registro de {esquema.name} no cabe en un lote vacío")
             pendientes.append(registro)
-        self.middleware.publicar(grupo, Datos(entrada, Lote(esquema, tuple(pendientes))),
-                                 clave_afinidad=clave_afinidad)
+        self.middleware.publicar(self.envio(
+            grupo, Datos(entrada, Lote(esquema, tuple(pendientes))),
+            clave_afinidad=clave_afinidad, instancia=instancia))
 
     def al_finalizar(self, entrada: Entrada) -> None:
         """Propaga el cierre correspondiente al tramo completado."""

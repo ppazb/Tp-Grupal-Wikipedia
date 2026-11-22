@@ -2,7 +2,7 @@
 
 from collections import Counter
 
-from src.common.protocol.dto import Datos, Entrada, FinEntrada, TipoMensaje
+from src.common.protocol.dto import EnvioDatos, Datos, Entrada, FinEntrada, TipoMensaje
 from src.common.protocol.registros import ConteoPalabra, Esquema, Lote, Palabra
 from src.middleware.interfaz import ErrorSeguimientoEntrada
 from src.middleware.rabbitmq import MiddlewareRabbitMQ
@@ -53,9 +53,9 @@ def emitir_acumulados(middleware, entrada, datos):
     )
     salida = Entrada(entrada.id_ejecucion, 'conteos')
     for palabra, cantidad in sorted(conteos.items()):
-        middleware.publicar('sumidero', Datos(salida, Lote(
+        middleware.publicar(EnvioDatos.nuevo('sumidero', Datos(salida, Lote(
             Esquema.CONTEO_PALABRA, (ConteoPalabra(palabra, cantidad),),
-        )))
+        ))))
     middleware.finalizar_entrada('sumidero', salida)
 
 

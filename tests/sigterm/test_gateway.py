@@ -6,7 +6,7 @@ import signal
 import socket
 
 from src.common.external_protocol import TipoFrame, codificar_filas, enviar_frame, recibir_frame
-from src.common.protocol.dto import Datos, Entrada
+from src.common.protocol.dto import EnvioDatos, Datos, Entrada
 from src.common.protocol.registros import Esquema, Lote, ResultadoQ1
 from src.middleware.topologia import TopologiaGrupos
 from tests.soporte import EscenarioRabbitMQ
@@ -94,7 +94,7 @@ class Gateway(EscenarioRabbitMQ):
     def test_sigterm_publicacion_sin_capacidad(self):
         fuente, datos = entrada_prueba('date_router')
         with self.abrir(fuente, informar_error=self.fail) as productor:
-            productor.publicar('date_router', datos)
+            productor.publicar(EnvioDatos.nuevo('date_router', datos))
         self.iniciar('capacidad')
         cliente, _ = self.cliente()
         self.enviar(cliente)
@@ -109,7 +109,7 @@ class Gateway(EscenarioRabbitMQ):
         cliente, ejecucion = self.cliente()
         lote = Lote(Esquema.RESULTADO_Q1, (ResultadoQ1('x' * 60000, '2019'),))
         with self.abrir('q1_formatter', informar_error=self.fail) as productor:
-            productor.publicar('gateway_resultados', Datos(Entrada(ejecucion, 'resultados_finales_q1'), lote))
+            productor.publicar(EnvioDatos.nuevo('gateway_resultados', Datos(Entrada(ejecucion, 'resultados_finales_q1'), lote)))
         self.assertEqual(self.esperar(self.eventos), 'enviando')
         self.apagar()
 

@@ -72,9 +72,9 @@ class WorkerTopN(Worker):
 
     def _publicar_lote(self, entrada, registros):
         datos = Datos(entrada, Lote(Esquema.CONTEO_PALABRA, tuple(registros)))
-        self._middleware.publicar(
+        self._middleware.publicar(self.envio(
             self._grupo_salida, datos, clave_afinidad=entrada.id_ejecucion,
-        )
+        ))
 
     def _validar_entrada(self, entrada):
         if entrada.nombre != self._entrada:

@@ -25,8 +25,9 @@ class _LoteFragmentos:
     Así se publica un mensaje por lote y no uno por fragmento.
     """
 
-    def __init__(self, middleware, entrada):
+    def __init__(self, middleware, entrada, crear_envio):
         self._middleware = middleware
+        self._crear_envio = crear_envio
         self._entrada = entrada
         self._registros = []
         self._presupuesto = None
@@ -45,7 +46,7 @@ class _LoteFragmentos:
 
     def publicar(self):
         if self._registros:
-            self._middleware.publicar(GRUPO_RESULTADOS, Datos(self._entrada, Lote(Esquema.FRAGMENTO_IMAGEN, tuple(self._registros))))
+            self._middleware.publicar(self._crear_envio(GRUPO_RESULTADOS, Datos(self._entrada, Lote(Esquema.FRAGMENTO_IMAGEN, tuple(self._registros)))))
 
         self._registros = []
         self._presupuesto = None
@@ -76,7 +77,7 @@ class ImageDownloaderQ2(WorkerBase):
     def procesar(self, datos: Datos) -> None:
         self.anunciar_cliente("q2_image_downloader", datos.entrada.id_ejecucion)
         id_ejecucion = datos.entrada.id_ejecucion
-        lote = _LoteFragmentos(self.middleware, Entrada(id_ejecucion, ENTRADA_RESULTADOS))
+        lote = _LoteFragmentos(self.middleware, Entrada(id_ejecucion, ENTRADA_RESULTADOS), self.envio)
 
         for solicitud in datos.contenido.registros:
             self.comprobar_detencion()

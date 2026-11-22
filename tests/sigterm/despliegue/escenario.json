@@ -13,6 +13,5 @@
   "max_bytes_por_mensaje": 32768,
   "max_mensajes_por_cola": 32,
   "presupuesto_top_n_bytes": 4096,
-  "candidatos_por_escritura": 4,
   "plazo_despliegue_segundos": 30
 }

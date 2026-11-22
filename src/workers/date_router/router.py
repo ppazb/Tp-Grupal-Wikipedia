@@ -2,7 +2,7 @@ import logging
 from src.middleware.interfaz import OperacionInterrumpida
 from typing import Optional
 
-from src.workers.base_worker import WorkerBase
+from src.workers.base_worker import WorkerBase, instancia_de
 from src.common.protocol.dto import Datos, Entrada
 from src.common.protocol.registros import (
     Esquema, Lote, ReferenciaHistorica, ReferenciaBiografica, TextoArticulo
@@ -28,6 +28,10 @@ class DateRouter(WorkerBase):
     del artículo Por ej: Query 1: filtra artículos hasta 2020 inclusive y envia
     (url, fecha, idioma), minimizando la carga en la red.
     """
+
+    def __init__(self, ruta_configuracion: str):
+        super().__init__(ruta_configuracion)
+        self._instancias_filter_bio = self.configuracion.obtener_grupo("q2_filter_bio").instancias
 
     def procesar(self, datos: Datos) -> None:
         self.anunciar_cliente("date_router", datos.entrada.id_ejecucion)
@@ -74,20 +78,24 @@ class DateRouter(WorkerBase):
         if historicos_q1:
             entrada_q1 = Entrada(id_ejecucion, "historicos_q1")
             lote_q1 = Lote(Esquema.REFERENCIA_HISTORICA, tuple(historicos_q1))
-            self.middleware.publicar("q1_filter_lang", Datos(entrada_q1, lote_q1))
+            self.middleware.publicar(self.envio("q1_filter_lang", Datos(entrada_q1, lote_q1)))
 
         # Envio hacia nodo de la rama Query 2
         if biograficos_q2:
             entrada_q2 = Entrada(id_ejecucion, "historicos_q2")
             lote_q2 = Lote(Esquema.REFERENCIA_BIOGRAFICA, tuple(biograficos_q2))
-            self.middleware.publicar("q2_filter_bio", Datos(entrada_q2, lote_q2))
+            # q2_filter_bio recibe por afinidad: el mismo lote siempre cae en la misma réplica
+            instancia = instancia_de(self.id_lote_actual(), self._instancias_filter_bio)
+            self.middleware.publicar(self.envio(
+                "q2_filter_bio", Datos(entrada_q2, lote_q2), instancia=instancia,
+            ))
 
         # Envio hacia rama NLP / Q5: Históricos
         if textos_historicos:
             try:
                 entrada_hist = Entrada(id_ejecucion, "textos_historicos")
                 lote_hist = Lote(Esquema.TEXTO_ARTICULO, tuple(textos_historicos))
-                self.middleware.publicar("word_occurrences", Datos(entrada_hist, lote_hist))
+                self.middleware.publicar(self.envio("word_occurrences", Datos(entrada_hist, lote_hist)))
             except OperacionInterrumpida:
                 raise
             except Exception as error:
@@ -98,7 +106,7 @@ class DateRouter(WorkerBase):
             try:
                 entrada_rec = Entrada(id_ejecucion, "textos_recientes")
                 lote_rec = Lote(Esquema.TEXTO_ARTICULO, tuple(textos_recientes))
-                self.middleware.publicar("word_occurrences", Datos(entrada_rec, lote_rec))
+                self.middleware.publicar(self.envio("word_occurrences", Datos(entrada_rec, lote_rec)))
             except OperacionInterrumpida:
                 raise
             except Exception as error:

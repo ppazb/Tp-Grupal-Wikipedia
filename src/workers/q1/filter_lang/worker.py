@@ -24,7 +24,7 @@ class FilterLangQ1(WorkerBase):
         if registros_ingles:
             nueva_entrada = Entrada(id_ejecucion, "filtrados_ing_q1")
             nuevo_lote = Lote(Esquema.RESULTADO_Q1, tuple(registros_ingles))
-            self.middleware.publicar("q1_formatter", Datos(nueva_entrada, nuevo_lote))
+            self.middleware.publicar(self.envio("q1_formatter", Datos(nueva_entrada, nuevo_lote)))
 
     def al_finalizar(self, entrada: Entrada) -> None:
         """Propaga (EOF) hacia el formateador (su nodo siguiente)."""

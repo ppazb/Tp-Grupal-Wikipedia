@@ -4,7 +4,7 @@ from collections import Counter
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from src.common.protocol.dto import Datos, Entrada
+from src.common.protocol.dto import EnvioDatos, Datos, Entrada
 from src.common.protocol.registros import Esquema, Lote, Palabra
 from src.middleware.rabbitmq import MiddlewareRabbitMQ
 from src.workers.q4.frequency.worker import WorkerFrecuencia
@@ -42,10 +42,10 @@ def producir(configuracion, eventos, clientes, numero):
                     if palabra in STOPWORDS or palabra in vistos:
                         continue
                     vistos.add(palabra)
-                    middleware.publicar('frecuencias', Datos(
+                    middleware.publicar(EnvioDatos.nuevo('frecuencias', Datos(
                         Entrada(cliente, 'palabras'),
                         Lote(Esquema.PALABRA, (Palabra(palabra),)),
-                    ))
+                    )))
         for cliente in clientes:
             middleware.finalizar_entrada('frecuencias', Entrada(cliente, 'palabras'))
     eventos.put(('producido',))

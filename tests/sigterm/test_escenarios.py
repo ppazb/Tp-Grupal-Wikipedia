@@ -9,7 +9,7 @@ from queue import Empty
 from time import monotonic
 
 from src.middleware.topologia import TopologiaGrupos
-from src.common.protocol.dto import Datos, Entrada
+from src.common.protocol.dto import EnvioDatos, Datos, Entrada
 from src.common.protocol.registros import ConteoPalabra, Esquema, Lote
 from tests.soporte import EscenarioRabbitMQ
 from .soporte import ejecutar_worker, entrada_prueba
@@ -63,7 +63,7 @@ class EscenariosWorker:
         if modo != 'inactivo':
             datos = replace(datos, contenido=replace(datos.contenido, registros=datos.contenido.registros * 4))
             with self.abrir(fuente, informar_error=self.fail) as productor:
-                productor.publicar(self.grupo, datos)
+                productor.publicar(EnvioDatos.nuevo(self.grupo, datos))
         proceso, eventos = self.lanzar(ejecutar_worker, self.grupo, modo, continuar)
         esperado = {'inactivo': 'esperando', 'activo': 'procesado_sin_ack'}.get(modo, 'computando')
         self.assertEqual(self.esperar(eventos), esperado)
@@ -128,13 +128,13 @@ class Frecuencia(EscenariosWorker, EscenarioRabbitMQ):
     def test_sigterm_finalizador_sin_capacidad(self):
         """Interrumpe el vaciado del parcial: no publica datos extra ni EOF hacia Top N."""
         with self.abrir('frecuencias', informar_error=self.fail) as productor:
-            productor.publicar('top_n', Datos(Entrada('previa', 'conteos'), Lote(
+            productor.publicar(EnvioDatos.nuevo('top_n', Datos(Entrada('previa', 'conteos'), Lote(
                 Esquema.CONTEO_PALABRA, (ConteoPalabra('ocupada', 1),),
-            )), clave_afinidad='cliente')
+            )), clave_afinidad='cliente'))
         # La afinidad incluye la ejecución; con una sola réplica la cola es la misma.
         fuente, datos = entrada_prueba(self.grupo)
         with self.abrir(fuente, informar_error=self.fail) as productor:
-            productor.publicar(self.grupo, datos)
+            productor.publicar(EnvioDatos.nuevo(self.grupo, datos))
             productor.finalizar_entrada(self.grupo, datos.entrada)
         continuar = multiprocessing.get_context('spawn').Event()
         proceso, eventos = self.lanzar(ejecutar_worker, self.grupo, 'capacidad', continuar)
@@ -159,10 +159,9 @@ class Promedio(EscenariosWorker, EscenarioRabbitMQ):
 
 
 class Comparador(EscenariosWorker, EscenarioRabbitMQ):
+    # Sin prueba de apagado durante la escritura: ahora guarda en el WAL, que no tiene un
+    # punto de cancelacion (cada append es corto y atomico)
     grupo = 'q5_comparator'
-
-    def test_sigterm_durante_escritura(self):
-        self.comprobar_apagado('almacenamiento')
 
 
 class ConjuntoReplicas(EscenarioRabbitMQ):
@@ -187,9 +186,9 @@ class ConjuntoReplicas(EscenarioRabbitMQ):
                 _, datos = entrada_prueba('frecuencias')
                 datos = replace(datos, entrada=Entrada(f'cliente-{numero}', 'palabras'),
                                 contenido=replace(datos.contenido, registros=datos.contenido.registros * 4))
-                productor.publicar('frecuencias', datos)
+                productor.publicar(EnvioDatos.nuevo('frecuencias', datos))
             _, datos = entrada_prueba('q5_comparator')
-            productor.publicar('q5_comparator', datos)
+            productor.publicar(EnvioDatos.nuevo('q5_comparator', datos))
         procesos = []
         participantes = [('frecuencias', n, 'computo') for n in range(3)]
         participantes += [('top_n', n, 'inactivo') for n in range(2)]
@@ -232,7 +231,7 @@ class Descargador(EscenariosWorker, EscenarioRabbitMQ):
         solicitud = replace(datos.contenido.registros[0], url_imagen=f'http://127.0.0.1:{puerto}/imagen')
         datos = replace(datos, contenido=replace(datos.contenido, registros=(solicitud,)))
         with self.abrir(fuente, informar_error=self.fail) as productor:
-            productor.publicar(self.grupo, datos)
+            productor.publicar(EnvioDatos.nuevo(self.grupo, datos))
         continuar = multiprocessing.get_context('spawn').Event()
         self.addCleanup(continuar.set)
         observacion = modo if modo in ('descarga', 'fragmentos') else f'http_{modo}'

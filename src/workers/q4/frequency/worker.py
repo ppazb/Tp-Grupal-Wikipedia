@@ -48,9 +48,9 @@ class WorkerFrecuencia(Worker):
 
     def _emitir(self, id_ejecucion, lote):
         datos = Datos(Entrada(id_ejecucion, self._entrada_salida), lote)
-        self._middleware.publicar(
+        self._middleware.publicar(self.envio(
             self._grupo_salida, datos, clave_afinidad=id_ejecucion,
-        )
+        ))
 
     def _validar_entrada(self, entrada):
         if entrada.nombre != self._entrada:

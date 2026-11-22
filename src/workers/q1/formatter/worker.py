@@ -12,7 +12,7 @@ class FormatterQ1(WorkerBase):
         self.anunciar_cliente("q1_formatter", datos.entrada.id_ejecucion)
         id_ejecucion = datos.entrada.id_ejecucion
         nueva_entrada = Entrada(id_ejecucion, "resultados_finales_q1")
-        self.middleware.publicar("gateway_resultados", Datos(nueva_entrada, datos.contenido))
+        self.middleware.publicar(self.envio("gateway_resultados", Datos(nueva_entrada, datos.contenido)))
 
     def al_finalizar(self, entrada: Entrada) -> None:
         """Indica al gateway (EOF) de la Query 1."""

@@ -17,13 +17,15 @@ MODULOS = {
 def servicio(base, nombre, comando, entorno=None, observado=True):
     temporal = base / 'temporales' / nombre
     temporal.mkdir(parents=True)
+    wal = base / 'wal' / nombre
+    wal.mkdir(parents=True)
     entrada = ['python', '-m', 'tests.sigterm.despliegue.proceso'] if observado else ['python']
     return {
         'image': IMAGEN, 'user': f'{os.getuid()}:{os.getgid()}',
         'entrypoint': entrada, 'command': comando,
-        'volumes': [f'{base}:/prueba', f'{temporal}:/temporales'],
+        'volumes': [f'{base}:/prueba', f'{temporal}:/temporales', f'{wal}:/wal'],
         'environment': {
-            'NODO_PRUEBA': nombre, 'NLTK_DATA': '/prueba/nltk', 'TEMP_DIR': '/temporales',
+            'NODO_PRUEBA': nombre, 'NLTK_DATA': '/prueba/nltk', 'WAL_DIR': '/wal',
             'WIKI_MW_BROKER_HOST': 'rabbitmq', **(entorno or {}),
         },
         'restart': 'no',
@@ -57,7 +59,6 @@ def crear(base, raiz, opciones):
                             '--directorio-temporal', '/temporales']
             servicios[nombre] = servicio(base, nombre, comando, {
                 'WIKI_MW_PROCESO_GRUPO': grupo, 'WIKI_MW_PROCESO_INSTANCIA': str(instancia),
-                'BATCH_SIZE_Q5': str(opciones['candidatos_por_escritura']),
             })
             servicios[nombre]['depends_on'] = dict(dependencias)
             if grupo == 'q2_image_downloader':

@@ -6,7 +6,7 @@ from typing import Callable, Optional
 
 import pika
 
-from ..common.protocol.dto import Datos, Entrada, Evento, TipoMensaje
+from ..common.protocol.dto import Datos, Entrada, EntregaActual, Evento, TipoMensaje
 from ..common.protocol.registros import Esquema
 from .broker_connection import ConexionBroker
 from .capacidad import CapacidadDatos
@@ -59,6 +59,7 @@ class ReceptorDatos:
         self._entrega = None
         self._error_procesamiento = None
         self._retener_pendiente = False
+        self.entrega_actual = None
 
     def recibir(
         self, procesar: Callable[[Evento], None], *,
@@ -176,12 +177,18 @@ class ReceptorDatos:
             self._notificar(
                 sobre.entrada, sobre.contenido.esquema.value, error.detalle, error.indice,
             )
+        # Mientras corre el callback, el worker puede consultar qué lote procesa.
+        self.entrega_actual = EntregaActual(
+            sobre.entrada, sobre.origen, sobre.id_entrada, sobre.indice,
+        )
         try:
             if resultado.registros_validos:
                 procesar(Datos(sobre.entrada, sobre.contenido))
         except BaseException as error:
             self._error_procesamiento = error
             raise
+        finally:
+            self.entrega_actual = None
         self._resolver(canal, rechazar=False)
         if self._coordinacion is not None:
             self._coordinacion.resolver_lote(sobre)
