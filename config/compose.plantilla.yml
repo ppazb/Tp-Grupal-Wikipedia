@@ -23,6 +23,17 @@ x-worker-base: &worker-base
   stop_grace_period: 30s # tiempo que le damos al sistema antes de hacer sigkill para manejar un grace shutdown
   restart: on-failure
 
+x-health-checker-base: &health-checker-base
+  build:
+    context: .
+    dockerfile: src/health_checker/Dockerfile
+  networks:
+    - wiki_net
+  volumes:
+    - /var/run/docker.sock:/var/run/docker.sock
+  stop_grace_period: 10s
+  restart: on-failure
+
 services:
   rabbitmq:
     image: rabbitmq:4.1-management
@@ -263,3 +274,27 @@ services:
       - BATCH_SIZE_Q5=1000
     deploy:
       replicas: 1
+
+  health_checker-1:
+    <<: *health-checker-base
+    environment:
+      - HEALTH_CHECKER_ID=1
+      - HEALTH_CHECKER_PORT=8000
+      - HEALTH_CHECKER_PEERS=1:health_checker-1:8000,2:health_checker-2:8000,3:health_checker-3:8000
+      - LOG_LEVEL=INFO
+
+  health_checker-2:
+    <<: *health-checker-base
+    environment:
+      - HEALTH_CHECKER_ID=2
+      - HEALTH_CHECKER_PORT=8000
+      - HEALTH_CHECKER_PEERS=1:health_checker-1:8000,2:health_checker-2:8000,3:health_checker-3:8000
+      - LOG_LEVEL=INFO
+
+  health_checker-3:
+    <<: *health-checker-base
+    environment:
+      - HEALTH_CHECKER_ID=3
+      - HEALTH_CHECKER_PORT=8000
+      - HEALTH_CHECKER_PEERS=1:health_checker-1:8000,2:health_checker-2:8000,3:health_checker-3:8000
+      - LOG_LEVEL=INFO
