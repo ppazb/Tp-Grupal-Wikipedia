@@ -76,33 +76,10 @@ class WAL:
     def iterar(self):
         """Entrega los registros de a uno, en orden, sin cargar todo el log en memoria.
 
-        Hay que consumirlo antes de seguir agregando o reemplazar."""
+        Hay que consumirlo antes de seguir agregando."""
         with open(self._ruta, 'rb') as archivo:
             for datos, _ in _leer_registros(archivo):
                 yield datos
-
-    def reemplazar(self, registros):
-        """Reescribe el log solo con estos registros, atomico: solo se reemplaza si 
-        se pudo escribir todo."""
-        temporal = self._ruta + '.tmp'
-
-        # Escribo el contenido nuevo aparte, el original no se toca
-        with open(temporal, 'wb') as archivo:
-            for datos in registros:
-                escribir_completo(archivo, _empaquetar(bytes(datos)))
-            
-            archivo.flush()
-            os.fsync(archivo.fileno())
-
-        # cambio atomico: queda el archivo viejo o el nuevo
-        self._archivo.close()
-        os.replace(temporal, self._ruta)
-
-        
-        self._sincronizar_directorio()
-
-        # sigo agregando sobre el archivo nuevo en append
-        self._archivo = open(self._ruta, 'ab')
 
     def cerrar(self):
         self._archivo.close()
@@ -125,14 +102,6 @@ class WAL:
                 #flusheo y me aseguro que llega a disco
                 archivo.flush()
                 os.fsync(archivo.fileno())
-
-    def _sincronizar_directorio(self):
-        """fsync del directorio: hace durable el cambio de nombre de os.replace."""
-        descriptor = os.open(self._directorio, os.O_RDONLY)
-        try:
-            os.fsync(descriptor)
-        finally:
-            os.close(descriptor)
 
     def __enter__(self):
         return self
