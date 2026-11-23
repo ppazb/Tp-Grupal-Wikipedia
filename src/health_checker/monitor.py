@@ -4,7 +4,7 @@ import logging
 import socket
 import threading
 import time
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict, Iterable, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +28,7 @@ class HeartbeatMonitor:
         node_timeout: float = DEFAULT_NODE_TIMEOUT,
         check_interval: float = DEFAULT_CHECK_INTERVAL,
         on_node_failure: Optional[Callable[[str, float], None]] = None,
+        initial_nodes: Optional[Iterable[str]] = None,
     ):
         if not 1 <= listen_port <= 65535:
             raise ValueError(f"Puerto de escucha inválido: {listen_port}")
@@ -40,6 +41,9 @@ class HeartbeatMonitor:
         self.node_timeout = node_timeout
         self.check_interval = check_interval
         self.on_node_failure = on_node_failure
+        self._initial_nodes = tuple(
+            n.strip() for n in (initial_nodes or ()) if n and n.strip()
+        )
 
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
@@ -53,17 +57,28 @@ class HeartbeatMonitor:
         self._watchdog_thread: Optional[threading.Thread] = None
 
     def start(self) -> None:
-        """Abre el socket UDP y lanza los hilos de recepción y detección de timeouts."""
+        """Abre el socket UDP, pre-carga nodos iniciales y lanza los hilos de monitoreo."""
         with self._lock:
             if self._running:
                 return
             self._running = True
             self._stop_event.clear()
 
+            ahora = time.time()
+            for node_name in self._initial_nodes:
+                self._last_seen.setdefault(node_name, ahora)
+
             self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             self._socket.bind(("0.0.0.0", self.listen_port))
             self._socket.settimeout(SOCKET_TIMEOUT)
+
+        if self._initial_nodes:
+            logger.info(
+                "HeartbeatMonitor pre-cargado con %d nodos iniciales: %s",
+                len(self._initial_nodes),
+                list(self._initial_nodes),
+            )
 
         self._receiver_thread = threading.Thread(
             target=self._receive_loop,
