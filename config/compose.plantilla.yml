@@ -26,7 +26,7 @@ x-worker-base: &worker-base
     inicializador:
       condition: service_completed_successfully
   stop_grace_period: 30s # tiempo que le damos al sistema antes de hacer sigkill para manejar un grace shutdown
-  restart: on-failure
+  restart: "no"
 
 x-health-checker-base: &health-checker-base
   build:
@@ -42,7 +42,7 @@ x-health-checker-base: &health-checker-base
     inicializador:
       condition: service_completed_successfully
   stop_grace_period: 10s
-  restart: on-failure
+  restart: "no"
 
 services:
   rabbitmq:

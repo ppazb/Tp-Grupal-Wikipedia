@@ -5,7 +5,7 @@ import os
 import signal
 import sys
 import threading
-from typing import List, Optional, Tuple
+from typing import Callable, List, Optional, Set, Tuple
 
 from src.common.runtime.latidos import iniciar_latidos_desde_entorno
 from src.health_checker.bully import BullyElection
@@ -52,6 +52,71 @@ def parse_monitored_nodes(nodes_str: str, exclude_name: str = "") -> List[str]:
         for item in nodes_str.split(",")
         if item.strip() and item.strip() != excl
     ]
+
+
+def crear_manejador_falla(
+    node_id: int,
+    own_name: str,
+    bully: BullyElection,
+    restarter: DockerRestarter,
+) -> Callable[[str, float], None]:
+    """Crea el callback de detección de fallas con reinicios paralelos sin duplicados."""
+    lock = threading.Lock()
+    reinicios_en_curso: Set[str] = set()
+
+    def _reiniciar_nodo(node_name: str) -> None:
+        try:
+            restarter.restart_container(node_name)
+        except Exception:
+            logger.exception(
+                "[LÍDER %d] Error inesperado al intentar reiniciar '%s'.",
+                node_id,
+                node_name,
+            )
+        finally:
+            with lock:
+                reinicios_en_curso.discard(node_name)
+
+    def on_node_failure(node_name: str, elapsed: float) -> None:
+        if node_name == own_name:
+            return
+        if not bully.is_leader():
+            logger.warning(
+                "[SEGUIDOR %d] Caída detectada del nodo '%s' (%.1fs sin latidos). "
+                "El Líder (%s) gestionará su recuperación.",
+                node_id,
+                node_name,
+                elapsed,
+                bully.leader_id,
+            )
+            return
+
+        with lock:
+            if node_name in reinicios_en_curso:
+                return
+            reinicios_en_curso.add(node_name)
+
+        logger.error(
+            "[LÍDER %d] Caída detectada por timeout del nodo '%s' (%.1fs sin latidos). "
+            "Ejecutando recuperación...",
+            node_id,
+            node_name,
+            elapsed,
+        )
+        hilo = threading.Thread(
+            target=_reiniciar_nodo,
+            name=f"recuperacion-{node_name}",
+            args=(node_name,),
+            daemon=True,
+        )
+        try:
+            hilo.start()
+        except BaseException:
+            with lock:
+                reinicios_en_curso.discard(node_name)
+            raise
+
+    return on_node_failure
 
 
 def main() -> int:
@@ -101,27 +166,12 @@ def main() -> int:
         on_leader_change=on_leader_change,
     )
 
-    def on_node_failure(node_name: str, elapsed: float) -> None:
-        if node_name == own_name:
-            return
-        if bully.is_leader():
-            logger.error(
-                "[LÍDER %d] Caída detectada por timeout del nodo '%s' (%.1fs sin latidos). "
-                "Ejecutando recuperación...",
-                node_id,
-                node_name,
-                elapsed,
-            )
-            restarter.restart_container(node_name)
-        else:
-            logger.warning(
-                "[SEGUIDOR %d] Caída detectada del nodo '%s' (%.1fs sin latidos). "
-                "El Líder (%s) gestionará su recuperación.",
-                node_id,
-                node_name,
-                elapsed,
-                bully.leader_id,
-            )
+    on_node_failure = crear_manejador_falla(
+        node_id=node_id,
+        own_name=own_name,
+        bully=bully,
+        restarter=restarter,
+    )
 
     monitor = HeartbeatMonitor(
         listen_port=heartbeat_port,

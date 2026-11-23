@@ -8,6 +8,7 @@ import unittest
 
 from src.common.runtime.latidos import EmisorLatidos
 from src.health_checker.bully import BullyElection
+from src.health_checker.main import crear_manejador_falla
 from src.health_checker.monitor import HeartbeatMonitor
 from src.health_checker.recovery import DockerRestarter
 
@@ -283,6 +284,92 @@ class TestDockerRecovery(unittest.TestCase):
         self.assertTrue(recibido, "El nuevo líder (health_checker-2) debió reiniciar a health_checker-3")
         self.assertIn("POST /containers/health_checker-3/start HTTP/1.1", server.requests)
         self.assertEqual(quien_reinicio[0], (2, "health_checker-3"))
+
+    def test_reinicios_en_paralelo_y_sin_duplicar_reinicio_en_curso(self):
+        """
+        Verifica que dos caídas simultáneas ejecuten restart_container en paralelo
+        en hilos aparte, y que una caída repetida del mismo nodo con reinicio en
+        curso no dispare un segundo reinicio hasta que termine el primero.
+        """
+        class FakeBully:
+            leader_id = 3
+
+            def is_leader(self) -> bool:
+                return True
+
+        class FakeRestarter:
+            def __init__(self):
+                self.lock = threading.Lock()
+                self.llamadas = []
+                self.liberar = threading.Event()
+                self.iniciados = {}
+                self.cantidad_por_nodo = {}
+
+            def registrar_espera(self, nombre: str) -> threading.Event:
+                evento = threading.Event()
+                with self.lock:
+                    self.iniciados[nombre] = evento
+                return evento
+
+            def restart_container(self, container_name: str) -> bool:
+                with self.lock:
+                    self.llamadas.append(container_name)
+                    self.cantidad_por_nodo[container_name] = (
+                        self.cantidad_por_nodo.get(container_name, 0) + 1
+                    )
+                    evento = self.iniciados.get(container_name)
+                if evento is not None:
+                    evento.set()
+                self.liberar.wait(timeout=5.0)
+                return True
+
+        restarter = FakeRestarter()
+        inicio_a = restarter.registrar_espera("date_router-1")
+        inicio_b = restarter.registrar_espera("q4_frequency-1")
+        on_failure = crear_manejador_falla(
+            node_id=3,
+            own_name="health_checker-3",
+            bully=FakeBully(),
+            restarter=restarter,
+        )
+
+        # 1. Cae date_router-1: entra en restart_container y queda bloqueado en liberar
+        on_failure("date_router-1", 4.1)
+        self.assertTrue(inicio_a.wait(timeout=2.0), "Debió iniciar el reinicio de date_router-1")
+
+        # 2. Caída repetida del mismo nodo mientras el reinicio sigue en curso: no duplica
+        on_failure("date_router-1", 4.6)
+
+        # 3. Cae un segundo nodo en paralelo mientras date_router-1 sigue bloqueado
+        on_failure("q4_frequency-1", 4.2)
+        self.assertTrue(
+            inicio_b.wait(timeout=2.0),
+            "El segundo nodo debió iniciar su reinicio en paralelo sin esperar al primero",
+        )
+
+        with restarter.lock:
+            self.assertEqual(restarter.cantidad_por_nodo.get("date_router-1"), 1)
+            self.assertEqual(restarter.cantidad_por_nodo.get("q4_frequency-1"), 1)
+
+        # Liberamos ambos reinicios y esperamos a que terminen sus hilos
+        restarter.liberar.set()
+        for hilo in threading.enumerate():
+            if hilo.name in ("recuperacion-date_router-1", "recuperacion-q4_frequency-1"):
+                hilo.join(timeout=2.0)
+
+        # 4. Una vez finalizado el intento, otra caída del mismo nodo sí vuelve a lanzarse
+        segundo_inicio_a = restarter.registrar_espera("date_router-1")
+        on_failure("date_router-1", 4.1)
+        self.assertTrue(
+            segundo_inicio_a.wait(timeout=2.0),
+            "Al finalizar el intento anterior, el nodo debe poder reiniciarse nuevamente",
+        )
+        for hilo in threading.enumerate():
+            if hilo.name == "recuperacion-date_router-1":
+                hilo.join(timeout=2.0)
+
+        with restarter.lock:
+            self.assertEqual(restarter.cantidad_por_nodo.get("date_router-1"), 2)
 
 
 if __name__ == "__main__":
