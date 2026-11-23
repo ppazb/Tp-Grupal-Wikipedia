@@ -20,6 +20,8 @@ class CambioPublicacion(IntEnum):
     CONFIRMAR_ENVIO = 2
     INICIAR_CIERRE = 3
     CONFIRMAR_CIERRE = 4
+    RETIRAR_EJECUCION = 5
+    RESUMEN_SALIDA = 6
 
 
 @dataclass
@@ -80,6 +82,7 @@ class PublicacionesEjecucion:
         self._wal = None
         self._inutilizable = False
         self._salidas = {}
+        self._retirada = False
         try:
             # Impide que dos publicadores del gateway recuperen y modifiquen la misma ejecución.
             fcntl.flock(self._bloqueo.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -102,7 +105,23 @@ class PublicacionesEjecucion:
             for datos in registros:
                 lector = LectorBinario(datos)
                 cambio = CambioPublicacion(lector.entero(BYTES_U8))
+                if self._retirada:
+                    raise ErrorSeguimientoEntrada('El WAL contiene cambios posteriores al retiro')
+                if cambio is CambioPublicacion.RETIRAR_EJECUCION:
+                    lector.finalizar()
+                    self.validar_liberacion()
+                    self._retirada = True
+                    continue
                 salida = (lector.texto(), lector.texto())
+                if cambio is CambioPublicacion.RESUMEN_SALIDA:
+                    total = lector.entero(BYTES_U64)
+                    lector.finalizar()
+                    if salida in self._salidas:
+                        raise ErrorSeguimientoEntrada('El resumen repite una salida')
+                    self._salidas[salida] = SalidaRegistrada(
+                        total=total, cierre_iniciado=True, cierre_confirmado=True,
+                    )
+                    continue
                 identidad = None
                 huella = None
                 if cambio in (CambioPublicacion.INICIAR_ENVIO, CambioPublicacion.CONFIRMAR_ENVIO):
@@ -122,10 +141,14 @@ class PublicacionesEjecucion:
         """Obtiene el seguimiento de un grupo y una entrada dentro de esta ejecución."""
         if self._inutilizable:
             raise ErrorSeguimientoEntrada('Las publicaciones requieren cerrar y recuperar la instancia')
+        if self._retirada and salida not in self._salidas:
+            raise EntradaFinalizada('La ejecución retirada no admite otras salidas')
         return self._salidas.setdefault(salida, SalidaRegistrada())
 
     def validar_envio(self, salida, identidad, huella):
         """Rechaza identidades reutilizadas con otro contenido o destino y salidas nuevas tras el cierre."""
+        if self._retirada:
+            raise EntradaFinalizada('La ejecución fue retirada; no admite nuevas publicaciones ni reenvíos')
         estado = self.consultar_salida(salida)
         anterior = estado.publicaciones.get(identidad)
         if anterior is not None and anterior.huella != huella:
@@ -225,3 +248,33 @@ class PublicacionesEjecucion:
                 self._wal.cerrar()
         finally:
             self._bloqueo.close()
+
+    def retirar_ejecucion(self):
+        """Sustituye los envíos por totales finales y una marca que impide volver a publicar."""
+        self.validar_liberacion()
+        if self._retirada:
+            return
+        try:
+            self._wal.reemplazar(self._resumenes_salidas())
+            self._retirada = True
+            for salida in self._salidas.values():
+                salida.publicaciones.clear()
+        except BaseException:
+            self._inutilizable = True
+            raise
+
+    def _resumenes_salidas(self):
+        """Entrega la cabecera, los totales cerrados y la marca final de retiro."""
+        registros = self._wal.iterar()
+        try:
+            yield next(registros)
+        finally:
+            registros.close()
+        for (grupo, entrada), estado in self._salidas.items():
+            escritor = EscritorBinario(MAX_BYTES_REGISTRO)
+            escritor.entero(CambioPublicacion.RESUMEN_SALIDA.value, BYTES_U8)
+            escritor.texto(grupo)
+            escritor.texto(entrada)
+            escritor.entero(estado.total, BYTES_U64)
+            yield escritor.resultado()
+        yield CambioPublicacion.RETIRAR_EJECUCION.value.to_bytes(BYTES_U8, 'big')

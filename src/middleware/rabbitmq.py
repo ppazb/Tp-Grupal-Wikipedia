@@ -73,6 +73,10 @@ class MiddlewareRabbitMQ(Middleware[Lote]):
                     configuracion, topologia, self._publicar_control_nuevo,
                     directorio=directorio,
                 )
+                for ejecucion in self._coordinacion.ejecuciones_retiradas():
+                    self._publicador.liberar_ejecucion(ejecucion)
+                for ejecucion in self._coordinacion.ejecuciones_pendientes_de_retiro():
+                    self.liberar_ejecucion(ejecucion)
                 self._coordinacion.reanudar_controles()
                 self._receptor = ReceptorDatos(
                     configuracion, self._conexion, informar_error=notificador,
@@ -199,6 +203,8 @@ class MiddlewareRabbitMQ(Middleware[Lote]):
         """Registra la limpieza de un recurso exclusivo de una ejecución."""
         self._validar_abierta()
         self._recursos.registrar(id_ejecucion, nombre, liberar)
+        if self._coordinacion is not None and self._coordinacion.ejecucion_retirada(id_ejecucion):
+            self._recursos.liberar_ejecucion(id_ejecucion)
 
     def liberar_ejecucion(self, id_ejecucion):
         """Libera una ejecución sin modificar colas ni recursos compartidos."""
@@ -208,10 +214,10 @@ class MiddlewareRabbitMQ(Middleware[Lote]):
         if self._coordinacion is not None:
             self._coordinacion.validar_liberacion(id_ejecucion)
         self._publicador.validar_liberacion(id_ejecucion)
-        self._recursos.liberar_ejecucion(id_ejecucion)
-        self._publicador.liberar_ejecucion(id_ejecucion)
         if self._coordinacion is not None:
             self._coordinacion.liberar_ejecucion(id_ejecucion)
+        self._publicador.liberar_ejecucion(id_ejecucion)
+        self._recursos.liberar_ejecucion(id_ejecucion)
 
     def cerrar(self):
         """Intenta todas las limpiezas y el cierre de canales y conexión."""

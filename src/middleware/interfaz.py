@@ -136,7 +136,9 @@ class ComunicacionGrupos(ABC, Generic[Contenido]):
         Requiere haber completado el procesamiento, las confirmaciones y las salidas.
         Conserva los recursos compartidos. Repetir una liberación exitosa no tiene
         efecto; ante fallos intenta las demás limpiezas, conserva las pendientes y
-        eleva ErrorRecursosEjecucion. No conserva un historial de ejecuciones.
+        eleva ErrorRecursosEjecucion. Conserva evidencia durable del retiro para
+        reconocer mensajes tardíos sin reabrir la ejecución. No permite reutilizar
+        su identificador para trabajo nuevo.
         """
 
     @abstractmethod
@@ -217,7 +219,8 @@ class Middleware(ComunicacionGrupos[Contenido]):
         ejecución. Otros cierres recibidos pero no atendidos siguen pendientes,
         también después de un reinicio. Un conjunto vacío no significa que terminaron sus publicaciones
         o las salidas del proceso. Es una consulta local sin espera ni mensajes.
-        Una ejecución desconocida o liberada tiene todas sus entradas pendientes;
+        Una ejecución desconocida tiene todas sus entradas pendientes; una retirada
+        durablemente no tiene entradas pendientes.
         un grupo sin entradas devuelve un conjunto vacío.
         """
 

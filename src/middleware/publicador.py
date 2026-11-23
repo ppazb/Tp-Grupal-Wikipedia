@@ -141,11 +141,12 @@ class PublicadorDatos:
             registro.validar_liberacion()
 
     def liberar_ejecucion(self, id_ejecucion):
-        """Libera el archivo y sus índices, conservando el historial de la ejecución."""
+        """Conserva los cierres finales y retira el detalle de lotes antes de cerrar el archivo."""
         self.validar_liberacion(id_ejecucion)
-        registro = self._registros.pop(id_ejecucion, None)
-        if registro is not None:
-            registro.cerrar_registro()
+        registro = self._registro_ejecucion(id_ejecucion)
+        registro.retirar_ejecucion()
+        registro.cerrar_registro()
+        del self._registros[id_ejecucion]
 
     def publicar_control(self, sobre, instancia=None):
         """Publica un control identificado sin reservar capacidad ni cambiar su ID."""

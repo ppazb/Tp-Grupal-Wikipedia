@@ -25,6 +25,13 @@ class _Barrera:
     fin_entregado: bool = False
 
 
+@dataclass(frozen=True)
+class _EntradaRetirada:
+    total: int
+    cierres: tuple
+    avances: dict
+
+
 class CoordinacionCierre:
     """Coordina entradas de un grupo sin esperas activas ni llamadas al negocio.
 
@@ -44,6 +51,7 @@ class CoordinacionCierre:
             for ruta in configuracion.rutas if ruta.destino == self._proceso.grupo
         }
         self._barreras = {}
+        self._retiradas = {}
         self._registro = RegistroEOF(directorio, configuracion)
         self._inutilizable = False
         try:
@@ -58,6 +66,8 @@ class CoordinacionCierre:
         self._comprobar_disponible()
         if sobre.origen not in self._productores.get(sobre.entrada.nombre, ()):
             raise ErrorMensajeInvalido("El productor no pertenece a la entrada")
+        if self.ejecucion_retirada(sobre.entrada.id_ejecucion):
+            return
         estado = self._barreras.get(sobre.entrada)
         if estado is not None and estado.fin_recibido and not self.lote_resuelto(sobre):
             raise ErrorSeguimientoEntrada("Se recibieron datos después del cierre consolidado")
@@ -77,6 +87,8 @@ class CoordinacionCierre:
     def resolver_lote(self, sobre):
         """Registra una sola contribución por lote y completa el aviso de avance correspondiente."""
         self.validar_datos(sobre)
+        if self.ejecucion_retirada(sobre.entrada.id_ejecucion):
+            return
         estado = self._estado(sobre.entrada)
         # El receptor procesa secuencialmente: durante el trabajo del negocio no
         # evalúa controles. Un lote sin resolver no aporta al contador de la barrera.
@@ -91,6 +103,9 @@ class CoordinacionCierre:
         """Persiste controles nuevos y reconoce repeticiones por entrada, tipo y emisor."""
         self._comprobar_disponible()
         self._validar_control(sobre)
+        if self.ejecucion_retirada(sobre.entrada.id_ejecucion):
+            self._validar_control_tardio(sobre)
+            return None
         entrada = sobre.entrada
         estado = self._estado(entrada)
         if sobre.tipo is TipoMensaje.EOF:
@@ -140,8 +155,10 @@ class CoordinacionCierre:
     def validar_liberacion(self, id_ejecucion):
         """Exige atender todas las entradas configuradas de una ejecución con actividad."""
         self._comprobar_disponible()
+        if self.ejecucion_retirada(id_ejecucion):
+            return
         estados = [self._barreras.get(Entrada(id_ejecucion, nombre)) for nombre in self._productores]
-        if any(estado is not None for estado in estados) and any(
+        if any(
             estado is None or not estado.fin_entregado for estado in estados
         ):
             raise ErrorSeguimientoEntrada("La ejecución tiene cierres locales pendientes")
@@ -149,6 +166,8 @@ class CoordinacionCierre:
     def entradas_pendientes(self, id_ejecucion, *, finalizando=None):
         """Devuelve entradas sin finalización atendida, exceptuando el callback actual."""
         self._comprobar_disponible()
+        if self.ejecucion_retirada(id_ejecucion):
+            return frozenset()
         pendientes = set()
         for nombre in self._productores:
             estado = self._barreras.get(Entrada(id_ejecucion, nombre))
@@ -157,9 +176,61 @@ class CoordinacionCierre:
         return frozenset(pendientes)
 
     def liberar_ejecucion(self, id_ejecucion):
-        """Libera los contadores y barreras de una ejecución con cierres locales atendidos."""
+        """Persiste el retiro y sustituye el detalle por lote por evidencia de sus cierres."""
         self.validar_liberacion(id_ejecucion)
-        self._registrar_cambio(CambioEOF.LIBERAR_EJECUCION, Entrada(id_ejecucion, ""))
+        if not self.ejecucion_retirada(id_ejecucion):
+            self._registrar_cambio(CambioEOF.LIBERAR_EJECUCION, Entrada(id_ejecucion, ""))
+        try:
+            self._registro.compactar(self._retiradas, self._resumenes_retirados())
+        except BaseException:
+            self._inutilizable = True
+            raise
+
+    def ejecucion_retirada(self, id_ejecucion):
+        """Consulta la evidencia durable que impide reabrir una ejecución terminada."""
+        self._comprobar_disponible()
+        return id_ejecucion in self._retiradas
+
+    def ejecuciones_retiradas(self):
+        """Entrega las identidades retiradas para completar su limpieza al reiniciar."""
+        self._comprobar_disponible()
+        return tuple(self._retiradas)
+
+    def ejecuciones_pendientes_de_retiro(self):
+        """Identifica ejecuciones con todos sus finalizadores atendidos y sin marca de retiro."""
+        self._comprobar_disponible()
+        ejecuciones = {entrada.id_ejecucion for entrada in self._barreras}
+        return tuple(ejecucion for ejecucion in ejecuciones if all(
+            (estado := self._barreras.get(Entrada(ejecucion, nombre))) is not None
+            and estado.fin_entregado for nombre in self._productores
+        ))
+
+    def _validar_control_tardio(self, sobre):
+        """Acepta repeticiones del cierre y rechaza totales contradictorios sin reabrirlo."""
+        resumen = self._retiradas[sobre.entrada.id_ejecucion][sobre.entrada]
+        if sobre.tipo is TipoMensaje.EOF:
+            if dict(resumen.cierres).get(sobre.origen) != sobre.contenido.total_lotes:
+                raise ErrorSeguimientoEntrada('El EOF contradice el cierre de una ejecución retirada')
+        elif sobre.tipo is TipoMensaje.PREPARAR_CIERRE:
+            if resumen.total != sobre.contenido.total_lotes:
+                raise ErrorSeguimientoEntrada('La preparación contradice una ejecución retirada')
+        elif sobre.tipo is TipoMensaje.AVANCE_REPLICA:
+            ultimo = resumen.avances.get(sobre.origen.instancia)
+            if ultimo is None or sobre.contenido.lotes_resueltos > ultimo:
+                raise ErrorSeguimientoEntrada('El avance excede el cierre de una ejecución retirada')
+
+    def _resumenes_retirados(self):
+        """Reconstruye registros mínimos por entrada, sin identidades individuales de lotes."""
+        for ejecucion, entradas in self._retiradas.items():
+            for entrada, resumen in entradas.items():
+                for productor, total in resumen.cierres:
+                    yield CambioEOF.CIERRE_PRODUCTOR, entrada, dict(productor=productor, valor=total)
+                yield CambioEOF.PREPARADA, entrada, dict(valor=resumen.total)
+                for instancia, total in resumen.avances.items():
+                    yield CambioEOF.AVANCE_RECIBIDO, entrada, dict(instancia=instancia, valor=total)
+                yield CambioEOF.FIN_RECIBIDO, entrada, {}
+                yield CambioEOF.FIN_ENTREGADO, entrada, {}
+            yield CambioEOF.LIBERAR_EJECUCION, Entrada(ejecucion, ''), {}
 
     def _estado(self, entrada):
         self._seguimiento.registrar_ejecucion(entrada.id_ejecucion)
@@ -273,6 +344,11 @@ class CoordinacionCierre:
     def _aplicar_cambio(self, cambio, entrada, productor, valor, instancia, id_entrada, indice):
         """Reconstruye una transición local sin publicar mensajes ni ejecutar el negocio."""
         if cambio is CambioEOF.LIBERAR_EJECUCION:
+            self._retiradas[entrada.id_ejecucion] = {
+                clave: _EntradaRetirada(estado.total, self._seguimiento.consultar(clave).cierres,
+                                       dict(estado.avances))
+                for clave, estado in self._barreras.items() if clave.id_ejecucion == entrada.id_ejecucion
+            }
             self._seguimiento.liberar_ejecucion(entrada.id_ejecucion)
             self._barreras = {clave: estado for clave, estado in self._barreras.items()
                               if clave.id_ejecucion != entrada.id_ejecucion}

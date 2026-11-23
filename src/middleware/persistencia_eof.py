@@ -75,6 +75,13 @@ class RegistroEOF:
     def registrar(self, cambio, entrada, *, productor=None, valor=0, instancia=0,
                   id_entrada=None, indice=0):
         """Escribe y sincroniza una transición antes de devolver el control."""
+        self._wal.agregar(self._codificar(cambio, entrada, productor=productor, valor=valor,
+                                         instancia=instancia, id_entrada=id_entrada, indice=indice))
+
+    @staticmethod
+    def _codificar(cambio, entrada, *, productor=None, valor=0, instancia=0,
+                   id_entrada=None, indice=0):
+        """Codifica una transición para agregarla o conservarla durante la compactación."""
         escritor = EscritorBinario(MAX_BYTES_REGISTRO)
         escritor.entero(cambio.value, BYTES_U8)
         escritor.texto(entrada.id_ejecucion)
@@ -89,7 +96,24 @@ class RegistroEOF:
             escritor.entero(instancia, BYTES_U32)
         if cambio in CON_VALOR:
             escritor.entero(valor, BYTES_U64)
-        self._wal.agregar(escritor.resultado())
+        return escritor.resultado()
+
+    def compactar(self, retiradas, resumenes):
+        """Conserva el historial activo y reemplaza el de ejecuciones retiradas por sus resúmenes."""
+        def registros_conservados():
+            registros = self._wal.iterar()
+            try:
+                yield next(registros)
+                for datos in registros:
+                    lector = LectorBinario(datos)
+                    lector.entero(BYTES_U8)
+                    if lector.texto() not in retiradas:
+                        yield datos
+                for cambio, entrada, argumentos in resumenes:
+                    yield self._codificar(cambio, entrada, **argumentos)
+            finally:
+                registros.close()
+        self._wal.reemplazar(registros_conservados())
 
     def recuperar(self):
         """Lee las transiciones en orden sin cargar el archivo completo en memoria."""

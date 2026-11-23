@@ -169,6 +169,9 @@ class ReceptorDatos:
                 )
             if self._coordinacion is not None:
                 self._coordinacion.validar_datos(sobre)
+                if self._coordinacion.ejecucion_retirada(sobre.entrada.id_ejecucion):
+                    self._resolver(canal, rechazar=False)
+                    return
                 if self._coordinacion.lote_resuelto(sobre):
                     self._coordinacion.resolver_lote(sobre)
                     self._resolver(canal, rechazar=False)
