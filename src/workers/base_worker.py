@@ -89,6 +89,7 @@ class Worker(ABC):
         self._cerrado = False
         self._clientes_vistos = set()
         self._indice_salida = 0
+        self._entrada_finalizando = None
         self.registrar_limpieza(self._clientes_vistos.clear)
 
     def ejecutar(self, apagado=None):
@@ -150,19 +151,12 @@ class Worker(ABC):
             raise RuntimeError('No hay un lote en procesamiento')
         return entrega.id_entrada
 
-    def _grupo_propio(self):
-        """Grupo de este proceso."""
-        configuracion = getattr(self, 'configuracion', None)
-        if configuracion is not None:
-            return configuracion.proceso.grupo
-        return self._middleware.identidad.grupo
-
     def envio(self, grupo, datos, *, clave_afinidad=None, instancia=None):
         """Arma una salida con identidad determinística: (id_entrada, indice).
 
         id_entrada identifica al lote de entrada que se procesa completo (ver id_de_salidas) o,
-        al cerrar una entrada, es 'eof:<grupo>:<id_ejecucion>' (el grupo evita que dos grupos
-        que publican al cierre compartan ID). indice cuenta las salidas de ese id_entrada
+        al cerrar una entrada, deriva de ejecución, entrada y réplica productora.
+        indice cuenta las salidas de ese id_entrada
         en el orden en que se arman, así que reprocesar el mismo lote en el mismo
         orden produce los mismos identificadores.
         """
@@ -170,7 +164,12 @@ class Worker(ABC):
         if entrega is not None:
             id_entrada = id_de_salidas(entrega)
         else:
-            id_entrada = f'eof:{self._grupo_propio()}:{datos.entrada.id_ejecucion}'
+            entrada = self._entrada_finalizando
+            if entrada is None or datos.entrada.id_ejecucion != entrada.id_ejecucion:
+                raise RuntimeError('El envío requiere una entrada activa de la misma ejecución')
+            productor = self._middleware.identidad
+            identidad = (productor.grupo, productor.instancia, entrada.id_ejecucion, entrada.nombre)
+            id_entrada = str(uuid5(NAMESPACE_URL, 'finalizacion:' + repr(identidad)))
         indice = self._indice_salida
         self._indice_salida += 1
         return EnvioDatos.nuevo(
@@ -190,10 +189,15 @@ class Worker(ABC):
         self._middleware.detener_recepcion()
 
     def _finalizar(self, entrada):
+        """Mantiene una identidad estable al ejecutar o retomar el cierre de una entrada."""
         self.comprobar_detencion()
         self._indice_salida = 0
-        self.finalizar_entrada(entrada)
-        self.comprobar_detencion()
+        self._entrada_finalizando = entrada
+        try:
+            self.finalizar_entrada(entrada)
+            self.comprobar_detencion()
+        finally:
+            self._entrada_finalizando = None
         if not self._middleware.entradas_pendientes(entrada.id_ejecucion):
             self._clientes_vistos.discard(entrada.id_ejecucion)
             for destino in self.destinos_errores:
@@ -211,7 +215,12 @@ class Worker(ABC):
 
     @abstractmethod
     def finalizar_entrada(self, entrada):
-        """Emite resultados pendientes y cierra las salidas que completó esta entrada."""
+        """Recupera pendientes, completa publicaciones y cierres y persiste el fin del negocio.
+
+        Puede delegar en FinalizadorRecuperable. Debe poder repetirse después de
+        una caída con las mismas salidas; conserva su preparación hasta la limpieza
+        segura. Solo retorna cuando sus efectos son recuperables.
+        """
 
 
 def destinos_errores(configuracion):

@@ -62,6 +62,7 @@ class ReceptorDatos:
         self._error_procesamiento = None
         self._retener_pendiente = False
         self.entrega_actual = None
+        self.entrada_finalizando = None
 
     def recibir(
         self, procesar: Callable[[Evento], None], *,
@@ -82,6 +83,11 @@ class ReceptorDatos:
         self._recibiendo = True
         self._error_procesamiento = None
         try:
+            pendiente = (self._coordinacion.siguiente_finalizacion_pendiente()
+                         if self._coordinacion is not None else None)
+            if pendiente is not None:
+                self._finalizar_negocio(pendiente, procesar, al_finalizar)
+                return
             while not self._detenido:
                 self._entrega = None
                 self._esperar(canal)
@@ -211,17 +217,26 @@ class ReceptorDatos:
             self._error_procesamiento = error
             raise
         if evento is not None:
-            try:
-                if al_finalizar is None:
-                    procesar(evento)
-                else:
-                    al_finalizar(evento.entrada)
-                self._coordinacion.confirmar_fin(sobre.entrada)
-            except BaseException as error:
-                self._error_procesamiento = error
-                raise
+            self._finalizar_negocio(evento, procesar, al_finalizar)
         self._resolver(canal, rechazar=False)
         return evento is not None
+
+    def _finalizar_negocio(self, evento, procesar, al_finalizar):
+        """Ejecuta o retoma el cierre y persiste su terminación solo si el negocio retorna."""
+        self.entrada_finalizando = evento.entrada
+        try:
+            self._conexion.comprobar_apagado()
+            if al_finalizar is None:
+                procesar(evento)
+            else:
+                al_finalizar(evento.entrada)
+            self._conexion.comprobar_apagado()
+            self._coordinacion.confirmar_fin(evento.entrada)
+        except BaseException as error:
+            self._error_procesamiento = error
+            raise
+        finally:
+            self.entrada_finalizando = None
 
     def _resolver(self, canal, *, rechazar):
         self._conexion.comprobar_apagado()

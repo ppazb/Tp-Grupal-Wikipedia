@@ -176,7 +176,9 @@ class MiddlewareRabbitMQ(Middleware[Lote]):
             raise ErrorSeguimientoEntrada("La ejecución debe tener un identificador no vacío")
         if self._coordinacion is None:
             return frozenset()
-        return self._coordinacion.entradas_pendientes(id_ejecucion)
+        return self._coordinacion.entradas_pendientes(
+            id_ejecucion, finalizando=self._receptor.entrada_finalizando,
+        )
 
     def detener_recepcion(self):
         """Detiene nuevas entregas sin interrumpir el procesamiento en curso."""

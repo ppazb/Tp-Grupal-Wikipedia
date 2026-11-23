@@ -36,3 +36,4 @@ from .interfaz import (
     OperacionInterrumpida,
 )
 from .recursos_ejecucion import RecursosPorEjecucion
+from .finalizacion import FinalizadorRecuperable

@@ -117,6 +117,14 @@ class CoordinacionCierre:
         if not estado.fin_entregado:
             self._registrar_cambio(CambioEOF.FIN_ENTREGADO, entrada)
 
+    def siguiente_finalizacion_pendiente(self):
+        """Obtiene un cierre recibido cuyo callback todavía no terminó durablemente."""
+        self._comprobar_disponible()
+        for entrada, estado in self._barreras.items():
+            if estado.fin_recibido and not estado.fin_entregado:
+                return FinEntrada(entrada)
+        return None
+
     def reanudar_controles(self):
         """Completa publicaciones pendientes a partir de las transiciones recuperadas."""
         self._comprobar_disponible()
@@ -138,13 +146,13 @@ class CoordinacionCierre:
         ):
             raise ErrorSeguimientoEntrada("La ejecución tiene cierres locales pendientes")
 
-    def entradas_pendientes(self, id_ejecucion):
-        """Devuelve entradas sin cierre consolidado local, incluidas las que no tuvieron actividad."""
+    def entradas_pendientes(self, id_ejecucion, *, finalizando=None):
+        """Devuelve entradas sin finalización atendida, exceptuando el callback actual."""
         self._comprobar_disponible()
         pendientes = set()
         for nombre in self._productores:
             estado = self._barreras.get(Entrada(id_ejecucion, nombre))
-            if estado is None or not estado.fin_recibido:
+            if (estado is None or not estado.fin_entregado) and Entrada(id_ejecucion, nombre) != finalizando:
                 pendientes.add(nombre)
         return frozenset(pendientes)
 

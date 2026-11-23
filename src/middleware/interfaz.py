@@ -188,6 +188,11 @@ class Middleware(ComunicacionGrupos[Contenido]):
         La finalización es síncrona: puede publicar acumulados y luego cerrar sus
         salidas con finalizar_entrada. El cierre recibido se confirma después de
         que el callback retorna correctamente; sus errores se propagan.
+        El callback debe persistir su preparación antes de publicar y el fin del
+        negocio antes de retornar. FinalizadorRecuperable ordena esas operaciones.
+        Los cierres recibidos sin finalización atendida se retoman desde el WAL
+        al llamar recibir, antes de consumir otra entrega. El callback puede
+        repetirse y debe reconstruir las mismas salidas sin duplicar efectos.
         Las salidas a cerrar y sus dependencias las determina el negocio.
         Todas las réplicas deben recibir, incluso sin datos propios, para atender
         la coordinación. FinEntrada cierra una dependencia, no toda la ejecución.
@@ -205,11 +210,12 @@ class Middleware(ComunicacionGrupos[Contenido]):
 
     @abstractmethod
     def entradas_pendientes(self, id_ejecucion: str) -> frozenset[str]:
-        """Devuelve nombres de entradas configuradas sin cierre consolidado recibido localmente.
+        """Devuelve nombres de entradas configuradas cuya finalización no fue atendida.
 
         Incluye entradas sin datos ni controles recibidos. Dentro del finalizador,
-        la entrada que lo activó ya no está pendiente, aunque el callback siga en
-        ejecución. Un conjunto vacío no significa que terminaron sus publicaciones
+        la entrada que lo activó se excluye, aunque el callback siga en
+        ejecución. Otros cierres recibidos pero no atendidos siguen pendientes,
+        también después de un reinicio. Un conjunto vacío no significa que terminaron sus publicaciones
         o las salidas del proceso. Es una consulta local sin espera ni mensajes.
         Una ejecución desconocida o liberada tiene todas sus entradas pendientes;
         un grupo sin entradas devuelve un conjunto vacío.
