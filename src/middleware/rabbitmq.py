@@ -73,6 +73,7 @@ class MiddlewareRabbitMQ(Middleware[Lote]):
                     configuracion, topologia, self._publicar_control_nuevo,
                     directorio=directorio,
                 )
+                self._coordinacion.reanudar_controles()
                 self._receptor = ReceptorDatos(
                     configuracion, self._conexion, informar_error=notificador,
                     capacidad=self._capacidad, topologia=topologia, coordinacion=self._coordinacion,

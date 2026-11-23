@@ -117,6 +117,18 @@ class CoordinacionCierre:
         if not estado.fin_entregado:
             self._registrar_cambio(CambioEOF.FIN_ENTREGADO, entrada)
 
+    def reanudar_controles(self):
+        """Completa publicaciones pendientes a partir de las transiciones recuperadas."""
+        self._comprobar_disponible()
+        for entrada, estado in self._barreras.items():
+            es_coordinadora = self._proceso.instancia == self._coordinadora(entrada)
+            if es_coordinadora:
+                self._enviar_preparacion_pendiente(entrada, estado)
+            if estado.preparada:
+                self._informar_avance(entrada, estado)
+            if es_coordinadora:
+                self._enviar_fin_pendiente(entrada, estado)
+
     def validar_liberacion(self, id_ejecucion):
         """Exige atender todas las entradas configuradas de una ejecución con actividad."""
         self._comprobar_disponible()
@@ -175,6 +187,10 @@ class CoordinacionCierre:
         if self._seguimiento.validar_cierre(entrada, sobre.origen, total_productor):
             self._registrar_cambio(CambioEOF.CIERRE_PRODUCTOR, entrada,
                                   productor=sobre.origen, valor=total_productor)
+        self._enviar_preparacion_pendiente(entrada, estado)
+
+    def _enviar_preparacion_pendiente(self, entrada, estado):
+        """Publica la preparación al reunir los cierres si todavía no confirmó su envío."""
         total = self._seguimiento.consultar(entrada).total_esperado
         if total is not None and not estado.preparacion_enviada:
             self._emitir(TipoMensaje.PREPARAR_CIERRE, entrada, PrepararCierre(total))
@@ -215,9 +231,14 @@ class CoordinacionCierre:
         if instancia not in estado.avances or nuevo != anterior:
             self._registrar_cambio(CambioEOF.AVANCE_RECIBIDO, sobre.entrada,
                                   instancia=instancia, valor=nuevo)
-        if len(estado.avances) == self._cantidad and total == estado.total and not estado.fin_enviado:
-            self._emitir(TipoMensaje.FIN_ENTRADA, sobre.entrada, None)
-            self._registrar_cambio(CambioEOF.FIN_ENVIADO, sobre.entrada)
+        self._enviar_fin_pendiente(sobre.entrada, estado)
+
+    def _enviar_fin_pendiente(self, entrada, estado):
+        """Publica FIN cuando todas las réplicas cubren el total y falta confirmar su envío."""
+        if (estado.preparacion_enviada and len(estado.avances) == self._cantidad
+                and estado.total_resuelto == estado.total and not estado.fin_enviado):
+            self._emitir(TipoMensaje.FIN_ENTRADA, entrada, None)
+            self._registrar_cambio(CambioEOF.FIN_ENVIADO, entrada)
 
     def cerrar_registro(self):
         """Libera el WAL de coordinación sin borrar el estado recuperable."""
