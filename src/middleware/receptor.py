@@ -52,6 +52,9 @@ class ReceptorDatos:
         if self._colas is None:
             raise ErrorConfiguracion("El grupo local no tiene rutas de recepción")
         self._capacidad = capacidad or CapacidadDatos(conexion, topologia)
+        self._canal = conexion.crear_canal()
+        self._canal.tx_select()
+        self._confirmacion_interrumpida = False
         self._recibiendo = False
         self._detenido = False
         self._consumidores = []
@@ -69,7 +72,8 @@ class ReceptorDatos:
         al_finalizar: Optional[Callable[[Entrada], None]] = None,
     ) -> None:
         """Atiende controles y entrega datos o ejecuta la finalización de una entrada."""
-        canal = self._conexion.canal
+        self._conexion.canal
+        canal = self._canal
         if self._recibiendo:
             raise ErrorRecepcion("La recepción no admite llamadas reentrantes")
         if self._consumidores or self._pendiente is not None or self._cola_pendiente is not None:
@@ -127,7 +131,7 @@ class ReceptorDatos:
 
     def _detener(self):
         self._detenido = True
-        self._cancelar_consumidores(self._conexion.canal)
+        self._cancelar_consumidores(self._canal)
 
     def _esperar(self, canal):
         canal.basic_qos(
@@ -243,13 +247,15 @@ class ReceptorDatos:
 
     def _resolver(self, canal, *, rechazar):
         self._conexion.comprobar_apagado()
-        if rechazar:
-            canal.basic_reject(delivery_tag=self._pendiente, requeue=False)
-        else:
-            canal.basic_ack(delivery_tag=self._pendiente)
+        try:
+            self._capacidad.resolver_entrega(
+                canal, self._cola_pendiente, self._pendiente,
+                rechazar=rechazar, reservada=self._reservada,
+            )
+        except BaseException:
+            self._confirmacion_interrumpida = True
+            raise
         self._pendiente = None
-        if self._reservada:
-            self._capacidad.devolver(self._cola_pendiente)
         self._cola_pendiente = None
         self._reservada = False
 
@@ -312,9 +318,17 @@ class ReceptorDatos:
     def _liberar_consumidores(self, canal):
         """Reencola una entrega interrumpida sin devolver su permiso asociado."""
         self._conexion.preparar_limpieza()
+        if self._confirmacion_interrumpida:
+            # No se conoce si tx_commit llegó al broker. Cerrar evita confirmar
+            # otra vez o devolver un permiso adicional durante la limpieza.
+            if canal.is_open:
+                canal.close()
+            self._consumidores.clear()
+            return
         try:
             if self._pendiente is not None and not self._retener_pendiente and canal.is_open:
                 canal.basic_nack(delivery_tag=self._pendiente, requeue=True)
+                canal.tx_commit()
                 self._pendiente = None
                 self._cola_pendiente = None
         finally:

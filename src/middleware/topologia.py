@@ -150,7 +150,7 @@ class TopologiaGrupos:
 
     def marca_capacidad(self):
         """Identifica una topología y su límite de capacidad para validar el arranque."""
-        partes = sorted(self._colas)
+        partes = ["permisos-transaccionales-amqp"] + sorted(self._colas)
         partes.extend("|".join(enlace) for enlace in sorted(self._enlaces))
         partes.append(str(self._configuracion.limites.max_mensajes_por_cola))
         huella = hashlib.sha256("\n".join(partes).encode("utf-8")).hexdigest()

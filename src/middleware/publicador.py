@@ -261,34 +261,26 @@ class PublicadorDatos:
         return int.from_bytes(huella, byteorder="big") % cantidad
 
     def _publicar_cuerpo(self, destino, cuerpo, *, reservar_capacidad=True):
+        propiedades = pika.BasicProperties(
+            headers={CABECERA_CAPACIDAD: VERSION_CAPACIDAD} if reservar_capacidad else None,
+            content_type="application/octet-stream",
+            delivery_mode=pika.spec.PERSISTENT_DELIVERY_MODE,
+        )
         if reservar_capacidad:
-            self._capacidad.adquirir(destino.cola)
-        try:
-            canal = self._conexion.canal
-        except OperacionInterrumpida:
-            # Aún no se invocó basic_publish: este permiso no respalda ningún dato.
-            if reservar_capacidad:
-                self._capacidad.devolver(destino.cola, durante_apagado=True)
-            raise
+            self._capacidad.publicar_dato(destino, cuerpo, propiedades)
+            return
+        canal = self._conexion.canal
         try:
             canal.basic_publish(
                 exchange=destino.exchange,
                 routing_key=destino.clave,
                 body=cuerpo,
                 mandatory=True,
-                properties=pika.BasicProperties(
-                    headers={CABECERA_CAPACIDAD: VERSION_CAPACIDAD} if reservar_capacidad else None,
-                    content_type="application/octet-stream",
-                    delivery_mode=pika.spec.PERSISTENT_DELIVERY_MODE,
-                ),
+                properties=propiedades,
             )
         except pika.exceptions.UnroutableError as error:
-            if reservar_capacidad:
-                self._capacidad.devolver(destino.cola)
             raise ErrorMensaje("El mensaje no llegó a una cola destinataria") from error
         except pika.exceptions.NackError as error:
-            if reservar_capacidad:
-                self._capacidad.devolver(destino.cola)
             # Un NACK puede indicar una cola llena, pero no identifica la causa.
             raise PublicacionRechazada("El broker no admitió la publicación") from error
         except (pika.exceptions.AMQPConnectionError, OSError) as error:
