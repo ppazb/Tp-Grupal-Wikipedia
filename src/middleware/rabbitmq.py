@@ -55,6 +55,9 @@ class MiddlewareRabbitMQ(Middleware[Lote]):
         self._capacidad = None
         self._publicador = None
         self._coordinacion = None
+        directorio = (Path(directorio_eof if directorio_eof is not None
+                           else os.environ.get('EOF_WAL_DIR', 'data/eof'))
+                      / self._identidad.grupo / str(self._identidad.instancia))
         topologia = TopologiaGrupos(configuracion)
         notificador = self._resolver_notificador(configuracion, informar_error, topologia)
         try:
@@ -62,14 +65,13 @@ class MiddlewareRabbitMQ(Middleware[Lote]):
             topologia.declarar(self._conexion)
             self._capacidad = CapacidadDatos(self._conexion, topologia)
             self._publicador = PublicadorDatos(
-                configuracion, self._conexion, capacidad=self._capacidad, topologia=topologia,
+                configuracion, self._conexion, directorio=directorio,
+                capacidad=self._capacidad, topologia=topologia,
             )
             if topologia.colas_recepcion() is not None:
                 self._coordinacion = CoordinacionCierre(
                     configuracion, topologia, self._publicar_control_nuevo,
-                    directorio=Path(directorio_eof if directorio_eof is not None
-                                    else os.environ.get('EOF_WAL_DIR', 'data/eof'))
-                    / self._identidad.grupo / str(self._identidad.instancia),
+                    directorio=directorio,
                 )
                 self._receptor = ReceptorDatos(
                     configuracion, self._conexion, informar_error=notificador,
@@ -202,6 +204,7 @@ class MiddlewareRabbitMQ(Middleware[Lote]):
             raise ErrorRecursosEjecucion("No se puede liberar una ejecución durante una operación")
         if self._coordinacion is not None:
             self._coordinacion.validar_liberacion(id_ejecucion)
+        self._publicador.validar_liberacion(id_ejecucion)
         self._recursos.liberar_ejecucion(id_ejecucion)
         self._publicador.liberar_ejecucion(id_ejecucion)
         if self._coordinacion is not None:
@@ -217,9 +220,9 @@ class MiddlewareRabbitMQ(Middleware[Lote]):
         self._cerrando = True
         errores = []
         try:
-            if self._publicador is not None:
-                self._publicador.descartar_seguimiento()
             limpiezas = [self._recursos.cerrar, self._conexion.cerrar]
+            if self._publicador is not None:
+                limpiezas.append(self._publicador.cerrar_registros)
             if self._coordinacion is not None:
                 limpiezas.append(self._coordinacion.cerrar_registro)
             for liberar in limpiezas:

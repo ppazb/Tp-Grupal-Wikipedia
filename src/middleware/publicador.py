@@ -3,30 +3,34 @@
 import hashlib
 from collections.abc import Sequence
 from dataclasses import dataclass
+from pathlib import Path
 
 import pika
 
 from ..common.protocol.dto import CierreProductor, Datos, EnvioDatos, SobreMensaje, TipoMensaje
-from ..common.protocol.primitivas import BYTES_U64
+from ..common.protocol.primitivas import EscritorBinario
 from .broker_connection import ConexionBroker
 from .capacidad import CABECERA_CAPACIDAD, VERSION_CAPACIDAD, CapacidadDatos
 from .codificacion import CodificadorMensajes
 from .configuracion import ConfiguracionComunicacion
 from .interfaz import (
-    EntradaFinalizada, ErrorConexion, ErrorMensaje, ErrorMiddleware, ErrorPublicacionParcial,
+    ErrorConexion, ErrorMensaje, ErrorMiddleware, ErrorPublicacionParcial,
     PublicacionRechazada, OperacionInterrumpida,
 )
 from .topologia import TopologiaGrupos
+from .seguimiento_publicaciones import PublicacionesEjecucion, ruta_registro
 
 
-MAXIMO_LOTES = 18446744073709551615
+@dataclass(frozen=True)
+class _EnvioPreparado:
+    salida: tuple
+    identidad: tuple
+    destino: object
+    cuerpo: bytes
+    huella: bytes
 
 
-@dataclass
-class _EstadoSalida:
-    total: int = 0
-    cierre_iniciado: bool = False
-    cierre_confirmado: bool = False
+MAX_BYTES_DIRECCION = 4096
 
 
 class PublicadorDatos:
@@ -39,7 +43,7 @@ class PublicadorDatos:
 
     def __init__(
         self, configuracion: ConfiguracionComunicacion, conexion: ConexionBroker,
-        *, capacidad=None, topologia=None,
+        *, directorio, capacidad=None, topologia=None,
     ):
         self._configuracion = configuracion
         self._conexion = conexion
@@ -52,7 +56,8 @@ class PublicadorDatos:
             self._topologia.declarar(conexion)
         self._capacidad = capacidad or CapacidadDatos(conexion, self._topologia)
         self._publicando = False
-        self._salidas = {}
+        self._directorio = Path(directorio) / "publicaciones"
+        self._registros = {}
         try:
             conexion.canal.confirm_delivery()
         except (pika.exceptions.AMQPConnectionError, OSError) as error:
@@ -71,8 +76,8 @@ class PublicadorDatos:
         Codifica todas las salidas antes de enviar la primera; una secuencia vacía
         no publica nada. Si un envío falla después de otros confirmados, eleva
         ErrorPublicacionParcial con esas salidas y la causa del fallo.
-        Reutilizar los mismos EnvioDatos conserva sus IDs. Repetir el conjunto
-        puede duplicar las salidas confirmadas; identificar no deduplica.
+        Registra los intentos antes del primer envío. Repetir una salida ya
+        confirmada no vuelve a publicarla ni aumenta el total del EOF.
         """
         if self._publicando:
             raise ErrorMiddleware("La publicación no admite llamadas reentrantes")
@@ -81,6 +86,17 @@ class PublicadorDatos:
         self._publicando = True
         try:
             preparados = [self._preparar(envio) for envio in envios]
+            identidades = {}
+            for preparado in preparados:
+                clave = (preparado.salida, preparado.identidad)
+                if clave in identidades and identidades[clave] != preparado.huella:
+                    raise ErrorMensaje("La misma identidad tiene dos contenidos o destinos en la publicación")
+                identidades[clave] = preparado.huella
+            for preparado in preparados:
+                grupo, entrada = preparado.salida
+                self._registro_ejecucion(entrada.id_ejecucion).iniciar_envio(
+                    (grupo, entrada.nombre), preparado.identidad, preparado.huella,
+                )
             self._enviar_preparados(preparados)
         finally:
             self._publicando = False
@@ -100,27 +116,36 @@ class PublicadorDatos:
         self._codificador.codificar(sobre)
         instancia = self._topologia.instancia_coordinadora(grupo, entrada)
         destino = self._topologia.destino_control(grupo, entrada.nombre, instancia)
-        estado = self._salidas.setdefault((grupo, entrada), _EstadoSalida())
+        registro = self._registro_ejecucion(entrada.id_ejecucion)
+        salida = (grupo, entrada.nombre)
+        estado = registro.iniciar_cierre(salida)
         if estado.cierre_confirmado:
             return
         cuerpo = self._codificador.codificar(SobreMensaje(
             entrada, TipoMensaje.EOF, self._configuracion.proceso, CierreProductor(estado.total),
             id_cierre, 0,
         ))
-        estado.cierre_iniciado = True
         self._publicando = True
         try:
             self._publicar_cuerpo(destino, cuerpo, reservar_capacidad=False)
-            estado.cierre_confirmado = True
+            registro.confirmar_cierre(salida)
         finally:
             self._publicando = False
 
+    def validar_liberacion(self, id_ejecucion):
+        """Exige que todas las salidas conocidas hayan confirmado su EOF."""
+        registro = self._registros.get(id_ejecucion)
+        if registro is None and ruta_registro(self._directorio, id_ejecucion).exists():
+            registro = self._registro_ejecucion(id_ejecucion)
+        if registro is not None:
+            registro.validar_liberacion()
+
     def liberar_ejecucion(self, id_ejecucion):
-        """Elimina contadores y cierres de una ejecución cuya limpieza autorizó el llamador."""
-        self._salidas = {
-            identidad: estado for identidad, estado in self._salidas.items()
-            if identidad[1].id_ejecucion != id_ejecucion
-        }
+        """Libera el archivo y sus índices, conservando el historial de la ejecución."""
+        self.validar_liberacion(id_ejecucion)
+        registro = self._registros.pop(id_ejecucion, None)
+        if registro is not None:
+            registro.cerrar_registro()
 
     def publicar_control(self, sobre, instancia=None):
         """Publica un control identificado sin reservar capacidad ni cambiar su ID."""
@@ -138,26 +163,45 @@ class PublicadorDatos:
         finally:
             self._publicando = False
 
-    def descartar_seguimiento(self):
-        """Libera todos los contadores locales al cerrar el middleware, sin emitir EOF."""
-        self._salidas.clear()
+    def cerrar_registros(self):
+        """Cierra todos los WAL abiertos sin borrar publicaciones ni emitir EOF."""
+        errores = []
+        for registro in self._registros.values():
+            try:
+                registro.cerrar_registro()
+            except Exception as error:
+                errores.append(error)
+        self._registros.clear()
+        if errores:
+            raise ExceptionGroup("Falló el cierre del seguimiento de publicaciones", errores)
+
+    def _registro_ejecucion(self, id_ejecucion):
+        """Recupera el seguimiento de una ejecución antes de publicar o cerrar sus salidas."""
+        if id_ejecucion not in self._registros:
+            self._registros[id_ejecucion] = PublicacionesEjecucion(
+                self._directorio, self._configuracion, id_ejecucion,
+            )
+        return self._registros[id_ejecucion]
 
     def _enviar_preparados(self, preparados):
+        """Publica intentos pendientes y registra sus confirmaciones de manera individual."""
         confirmadas = []
-        for identidad, destino, cuerpo in preparados:
-            estado = self._salidas.setdefault(identidad, _EstadoSalida())
+        for preparado in preparados:
+            grupo, entrada = preparado.salida
+            registro = self._registro_ejecucion(entrada.id_ejecucion)
+            salida = (grupo, entrada.nombre)
             try:
-                if estado.total == MAXIMO_LOTES:
-                    raise ErrorMensaje("La cantidad de lotes excede el rango u64")
-                self._publicar_cuerpo(destino, cuerpo)
+                anterior = registro.validar_envio(salida, preparado.identidad, preparado.huella)
+                if not anterior.confirmada:
+                    self._publicar_cuerpo(preparado.destino, preparado.cuerpo)
+                    registro.confirmar_envio(salida, preparado.identidad)
             except OperacionInterrumpida:
                 raise
             except ErrorMiddleware as error:
                 if confirmadas:
-                    raise ErrorPublicacionParcial(confirmadas, identidad) from error
+                    raise ErrorPublicacionParcial(confirmadas, preparado.salida) from error
                 raise
-            estado.total += 1
-            confirmadas.append(identidad)
+            confirmadas.append(preparado.salida)
 
     def _preparar(self, envio):
         if not isinstance(envio, EnvioDatos) or not isinstance(envio.datos, Datos):
@@ -173,9 +217,6 @@ class PublicadorDatos:
             indice=envio.indice,
         )
         cuerpo = self._codificador.codificar(sobre)
-        estado = self._salidas.get((envio.grupo, sobre.entrada))
-        if estado is not None and estado.cierre_iniciado:
-            raise EntradaFinalizada("El productor ya inició el cierre de esa salida")
         ruta = self._configuracion.obtener_ruta(
             sobre.origen.grupo, envio.grupo, sobre.entrada.nombre,
         )
@@ -185,7 +226,15 @@ class PublicadorDatos:
         destino = self._topologia.destino_datos(
             envio.grupo, sobre.entrada.nombre, instancia,
         )
-        return (envio.grupo, sobre.entrada), destino, cuerpo
+        direccion = EscritorBinario(MAX_BYTES_DIRECCION)
+        for campo in (destino.exchange, destino.clave, destino.cola):
+            direccion.texto(campo)
+        huella = hashlib.sha256(direccion.resultado() + cuerpo).digest()
+        identidad = (envio.id_entrada, envio.indice)
+        self._registro_ejecucion(sobre.entrada.id_ejecucion).validar_envio(
+            (envio.grupo, sobre.entrada.nombre), identidad, huella,
+        )
+        return _EnvioPreparado((envio.grupo, sobre.entrada), identidad, destino, cuerpo, huella)
 
     def _instancia_destinataria(self, envio):
         clave = envio.clave_afinidad
