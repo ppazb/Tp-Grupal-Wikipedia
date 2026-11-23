@@ -107,6 +107,43 @@ class TestHeartbeatSystem(unittest.TestCase):
         self.assertEqual(fallas_detectadas[0][0], "q4_frequency-1")
         self.assertGreaterEqual(fallas_detectadas[0][1], 0.4)
 
+    def test_precarga_de_nodos_iniciales_detecta_nodo_que_nunca_envio_latidos(self):
+        """
+        Si un nodo pre-cargado en initial_nodes (MONITORED_NODES) ya estaba caído
+        antes de enviar su primer latido, el monitor igual detecta su timeout.
+        """
+        fallas_detectadas = []
+        evento_falla = threading.Event()
+
+        def on_failure(node_name: str, elapsed: float):
+            fallas_detectadas.append((node_name, elapsed))
+            evento_falla.set()
+
+        monitor = HeartbeatMonitor(
+            listen_port=self.monitor_port_1,
+            node_timeout=0.3,
+            check_interval=0.05,
+            on_node_failure=on_failure,
+            initial_nodes=["worker_muerto_de_entrada", "health_checker-2"],
+        )
+        self.monitors.append(monitor)
+        monitor.start()
+
+        # Solo health_checker-2 envía latidos; worker_muerto_de_entrada nunca emite nada
+        emisor_hc2 = EmisorLatidos(
+            nombre_nodo="health_checker-2",
+            destinos=[("127.0.0.1", self.monitor_port_1)],
+            intervalo=0.08,
+        )
+        self.emisores.append(emisor_hc2)
+        emisor_hc2.start()
+
+        detectado = evento_falla.wait(timeout=1.5)
+        self.assertTrue(detectado, "Debe detectar el nodo pre-cargado que nunca emitió latido")
+        nodos_fallidos = [nombre for nombre, _ in fallas_detectadas]
+        self.assertIn("worker_muerto_de_entrada", nodos_fallidos)
+        self.assertNotIn("health_checker-2", nodos_fallidos)
+
 
 if __name__ == "__main__":
     unittest.main()

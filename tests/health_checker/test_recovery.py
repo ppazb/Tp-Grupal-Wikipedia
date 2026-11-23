@@ -182,6 +182,108 @@ class TestDockerRecovery(unittest.TestCase):
         self.assertEqual(server.requests[0], "POST /containers/q4_frequency-1/start HTTP/1.1")
         self.assertEqual(quien_reinicio, [(3, "q4_frequency-1")])
 
+    def test_recuperacion_de_health_checker_caido_por_nuevo_lider(self):
+        """
+        Verifica que los health_checkers se vigilen entre sí reutilizando EmisorLatidos
+        y HeartbeatMonitor: al caer el Líder (health_checker-3), health_checker-2 asume
+        el liderazgo y reinicia el contenedor 'health_checker-3'.
+        """
+        server = FakeDockerUnixServer(self.sock_path, status_line="HTTP/1.1 204 No Content")
+        server.start()
+        self.addCleanup(server.stop)
+
+        restarter = DockerRestarter(socket_path=self.sock_path, timeout=2.0)
+
+        bully_ports = [19401, 19402, 19403]
+        hb_ports = [19411, 19412, 19413]
+        peers = [(i + 1, "127.0.0.1", bully_ports[i]) for i in range(3)]
+        all_hc_names = ["health_checker-1", "health_checker-2", "health_checker-3"]
+
+        bully_nodes = []
+        monitors = []
+        emisores = []
+        quien_reinicio = []
+
+        for idx in range(3):
+            node_id = idx + 1
+            own_name = f"health_checker-{node_id}"
+            initial_nodes = [n for n in all_hc_names if n != own_name]
+
+            def make_on_leader_change(mon_idx):
+                def _on_leader(leader_id, is_me):
+                    if is_me and mon_idx < len(monitors):
+                        monitors[mon_idx].reset_notifications()
+                return _on_leader
+
+            bully = BullyElection(
+                node_id=node_id,
+                listen_port=bully_ports[idx],
+                peers=peers,
+                heartbeat_interval=0.1,
+                leader_timeout=0.35,
+                election_timeout=0.2,
+                coordinator_timeout=0.35,
+                on_leader_change=make_on_leader_change(idx),
+            )
+
+            def make_on_failure(b_node, nid, self_name):
+                def _on_failure(node_name: str, elapsed: float):
+                    if node_name != self_name and b_node.is_leader():
+                        quien_reinicio.append((nid, node_name))
+                        restarter.restart_container(node_name)
+                return _on_failure
+
+            monitor = HeartbeatMonitor(
+                listen_port=hb_ports[idx],
+                node_timeout=0.5,
+                check_interval=0.05,
+                on_node_failure=make_on_failure(bully, node_id, own_name),
+                initial_nodes=initial_nodes,
+            )
+            emisor = EmisorLatidos(
+                nombre_nodo=own_name,
+                destinos=[("127.0.0.1", p) for p in hb_ports],
+                intervalo=0.08,
+            )
+            bully_nodes.append(bully)
+            monitors.append(monitor)
+            emisores.append(emisor)
+
+        def cleanup_cluster():
+            for e in emisores:
+                e.stop()
+            for m in monitors:
+                m.stop()
+            for b in bully_nodes:
+                b.stop()
+
+        self.addCleanup(cleanup_cluster)
+
+        for m in monitors:
+            m.start()
+        for b in bully_nodes:
+            b.start()
+        for e in emisores:
+            e.start()
+
+        espera = threading.Event()
+        for _ in range(40):
+            if bully_nodes[2].is_leader():
+                break
+            espera.wait(timeout=0.05)
+        self.assertTrue(bully_nodes[2].is_leader())
+
+        # Cae completamente health_checker-3 (detenemos su Bully, su Monitor y su EmisorLatidos)
+        emisores[2].stop()
+        bully_nodes[2].stop()
+        monitors[2].stop()
+
+        # Esperar a que health_checker-2 asuma como líder y reinicie a health_checker-3
+        recibido = server.request_event.wait(timeout=2.5)
+        self.assertTrue(recibido, "El nuevo líder (health_checker-2) debió reiniciar a health_checker-3")
+        self.assertIn("POST /containers/health_checker-3/start HTTP/1.1", server.requests)
+        self.assertEqual(quien_reinicio[0], (2, "health_checker-3"))
+
 
 if __name__ == "__main__":
     unittest.main()
