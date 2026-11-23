@@ -198,6 +198,7 @@ class ReceptorDatos:
         self._resolver(canal, rechazar=False)
 
     def _procesar_control(self, canal, cuerpo, procesar, al_finalizar):
+        """Persiste el control y la finalización atendida antes de confirmar su entrega."""
         try:
             sobre = self._codificador.decodificar(cuerpo).sobre
             evento = self._coordinacion.recibir_control(sobre)
@@ -205,18 +206,21 @@ class ReceptorDatos:
             REGISTRO.warning("Control inválido: %s", error)
             self._resolver(canal, rechazar=True)
             return False
+        except BaseException as error:
+            # Un fallo del WAL no es una desconexión recuperable del canal.
+            self._error_procesamiento = error
+            raise
         if evento is not None:
             try:
                 if al_finalizar is None:
                     procesar(evento)
                 else:
                     al_finalizar(evento.entrada)
+                self._coordinacion.confirmar_fin(sobre.entrada)
             except BaseException as error:
                 self._error_procesamiento = error
                 raise
         self._resolver(canal, rechazar=False)
-        if evento is not None:
-            self._coordinacion.confirmar_fin(sobre.entrada)
         return evento is not None
 
     def _resolver(self, canal, *, rechazar):

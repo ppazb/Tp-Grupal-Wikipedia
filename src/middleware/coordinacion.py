@@ -13,6 +13,7 @@ from .interfaz import ErrorMensajeInvalido, ErrorSeguimientoEntrada
 @dataclass
 class _Barrera:
     lotes_resueltos: set[tuple[IdentidadProceso, str, int]] = field(default_factory=set)
+    resueltos_por_productor: dict[IdentidadProceso, int] = field(default_factory=dict)
     total: int | None = None
     preparacion_enviada: bool = False
     preparada: bool = False
@@ -60,6 +61,11 @@ class CoordinacionCierre:
         estado = self._barreras.get(sobre.entrada)
         if estado is not None and estado.fin_recibido and not self.lote_resuelto(sobre):
             raise ErrorSeguimientoEntrada("Se recibieron datos después del cierre consolidado")
+        if estado is not None and not self.lote_resuelto(sobre):
+            cierres = dict(self._seguimiento.consultar(sobre.entrada).cierres)
+            total = cierres.get(sobre.origen)
+            if total is not None and estado.resueltos_por_productor.get(sobre.origen, 0) >= total:
+                raise ErrorSeguimientoEntrada("Los lotes locales del productor exceden su cierre anunciado")
 
     def lote_resuelto(self, sobre):
         """Consulta si esta réplica ya registró la resolución durable de la entrada identificada."""
@@ -82,7 +88,7 @@ class CoordinacionCierre:
             self._informar_avance(sobre.entrada, estado)
 
     def recibir_control(self, sobre):
-        """Aplica un control válido y devuelve FinEntrada cuando el cierre es entregable."""
+        """Persiste controles nuevos y reconoce repeticiones por entrada, tipo y emisor."""
         self._comprobar_disponible()
         self._validar_control(sobre)
         entrada = sobre.entrada
@@ -161,8 +167,11 @@ class CoordinacionCierre:
             raise ErrorMensajeInvalido("El tipo, origen o destinatario del control no es válido")
 
     def _recibir_eof(self, sobre, estado):
+        """Conserva el total único del productor y prepara al reunir todos los cierres."""
         entrada = sobre.entrada
         total_productor = sobre.contenido.total_lotes
+        if total_productor < estado.resueltos_por_productor.get(sobre.origen, 0):
+            raise ErrorSeguimientoEntrada("El productor anunció menos lotes que los resueltos localmente")
         if self._seguimiento.validar_cierre(entrada, sobre.origen, total_productor):
             self._registrar_cambio(CambioEOF.CIERRE_PRODUCTOR, entrada,
                                   productor=sobre.origen, valor=total_productor)
@@ -172,6 +181,7 @@ class CoordinacionCierre:
             self._registrar_cambio(CambioEOF.PREPARACION_ENVIADA, entrada, valor=total)
 
     def _preparar(self, entrada, estado, total):
+        """Persiste la preparación una sola vez y completa el aviso de avance local."""
         if estado.total is not None and estado.total != total:
             raise ErrorSeguimientoEntrada("La barrera recibió dos totales diferentes")
         if self._seguimiento.consultar(entrada).lotes_resueltos > total:
@@ -190,13 +200,15 @@ class CoordinacionCierre:
             self._registrar_cambio(CambioEOF.AVANCE_ENVIADO, entrada, valor=resueltos)
 
     def _recibir_avance(self, sobre, estado):
+        """Conserva el mayor avance de cada réplica y evalúa el cierre con esos valores."""
         if not estado.preparacion_enviada:
             raise ErrorSeguimientoEntrada("Se recibió un avance antes de preparar la barrera")
         instancia = sobre.origen.instancia
         nuevo = sobre.contenido.lotes_resueltos
         anterior = estado.avances.get(instancia, 0)
-        if nuevo < anterior:
-            return
+        # Una reentrega antigua no retrocede el contador ni impide reintentar
+        # el FIN si su publicación anterior quedó interrumpida.
+        nuevo = max(nuevo, anterior)
         total = estado.total_resuelto - anterior + nuevo
         if total > estado.total:
             raise ErrorSeguimientoEntrada("Las réplicas resolvieron más lotes que los anunciados")
@@ -243,6 +255,7 @@ class CoordinacionCierre:
                 self._seguimiento.registrar_lote(entrada, productor)
                 self._seguimiento.resolver_lote(entrada)
                 estado.lotes_resueltos.add(identidad)
+                estado.resueltos_por_productor[productor] = estado.resueltos_por_productor.get(productor, 0) + 1
         elif cambio is CambioEOF.CIERRE_PRODUCTOR:
             self._seguimiento.registrar_cierre(entrada, productor, valor)
         elif cambio is CambioEOF.PREPARACION_ENVIADA:
