@@ -69,6 +69,16 @@ def configurar_servicios(documento, configuracion, ruta):
     puerto = broker['puerto']
     if type(puerto) is not int or not 1 <= puerto <= 65535:
         raise ValueError('El puerto del broker debe estar entre 1 y 65535')
+    nodos_monitoreados = sorted(
+        nombre
+        for nombre, servicio in documento['services'].items()
+        if any(
+            clave in servicio.get('environment', {})
+            for clave in ('WIKI_MW_PROCESO_GRUPO', 'GATEWAY_GROUP', 'HEALTH_CHECKER_ID')
+        )
+    )
+    lista_monitoreados = ','.join(nodos_monitoreados)
+
     for nombre, servicio in documento['services'].items():
         servicio.pop('deploy', None)
         servicio['container_name'] = nombre
@@ -85,9 +95,12 @@ def configurar_servicios(documento, configuracion, ruta):
                 'type': 'volume', 'source': volumen_eof, 'target': '/app/data/eof',
             })
             entorno['EOF_WAL_DIR'] = '/app/data/eof'
+        if any(clave in entorno for clave in ('WIKI_MW_PROCESO_GRUPO', 'GATEWAY_GROUP', 'HEALTH_CHECKER_ID')):
             entorno['CONTAINER_NAME'] = nombre
             entorno.setdefault('HEALTH_CHECKER_TARGETS', DESTINOS_HEALTH_CHECKER)
             entorno.setdefault('HEARTBEAT_INTERVAL', INTERVALO_HEARTBEAT)
+        if 'HEALTH_CHECKER_ID' in entorno:
+            entorno['MONITORED_NODES'] = lista_monitoreados
         if 'CLIENT_ID' in entorno:
             entorno['MAX_FRAME_BYTES'] = str(limite)
             servicio['profiles'] = [PERFIL_CLIENTES]
