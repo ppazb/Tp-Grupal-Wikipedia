@@ -1,25 +1,27 @@
 
 import logging
+import socket
 import threading
+import time
 
-from ...common.external_protocol import TipoFrame, codificar_resultado, enviar_frame
+from ...common.external_protocol import TipoFrame, codificar_resultado, empaquetar_resultado, enviar_frame
+from ...common.protocol.primitivas import BYTES_U64
 from ...workers.base_worker import Worker
 
 LOG = logging.getLogger('gateway')
 
-# Recibo resultados desde los workers y reenvio al cliente correspondiente
+# Recibo resultados desde los workers, los guardo en disco y un emisor por conexión los entrega al cliente
 
 class SesionCliente:
-    """Conexión de un cliente. Los hilos del cliente y del receptor comparten el socket,
+    """Conexión de un cliente. Los hilos del cliente y del emisor comparten el socket,
     por eso todo envío pasa por enviar(), que los serializa."""
 
-    def __init__(self, socket, max_bytes):
-        self._socket = socket
+    def __init__(self, conexion, max_bytes):
+        self._socket = conexion
         self._max_bytes = max_bytes
         self._lock = threading.Lock()
         self._rota = threading.Event()
-        # Se activa cuando llegaron todos los resultados o cuando la sesión ya no sirve
-        self.completa = threading.Event()
+        self._al_romperse = None
 
     def enviar(self, tipo, cuerpo):
         with self._lock:
@@ -35,76 +37,98 @@ class SesionCliente:
     def rota(self):
         return self._rota.is_set()
 
+    def al_romperse(self, avisar):
+        """Registra a quién despertar cuando la conexión deja de servir."""
+        self._al_romperse = avisar
+        if self.rota:
+            avisar()
+
+    def cerrar(self):
+        """Corta la conexión para despertar a quien espera en ella."""
+        self.marcar_rota()
+        try:
+            self._socket.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+
     def marcar_rota(self):
         self._rota.set()
-        self.completa.set()
+        avisar = self._al_romperse
+        if avisar is not None:
+            avisar()
 
 
-class RegistroSesiones:
-    """Asocia cada ejecución con la sesión del cliente que la inició."""
+def emitir_resultados(ejecucion, sesion, ultima_secuencia):
+    """Envía por la sesión los resultados de la ejecución desde la secuencia siguiente a ultima_secuencia.
 
-    def __init__(self):
-        self._lock = threading.Lock()
-        self._sesiones = {}
-        self._cerrado = False
+    Espera en la condición de la ejecución (sin polling) a que haya un resultado nuevo, la ejecución
+    se complete o la conexión se rompa. Con el cursor al final de la ejecución completa envía FIN,
+    lo anota y borra los logs. Termina al romperse la sesión o cerrarse la ejecución.
+    """
+    cursor = ultima_secuencia
+    while True:
+        with ejecucion.condicion:
+            ejecucion.condicion.wait_for(
+                lambda: sesion.rota or ejecucion.cerrada
+                or cursor < ejecucion.cantidad_resultados or ejecucion.completa
+            )
+            if sesion.rota or ejecucion.cerrada:
+                return
+            hay_resultado = cursor < ejecucion.cantidad_resultados
+            contenido = ejecucion.leer_resultado(cursor + 1) if hay_resultado else None
 
-    def registrar(self, id_ejecucion, sesion):
-        with self._lock:
-            if self._cerrado:
-                raise InterruptedError("El registro de sesiones está cerrado")
-            self._sesiones[id_ejecucion] = sesion
-
-    def quitar(self, id_ejecucion):
-        with self._lock:
-            self._sesiones.pop(id_ejecucion, None)
-
-    def obtener(self, id_ejecucion):
-        with self._lock:
-            return self._sesiones.get(id_ejecucion)
-
-    def cerrar_todas(self):
-        """Despierta a quienes esperan resultados cuando el gateway se detiene."""
-        with self._lock:
-            self._cerrado = True
-            sesiones = tuple(self._sesiones.values())
-        for sesion in sesiones:
-            sesion.marcar_rota()
+        try:
+            if not hay_resultado:
+                sesion.enviar(TipoFrame.FIN, b"")
+                if ejecucion.finalizar():
+                    LOG.info("Ejecución %s: resultados entregados al cliente. Ejecución de inicio a fin: %.1f s",
+                             ejecucion.id, time.monotonic() - ejecucion.inicio)
+                return
+            cursor += 1
+            sesion.enviar(TipoFrame.RESULTADO, empaquetar_resultado(cursor, contenido))
+        except OSError:
+            LOG.warning("Ejecución %s: se perdió la conexión con el cliente mientras se enviaban resultados",
+                        ejecucion.id)
+            return
 
 
 class ReceptorResultados(Worker):
-    """Consume los resultados del grupo del gateway y los entrega al cliente de su ejecución.
+    """Consume los resultados del grupo del gateway y los guarda en el log de su ejecución.
 
-    Cada lote recibido viaja como un único frame RESULTADO. La ejecución se da por
-    completa cuando se cerraron todas sus entradas, no antes.
+    No le escribe al socket: cada lote aceptado se persiste con fsync y recién después se confirma
+    al broker. Un emisor por conexión (emitir_resultados) los entrega al cliente.
     """
 
-    def __init__(self, middleware, sesiones, max_bytes):
+    def __init__(self, middleware, registro, max_bytes):
         super().__init__(middleware)
-        self._sesiones = sesiones
+        self._registro = registro
         self._max_bytes = max_bytes
 
     def procesar(self, datos):
         id_ejecucion = datos.entrada.id_ejecucion
-        sesion = self._sesiones.obtener(id_ejecucion)
-        if sesion is None:
-            LOG.debug("Resultados de la ejecución %s descartados: su cliente ya no está", id_ejecucion)
+        ejecucion = self._registro.obtener(id_ejecucion)
+        if ejecucion is None:
+            LOG.debug("Resultados de la ejecución %s descartados: es desconocida, terminó o fue abandonada",
+                      id_ejecucion)
+            return
+        entrega = self._middleware.entrega_actual
+        clave = (datos.entrada.nombre, entrega.id_entrada, entrega.indice)
+        if ejecucion.ya_vista(clave):
+            LOG.debug("Ejecución %s: resultado duplicado %s descartado", id_ejecucion, clave)
             return
         try:
-            sesion.enviar(
-                TipoFrame.RESULTADO,
-                codificar_resultado(datos.entrada.nombre, datos.contenido, self._max_bytes,
-                                    comprobar_detencion=self.comprobar_detencion),
-            )
-        except OSError:
-            self.comprobar_detencion()
-            LOG.warning("Ejecución %s: el cliente se desconectó, se descartan sus resultados", id_ejecucion)
+            # La secuencia se antepone al enviar, por eso el contenido deja lugar para ella
+            contenido = codificar_resultado(datos.entrada.nombre, datos.contenido, self._max_bytes - BYTES_U64,
+                                            comprobar_detencion=self.comprobar_detencion)
         except ValueError:
-            LOG.exception("Ejecución %s: no se pudo reenviar un lote de %s", id_ejecucion, datos.entrada.nombre)
+            LOG.exception("Ejecución %s: no se pudo guardar un lote de %s", id_ejecucion, datos.entrada.nombre)
+            return
+        if not ejecucion.agregar_resultado(clave, contenido):
+            LOG.debug("Ejecución %s: resultado %s descartado", id_ejecucion, clave)
 
     def finalizar_entrada(self, entrada):
-        if self._middleware.entradas_pendientes(entrada.id_ejecucion):
+        ejecucion = self._registro.obtener(entrada.id_ejecucion)
+        if ejecucion is None:
             return
-        sesion = self._sesiones.obtener(entrada.id_ejecucion)
-        if sesion is not None:
+        if ejecucion.registrar_entrada_cerrada(entrada.nombre):
             LOG.info("Ejecución %s: todos los resultados fueron recibidos", entrada.id_ejecucion)
-            sesion.completa.set()

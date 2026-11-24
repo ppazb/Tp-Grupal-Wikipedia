@@ -5,10 +5,12 @@ import os
 import socket
 import threading
 import time
-import uuid
 from dataclasses import replace
 
-from ...common.external_protocol import TipoFrame, decodificar_filas, enviar_frame, recibir_frame
+from ...common.external_protocol import (
+    TipoFrame, codificar_reanudado, codificar_sesion, decodificar_datos, decodificar_reanudar,
+    enviar_frame, recibir_frame,
+)
 from ...common.protocol.dto import Datos, EnvioDatos, Entrada, IdentidadProceso
 from ...common.protocol.registros import Esquema, Lote
 from ...middleware.configuracion.cargador import cargar_configuracion
@@ -16,7 +18,8 @@ from ...middleware.configuracion.modelos import ErrorConfiguracion
 from ...middleware.interfaz import ErrorMensaje, ErrorMiddleware, OperacionInterrumpida
 from ...middleware.rabbitmq import MiddlewareRabbitMQ
 from .articulos import articulo_desde_fila
-from .resultados import ReceptorResultados, RegistroSesiones, SesionCliente
+from .ejecuciones import RegistroEjecuciones
+from .resultados import ReceptorResultados, SesionCliente, emitir_resultados
 
 LOG = logging.getLogger('gateway')
 
@@ -30,6 +33,10 @@ RESULTS_GROUP = os.environ["GATEWAY_RESULTS_GROUP"]
 RESULTS_INSTANCE = int(os.environ["GATEWAY_RESULTS_INSTANCE"])
 SERVER_HOST = os.environ["SERVER_HOST"]
 SERVER_PORT = int(os.environ["SERVER_PORT"])
+# directorio (volumen) donde el gateway guarda el estado de sus ejecuciones
+WAL_DIR = os.environ.get("WAL_DIR", "data/wal")
+# segundos que se espera a que un cliente retome una ejecución recuperada tras reiniciar el gateway
+GATEWAY_REANUDACION_SEGUNDOS = float(os.environ.get("GATEWAY_REANUDACION_SEGUNDOS", "60"))
 
 
 MAX_AVISOS_FILA = 20  # tope de warnings por filas descartadas en una ejecucion
@@ -76,9 +83,12 @@ class PublicadorMiddleware:
                 self._local.recursos = recursos.pop_all()
         return self._local.middleware
 
-    def publicar(self, id_ejecucion, lote):
+    def publicar(self, id_ejecucion, numero_lote, indice, lote):
+        """Publica un sub-lote en todas las ramas con ids repetibles: reenviar el mismo lote da los mismos ids."""
+        id_entrada = f"{id_ejecucion}:{numero_lote}"
         self._obtener().publicar_en_ramas(tuple(
-            EnvioDatos.nuevo(ruta.destino, Datos(Entrada(id_ejecucion, ruta.entrada), lote))
+            EnvioDatos.nuevo(ruta.destino, Datos(Entrada(id_ejecucion, ruta.entrada), lote),
+                             id_entrada=id_entrada, indice=indice)
             for ruta in self._rutas
         ))
 
@@ -105,8 +115,9 @@ class ServidorGateway:
 
     """
 
-    def __init__(self, host, puerto, max_bytes, rutas, publicador, detener, espera_ack_error, sesiones=None, apagado=None):
-        
+    def __init__(self, host, puerto, max_bytes, rutas, publicador, detener, espera_ack_error, registro,
+                 espera_reanudacion=GATEWAY_REANUDACION_SEGUNDOS, apagado=None):
+
         self._apagado = apagado
         self._vigilante = None
         self._direccion = (host, puerto)
@@ -115,7 +126,9 @@ class ServidorGateway:
         self._publicador = publicador
         self._detener = detener
         self._espera_ack_error = espera_ack_error
-        self._sesiones = sesiones if sesiones is not None else RegistroSesiones()
+        self._registro = registro
+        self._espera_reanudacion = espera_reanudacion
+        self._temporizadores = []
         self._lock_clientes = threading.Lock()
         self._clientes = set()
         self._hilos = set()
@@ -140,7 +153,8 @@ class ServidorGateway:
                     limpieza.callback(self._vigilante.join)
                 limpieza.callback(self._esperar_clientes)
                 limpieza.callback(self._cerrar_clientes)
-                limpieza.callback(self._sesiones.cerrar_todas)
+                limpieza.callback(self._registro.cerrar_sesiones)
+                limpieza.callback(self._cancelar_temporizadores)
                 limpieza.callback(self._publicador.interrumpir)
                 limpieza.callback(self._detener.set)
 
@@ -156,6 +170,7 @@ class ServidorGateway:
                 name="gateway-stop-watcher",
             )
             self._vigilante.start()
+            self._programar_reanudaciones()
             LOG.info(
                 "Gateway escuchando en %s:%d; artículos -> %s",
                 *servidor.getsockname(),
@@ -274,103 +289,190 @@ class ServidorGateway:
             LOG.exception("Falló la notificación de error a %s", direccion)
 
     def _procesar_cliente(self, cliente):
-        # El gateway asigna la ejecución: un uuid nuevo por conexion para no repetir
-        id_ejecucion = str(uuid.uuid4())
-        inicio = time.monotonic()
-        # Se registra antes de publicar: los resultados pueden llegar mientras el cliente sigue enviando
         sesion = SesionCliente(cliente, self._max_bytes)
-        self._sesiones.registrar(id_ejecucion, sesion)
+        ejecucion, ultima_secuencia = self._identificar(cliente)
+        # Un cliente real se anuncia con su primer frame: el healthcheck abre y cierra
+        # el socket sin enviar nada y no debe contarse como cliente
+        if ejecucion is None:
+            return
         try:
-            self._atender_ejecucion(cliente, sesion, id_ejecucion, inicio)
+            ejecucion.adjuntar(sesion)
+            if ultima_secuencia is None:
+                sesion.enviar(TipoFrame.SESION, codificar_sesion(ejecucion.id, self._max_bytes))
+            else:
+                sesion.enviar(
+                    TipoFrame.REANUDADO, codificar_reanudado(ejecucion.lotes_procesados, ejecucion.eof_recibido))
+            # Los resultados pueden llegar mientras el cliente sigue enviando: el emisor arranca ya
+            self._lanzar_emisor(ejecucion, sesion, ultima_secuencia or 0)
+            self._atender_ejecucion(cliente, sesion, ejecucion)
         finally:
-            self._sesiones.quitar(id_ejecucion)
+            self._soltar(ejecucion, sesion)
 
-    def _atender_ejecucion(self, cliente, sesion, id_ejecucion, inicio):
-        cantidad_lotes = 0
+    # Primer frame de la conexión: INICIO crea una ejecución, REANUDAR retoma una conocida.
+    # Devuelve (ejecucion, ultima secuencia recibida por el cliente o None si es nueva) o (None, None) si se cerró sin hablar.
+    def _identificar(self, cliente):
+        try:
+            frame = recibir_frame(cliente, self._max_bytes, permitir_cierre=True)
+        except ConnectionError:
+            frame = None
+        self._comprobar_detencion()
+        if frame is None:
+            return None, None
+
+        tipo, cuerpo = frame
+        if tipo is TipoFrame.INICIO:
+            if cuerpo:
+                raise ValueError("INICIO no lleva cuerpo")
+            ejecucion = self._registro.crear()
+            LOG.info("Ejecución %s: llegó un cliente", ejecucion.id)
+            return ejecucion, None
+
+        if tipo is TipoFrame.REANUDAR:
+            id_ejecucion, ultima_secuencia = decodificar_reanudar(cuerpo)
+            ejecucion = self._registro.obtener(id_ejecucion)
+            if ejecucion is None:
+                raise ValueError(f"La ejecución {id_ejecucion} es desconocida")
+            LOG.info("Ejecución %s: el cliente se reconectó (última secuencia recibida: %d)",
+                     id_ejecucion, ultima_secuencia)
+            return ejecucion, ultima_secuencia
+
+        raise ValueError("La conexión debe comenzar con INICIO o REANUDAR")
+
+    # Termina la conexión. Si el gateway no se apaga y era la vigente de una ejecución no terminada,
+    # el cliente murió (uno que se cae se relanza como nuevo): la ejecución se abandona.
+    # Si el gateway se apaga no se abandona nada: el estado queda en disco para reanudar.
+    def _soltar(self, ejecucion, sesion):
+        sesion.marcar_rota()
+        if ejecucion.desadjuntar(sesion) and not ejecucion.cerrada and not self._detener.is_set():
+            self._abandonar(ejecucion)
+
+    def _lanzar_emisor(self, ejecucion, sesion, ultima_secuencia):
+        hilo = threading.Thread(target=self._emitir, args=(ejecucion, sesion, ultima_secuencia),
+                                name=f"gateway-resultados-{ejecucion.id}")
+        with self._lock_clientes:
+            self._hilos.add(hilo)
+        hilo.start()
+
+    def _emitir(self, ejecucion, sesion, ultima_secuencia):
+        try:
+            emitir_resultados(ejecucion, sesion, ultima_secuencia)
+        except Exception:
+            LOG.exception("Ejecución %s: falló el envío de resultados", ejecucion.id)
+            sesion.cerrar()
+
+    def _atender_ejecucion(self, cliente, sesion, ejecucion):
         filas_descartadas = 0
         filas_totales = 0
-        # Un cliente real se anuncia con su primer frame: el healthcheck abren y cierran
-        # el socket sin enviar nada y no deben contarse como clientes
-        anunciado = False
-        
+        inicio = ejecucion.inicio
+
         # El socket es bloqueante y sin timeout: se duerme en recv hasta que llega
         # el siguiente frame. El apagado despierta este recv cerrando el socket.
-        
+        # Tras el EOF se sigue leyendo: así se nota si el cliente se fue antes del FIN.
         while not self._detener.is_set():
             try:
                 frame = recibir_frame(cliente, self._max_bytes, permitir_cierre=True)
-            
+
             except ConnectionError:
-                frame = None  
-            
+                frame = None
+
             self._comprobar_detencion()
 
-            # Se deconecto sin enviar eof
+            # Se desconectó: _soltar decide si la ejecución se abandona
             if frame is None:
-                self._cerrar_por_desconexion(id_ejecucion, cantidad_lotes)
                 return
 
             tipo, cuerpo = frame
 
-            if not anunciado:
-                anunciado = True
-                LOG.info("Ejecución %s: llegó un cliente", id_ejecucion)
-
-            # Es dato
             if tipo is TipoFrame.DATOS:
-                
-                descartadas, totales = self._procesar_datos(id_ejecucion, cuerpo, filas_descartadas)
-                
+                numero, filas = decodificar_datos(cuerpo, comprobar_detencion=self._comprobar_detencion)
+                descartadas, totales = self._recibir_lote(ejecucion, numero, filas, filas_descartadas)
                 filas_descartadas += descartadas
                 filas_totales += totales
-                cantidad_lotes += 1
-
-                # ACK: se confirma la recepción del lote
-                sesion.enviar(TipoFrame.ACK, cantidad_lotes.to_bytes(BYTE_8, "big"))
-                
+                # ACK: se confirma la recepción del lote (también el de uno ya procesado, sin publicar)
+                sesion.enviar(TipoFrame.ACK, numero.to_bytes(BYTE_8, "big"))
                 continue
 
-            #solo puedo recibir dato o eof
+            # solo puedo recibir dato o eof
             if tipo is not TipoFrame.EOF:
                 raise ValueError("Tipo de frame externo no admitido")
 
             # EOF: se espera que el cuerpo contenga la cantidad de lotes recibidos
-            self._verificar_eof(cuerpo, cantidad_lotes)
-            
-            self._publicador.finalizar(id_ejecucion)
-            
-            sesion.enviar(TipoFrame.ACK, cantidad_lotes.to_bytes(BYTE_8, "big"))
-            
-            LOG.info("Ejecución %s: EOF recibido a los %.1f s; %d lotes, %d filas (%d descartadas), publicados en %s",
-                id_ejecucion, time.monotonic() - inicio, cantidad_lotes, filas_totales, filas_descartadas,
-                ", ".join(ruta.destino for ruta in self._rutas),
-            )
-            self._esperar_resultados(sesion, id_ejecucion, inicio)
+            with ejecucion.lock_lotes:
+                self._verificar_eof(cuerpo, ejecucion.lotes_procesados)
+                if not ejecucion.eof_recibido:
+                    self._publicador.finalizar(ejecucion.id)
+                    # el EOF queda escrito antes del ACK; si se cae antes, el cliente lo reenvía
+                    ejecucion.registrar_eof()
+                    LOG.info("Ejecución %s: EOF recibido a los %.1f s; %d lotes, %d filas (%d descartadas), publicados en %s",
+                        ejecucion.id, time.monotonic() - inicio, ejecucion.lotes_procesados, filas_totales,
+                        filas_descartadas, ", ".join(ruta.destino for ruta in self._rutas),
+                    )
+                procesados = ejecucion.lotes_procesados
+            sesion.enviar(TipoFrame.ACK, procesados.to_bytes(BYTE_8, "big"))
+
+    # Publica el lote si es el siguiente al último procesado; uno ya procesado se ignora; otro es un error.
+    # Primero se publica (con confirmación del broker) y recién después se escribe LOTE(n): si el gateway
+    # se cae en el medio, el cliente reenvía el lote y sale con los mismos ids.
+    def _recibir_lote(self, ejecucion, numero, filas, descartadas_previas):
+        with ejecucion.lock_lotes:
+            procesados = ejecucion.lotes_procesados
+            if numero < 1 or numero > procesados + 1:
+                raise ValueError(f"Lote fuera de secuencia: llegó el {numero} tras el {procesados}")
+            if numero <= procesados:
+                return 0, 0
+            descartadas, totales = self._procesar_datos(ejecucion.id, numero, filas, descartadas_previas)
+            ejecucion.registrar_lote(numero)
+            return descartadas, totales
+
+    # El cliente no volverá. Si no había EOF se cierra la entrada para que los workers no esperen más datos
+    def _abandonar(self, ejecucion):
+        if ejecucion.cerrada:
+            return
+        self._cerrar_por_desconexion(ejecucion)
+        if ejecucion.abandonar():
+            LOG.warning("Ejecución %s abandonada", ejecucion.id)
+
+    def _cerrar_por_desconexion(self, ejecucion):
+        if ejecucion.eof_recibido or not ejecucion.lotes_procesados or self._detener.is_set():
             return
 
-    # La conexión sigue abierta hasta que el cliente recibió todos los resultados
-    def _esperar_resultados(self, sesion, id_ejecucion, inicio):
-        sesion.completa.wait()
-        if sesion.rota:
-            LOG.warning("Ejecución %s: se corta la espera de resultados", id_ejecucion)
-            return
-        self._comprobar_detencion()
-        sesion.enviar(TipoFrame.FIN, b"")
-        LOG.info("Ejecución %s: resultados entregados al cliente. Ejecución de inicio a fin: %.1f s",
-                 id_ejecucion, time.monotonic() - inicio)
+        LOG.warning("Cliente desconectado antes de enviar EOF: %s; se publica el EOF tras %d lotes",
+                    ejecucion.id, ejecucion.lotes_procesados)
 
-    # Si el cliente se cayo sin eof, cierra la entrada para que los workers no esperen mas datos
-    def _cerrar_por_desconexion(self, id_ejecucion, cantidad_lotes):
-        if not cantidad_lotes or self._detener.is_set():
-            return  
-        
-        LOG.warning("Cliente desconectado antes de enviar EOF: %s; se publica el EOF tras %d lotes",id_ejecucion, cantidad_lotes)
-        
-        self._publicador.finalizar(id_ejecucion)
+        self._publicador.finalizar(ejecucion.id)
+
+    # Ejecuciones recuperadas al arrancar: si su cliente no se reconecta a tiempo, se abandonan
+    def _programar_reanudaciones(self):
+        for ejecucion in self._registro.recuperadas:
+            temporizador = threading.Timer(self._espera_reanudacion, self._abandonar_sin_reanudar, (ejecucion,))
+            temporizador.name = f"gateway-reanudacion-{ejecucion.id}"
+            temporizador.daemon = True
+            self._temporizadores.append(temporizador)
+            temporizador.start()
+
+    def _abandonar_sin_reanudar(self, ejecucion):
+        with ejecucion.condicion:
+            if ejecucion.sesion is not None or ejecucion.cerrada:
+                return
+        LOG.warning("Ejecución %s: el cliente no se reconectó en %s s", ejecucion.id, self._espera_reanudacion)
+        try:
+            self._abandonar(ejecucion)
+        except (InterruptedError, OperacionInterrumpida):
+            LOG.info("Ejecución %s: se detuvo el gateway antes de abandonarla", ejecucion.id)
+        except Exception:
+            LOG.exception("Ejecución %s: no se pudo abandonar", ejecucion.id)
+        finally:
+            try:
+                self._publicador.cerrar_cliente()
+            except Exception:
+                LOG.exception("No se pudo cerrar el publicador del temporizador")
+
+    def _cancelar_temporizadores(self):
+        for temporizador in self._temporizadores:
+            temporizador.cancel()
 
     #Arma los artículos del lote crudo y los publica; devuelve (descartadas, totales)
-    def _procesar_datos(self, id_ejecucion, cuerpo, descartadas_previas):
-        filas = decodificar_filas(cuerpo, comprobar_detencion=self._comprobar_detencion)
+    def _procesar_datos(self, id_ejecucion, numero_lote, filas, descartadas_previas):
         articulos = []
         descartadas = 0
         
@@ -385,20 +487,24 @@ class ServidorGateway:
                     LOG.warning("Ejecución %s: fila descartada: %s", id_ejecucion, error)
         
         if articulos:
-            self._publicar_articulos(id_ejecucion, articulos)
+            self._publicar_articulos(id_ejecucion, numero_lote, articulos)
         
         return descartadas, len(filas)
 
-    # Publica los artículos; un lote que no entra en un mensaje se divide a la mitad
-    def _publicar_articulos(self, id_ejecucion, articulos):
+    # Publica los artículos; un lote que no entra en un mensaje se divide a la mitad.
+    # La división es determinística: reprocesar el mismo lote da los mismos sub-lotes y, con
+    # ellos, los mismos ids (id_entrada = ejecución:lote, indice = posición del sub-lote).
+    def _publicar_articulos(self, id_ejecucion, numero_lote, articulos):
         pendientes = [articulos]
+        indice = 0
         
         while pendientes:
             self._comprobar_detencion()
             lote = pendientes.pop(0)
             
             try:
-                self._publicador.publicar(id_ejecucion, Lote(Esquema.ARTICULO, tuple(lote)))
+                self._publicador.publicar(id_ejecucion, numero_lote, indice, Lote(Esquema.ARTICULO, tuple(lote)))
+                indice += 1
             
             except ErrorMensaje:
 
@@ -436,7 +542,7 @@ class ServidorGateway:
             hilo.join()
 
 
-def _iniciar_receptor(configuracion, sesiones, detener):
+def _iniciar_receptor(configuracion, registro, detener):
     """Abre, consume y cierra el middleware de resultados dentro de su hilo dueño."""
     grupo = configuracion.obtener_grupo(RESULTS_GROUP)
     if not 0 <= RESULTS_INSTANCE < grupo.instancias:
@@ -449,7 +555,7 @@ def _iniciar_receptor(configuracion, sesiones, detener):
             with detener.aviso() as aviso:
                 with MiddlewareRabbitMQ(configuracion, apagado=aviso,
                                         informar_error=lambda datos: receptor.procesar(datos)) as middleware:
-                    receptor = ReceptorResultados(middleware, sesiones, configuracion.limites.max_bytes_por_mensaje)
+                    receptor = ReceptorResultados(middleware, registro, configuracion.limites.max_bytes_por_mensaje)
                     receptor.ejecutar(aviso)
         except OperacionInterrumpida:
             if not detener.is_set():
@@ -474,18 +580,21 @@ def ejecutar_gateway(detener, apagado):
     if GATEWAY_ERROR_ACK_SECONDS <= 0:
         raise ValueError("GATEWAY_ERROR_ACK_SECONDS debe ser mayor que cero")
 
-    sesiones = RegistroSesiones()
+    # Se recuperan las ejecuciones en curso antes de aceptar conexiones y de iniciar el receptor de resultados
+    entradas_esperadas = {ruta.entrada for ruta in configuracion.rutas if ruta.destino == RESULTS_GROUP}
+    registro = RegistroEjecuciones(WAL_DIR, entradas_esperadas)
     publicador_config = replace(configuracion, proceso=IdentidadProceso(GATEWAY_GROUP, GATEWAY_INSTANCE))
     publicador = PublicadorMiddleware(publicador_config, rutas, detener)
-    hilo, errores = _iniciar_receptor(configuracion, sesiones, detener)
+    hilo, errores = _iniciar_receptor(configuracion, registro, detener)
     try:
         servidor = ServidorGateway(SERVER_HOST, SERVER_PORT, configuracion.limites.max_bytes_por_mensaje,
-            rutas, publicador, detener, GATEWAY_ERROR_ACK_SECONDS, sesiones, apagado,
+            rutas, publicador, detener, GATEWAY_ERROR_ACK_SECONDS, registro, GATEWAY_REANUDACION_SEGUNDOS, apagado,
         )
         servidor.ejecutar()
     finally:
         detener.set()
         hilo.join()
+        registro.cerrar()
     if errores:
         raise ExceptionGroup("Falló el receptor de resultados del gateway", errores)
     return 0

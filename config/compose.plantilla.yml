@@ -12,6 +12,8 @@ volumes:
   wal_q3_intersection:
   wal_q5_average:
   wal_q5_comparator:
+  # estado del gateway para reanudar a los clientes tras una caída
+  wal_gateway:
 
 x-worker-base: &worker-base
   build:
@@ -85,6 +87,9 @@ services:
     build:
       context: .
       dockerfile: src/gateway/Dockerfile
+    volumes:
+      - ./config:/app/config:ro
+      - wal_gateway:/app/data/wal
     environment:
       - WIKI_MW_BROKER_HOST=rabbitmq
       - MIDDLEWARE_CONFIG=config/config.json
@@ -96,13 +101,16 @@ services:
       - GATEWAY_RESULTS_INSTANCE=0
       # segundos que se espera el ACK del cliente tras enviarle un ERROR
       - GATEWAY_ERROR_ACK_SECONDS=10
+      - WAL_DIR=/app/data/wal
+      # segundos que se espera a que un cliente retome una ejecución recuperada antes de abandonarla
+      - GATEWAY_REANUDACION_SEGUNDOS=30
       - SERVER_HOST=0.0.0.0
       - SERVER_PORT=5555
       - LOG_LEVEL=INFO
     healthcheck:
       test: ["CMD", "python3", "-c", "import socket; socket.create_connection(('localhost', 5555), 2).close()"]
-      # Durante el arranque se sondea cada 2 s para que los clientes empiecen en cuanto el gateway acepta
-      # conexiones; después, cada 30 s. Requiere Docker Engine 25 o superior (start_interval).
+      # Durante el arranque se sondea cada 2s para que los clientes empiecen en cuanto el gateway
+      #acepta conexiones, después, cada 30 s.
       start_period: 30s
       start_interval: 2s
       interval: 30s
@@ -135,6 +143,8 @@ services:
       - CONNECT_TIMEOUT_SECONDS=10
       # timeout de envío TCP; SIGTERM despierta las esperas mediante un selector
       - SOCKET_TIMEOUT_SECONDS=1
+      # tiempo total que el cliente reintenta reconectar con el gateway
+      - RECONEXION_MAX_SEGUNDOS=35
       - LOG_LEVEL=INFO
     depends_on:
       gateway:

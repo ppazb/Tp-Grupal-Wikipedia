@@ -1,6 +1,6 @@
 import json
 
-from ...common.external_protocol import codificar_filas
+from ...common.external_protocol import codificar_datos
 from ...common.protocol.primitivas import ErrorSerializacion
 
 BYTES_8 = 8
@@ -62,14 +62,15 @@ class ManejadorMensajes:
         self._max_bytes = max_bytes
         self.lotes_confirmados = 0
 
-    def serializar_lote(self, filas):
+    def serializar_lote(self, numero, filas):
+        """Cuerpo de un frame DATOS: numero de lote (desde 1) y filas."""
         try:
             planas = []
             for fila in filas:
                 if self._comprobar_detencion is not None:
                     self._comprobar_detencion()
                 planas.append(fila_plana(fila, self._comprobar_detencion))
-            return codificar_filas(planas, self._max_bytes, comprobar_detencion=self._comprobar_detencion)
+            return codificar_datos(numero, planas, self._max_bytes, comprobar_detencion=self._comprobar_detencion)
         except ErrorSerializacion as error:
             raise LoteDemasiadoGrande(str(error)) from error
 
@@ -77,7 +78,8 @@ class ManejadorMensajes:
         # El gateway verifica que la cantidad de lotes anunciada coincida con la recibida
         return self.lotes_confirmados.to_bytes(BYTES_8, "big")
 
-    def validar_ack(self, contenido, esperado):
+    @staticmethod
+    def validar_ack(contenido, esperado):
         # True si el ACK es valido y con la cantidad de lotes esperados
         # 8 bytes, entero sin signo big-endian
         return len(contenido) == BYTES_8 and int.from_bytes(contenido, "big") == esperado
