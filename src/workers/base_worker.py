@@ -8,7 +8,7 @@ from uuid import NAMESPACE_URL, uuid5
 
 from src.common.protocol.dto import Entrada, EnvioDatos
 from src.common.runtime.apagado import Apagado
-from src.middleware.rechazos import ENTRADA_ERRORES
+from src.middleware.mensajes.rechazos import ENTRADA_ERRORES
 from src.middleware.interfaz import OperacionInterrumpida
 
 
@@ -236,7 +236,7 @@ class WorkerBase(Worker):
     """Abre el middleware desde configuración y adapta los callbacks de los nodos."""
 
     def __init__(self, ruta_configuracion):
-        from src.middleware.cargador_configuracion import cargar_configuracion
+        from src.middleware.configuracion.cargador import cargar_configuracion
 
         self.configuracion = cargar_configuracion(ruta_configuracion)
         self.middleware = None

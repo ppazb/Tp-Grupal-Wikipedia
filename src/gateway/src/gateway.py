@@ -11,8 +11,8 @@ from dataclasses import replace
 from ...common.external_protocol import TipoFrame, decodificar_filas, enviar_frame, recibir_frame
 from ...common.protocol.dto import Datos, EnvioDatos, Entrada, IdentidadProceso
 from ...common.protocol.registros import Esquema, Lote
-from ...middleware.cargador_configuracion import cargar_configuracion
-from ...middleware.configuracion import ErrorConfiguracion
+from ...middleware.configuracion.cargador import cargar_configuracion
+from ...middleware.configuracion.modelos import ErrorConfiguracion
 from ...middleware.interfaz import ErrorMensaje, ErrorMiddleware, OperacionInterrumpida
 from ...middleware.rabbitmq import MiddlewareRabbitMQ
 from .articulos import articulo_desde_fila

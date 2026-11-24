@@ -63,7 +63,7 @@ services:
     build:
       context: .
       dockerfile: src/workers/date_router/Dockerfile
-    entrypoint: ["python3", "-m", "src.middleware.inicializar", "config/config.json"]
+    entrypoint: ["python3", "-m", "src.middleware.transporte.inicializar", "config/config.json"]
     networks:
       - wiki_net
     volumes:

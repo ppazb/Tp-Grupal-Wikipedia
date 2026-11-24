@@ -3,7 +3,7 @@
 from abc import ABC, abstractmethod
 from typing import Callable, Generic, Optional
 
-from ..common.protocol.dto import Contenido, Datos, Entrada, EnvioDatos, Evento, FinEntrada
+from ..common.protocol.dto import Contenido, Datos, Entrada, EnvioDatos, Evento
 
 
 class ErrorMiddleware(Exception):

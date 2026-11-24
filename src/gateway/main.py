@@ -2,7 +2,7 @@ import logging
 import os
 import sys
 
-from src.middleware.configuracion import ErrorConfiguracion
+from src.middleware.configuracion.modelos import ErrorConfiguracion
 from src.middleware.interfaz import ErrorMiddleware
 from src.gateway.src.gateway import ejecutar_gateway
 from src.common.runtime.apagado import Apagado

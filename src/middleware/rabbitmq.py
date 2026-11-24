@@ -6,21 +6,21 @@ from pathlib import Path
 
 from ..common.protocol.dto import EnvioDatos, SobreMensaje
 from ..common.protocol.registros import Esquema, Lote
-from .broker_connection import ConexionBroker
-from .capacidad import CapacidadDatos
-from .configuracion import ErrorConfiguracion
-from .coordinacion import CoordinacionCierre
-from .codificacion import CodificadorMensajes
+from .transporte.conexion import ConexionBroker
+from .transporte.capacidad import CapacidadDatos
+from .configuracion.modelos import ErrorConfiguracion
+from .eof.coordinacion import CoordinacionCierre
+from .mensajes.codificacion import CodificadorMensajes
 from .interfaz import (
     Middleware, ErrorCierre, ErrorConexion, ErrorMiddleware, ErrorRecepcion,
     ErrorRecursosEjecucion, ErrorSeguimientoEntrada, MiddlewareCerrado,
     OperacionInterrumpida,
 )
-from .publicador import PublicadorDatos
-from .receptor import ReceptorDatos
-from .rechazos import ENTRADA_ERRORES
+from .transporte.publicador import PublicadorDatos
+from .transporte.receptor import ReceptorDatos
+from .mensajes.rechazos import ENTRADA_ERRORES
 from .recursos_ejecucion import RecursosPorEjecucion
-from .topologia import TopologiaGrupos
+from .transporte.topologia import TopologiaGrupos
 
 
 REGISTRO = logging.getLogger(__name__)
@@ -59,7 +59,7 @@ class MiddlewareRabbitMQ(Middleware[Lote]):
                            else os.environ.get('EOF_WAL_DIR', 'data/eof'))
                       / self._identidad.grupo / str(self._identidad.instancia))
         topologia = TopologiaGrupos(configuracion)
-        notificador = self._resolver_notificador(configuracion, informar_error, topologia)
+        notificador = self._crear_notificador_rechazos(configuracion, informar_error, topologia)
         try:
             self._conexion.abrir()
             topologia.declarar(self._conexion)
@@ -83,10 +83,11 @@ class MiddlewareRabbitMQ(Middleware[Lote]):
                     capacidad=self._capacidad, topologia=topologia, coordinacion=self._coordinacion,
                 )
         except BaseException:
-            self._cerrar_tras_error()
+            self._cerrar_sin_ocultar_error_original()
             raise
 
-    def _resolver_notificador(self, configuracion, informar_error, topologia):
+    def _crear_notificador_rechazos(self, configuracion, informar_error, topologia):
+        """Selecciona el callback de errores o crea un publicador hacia la ruta de rechazos."""
         if informar_error is not None:
             if not callable(informar_error):
                 raise ErrorConfiguracion("El manejador de errores debe ser invocable")
@@ -129,7 +130,7 @@ class MiddlewareRabbitMQ(Middleware[Lote]):
 
     def publicar_en_ramas(self, envios):
         """Publica salidas en orden sin volver a emitir ramas confirmadas al esperar."""
-        self._validar_abierta()
+        self._validar_comunicacion_abierta()
         if self._interrumpida:
             raise OperacionInterrumpida("La comunicación fue interrumpida")
         if self._publicando:
@@ -142,12 +143,12 @@ class MiddlewareRabbitMQ(Middleware[Lote]):
 
     def crear_presupuesto_lote(self, entrada, esquema):
         """Calcula el espacio para registros descontando el sobre y la cabecera."""
-        self._validar_abierta()
+        self._validar_comunicacion_abierta()
         return self._codificador.crear_presupuesto_lote(entrada, self._identidad, esquema)
 
     def finalizar_entrada(self, grupo, entrada):
         """Publica el cierre del productor después de sus lotes confirmados."""
-        self._validar_abierta()
+        self._validar_comunicacion_abierta()
         if self._interrumpida:
             raise OperacionInterrumpida("La comunicación fue interrumpida")
         if self._publicando:
@@ -160,7 +161,7 @@ class MiddlewareRabbitMQ(Middleware[Lote]):
 
     def recibir(self, procesar, *, al_finalizar=None):
         """Entrega datos y ejecuta al_finalizar, o entrega FinEntrada si no se indicó."""
-        self._validar_abierta()
+        self._validar_comunicacion_abierta()
         if self._interrumpida:
             raise OperacionInterrumpida("La comunicación fue interrumpida")
         if self._receptor is None:
@@ -175,7 +176,7 @@ class MiddlewareRabbitMQ(Middleware[Lote]):
 
     def entradas_pendientes(self, id_ejecucion):
         """Consulta dependencias sin cierre local, sin consumir mensajes ni crear estado."""
-        self._validar_abierta()
+        self._validar_comunicacion_abierta()
         if type(id_ejecucion) is not str or not id_ejecucion.strip():
             raise ErrorSeguimientoEntrada("La ejecución debe tener un identificador no vacío")
         if self._coordinacion is None:
@@ -186,13 +187,13 @@ class MiddlewareRabbitMQ(Middleware[Lote]):
 
     def detener_recepcion(self):
         """Detiene nuevas entregas sin interrumpir el procesamiento en curso."""
-        self._validar_abierta()
+        self._validar_comunicacion_abierta()
         if self._receptor is not None:
             self._receptor.detener_recepcion()
 
     def interrumpir(self):
         """Notifica al bucle para cancelar esperas; no debe invocarse desde una señal."""
-        self._validar_abierta()
+        self._validar_comunicacion_abierta()
         if self._interrumpida:
             return
         self.detener_recepcion()
@@ -201,14 +202,14 @@ class MiddlewareRabbitMQ(Middleware[Lote]):
 
     def registrar_recurso(self, id_ejecucion, nombre, liberar):
         """Registra la limpieza de un recurso exclusivo de una ejecución."""
-        self._validar_abierta()
+        self._validar_comunicacion_abierta()
         self._recursos.registrar(id_ejecucion, nombre, liberar)
         if self._coordinacion is not None and self._coordinacion.ejecucion_retirada(id_ejecucion):
             self._recursos.liberar_ejecucion(id_ejecucion)
 
     def liberar_ejecucion(self, id_ejecucion):
         """Libera una ejecución sin modificar colas ni recursos compartidos."""
-        self._validar_abierta()
+        self._validar_comunicacion_abierta()
         if self._recibiendo or self._publicando:
             raise ErrorRecursosEjecucion("No se puede liberar una ejecución durante una operación")
         if self._coordinacion is not None:
@@ -229,7 +230,7 @@ class MiddlewareRabbitMQ(Middleware[Lote]):
         self._cerrando = True
         errores = []
         try:
-            limpiezas = [self._recursos.cerrar, self._conexion.cerrar]
+            limpiezas = [self._recursos.liberar_todos_los_recursos, self._conexion.cerrar_conexion]
             if self._publicador is not None:
                 limpiezas.append(self._publicador.cerrar_registros)
             if self._coordinacion is not None:
@@ -250,24 +251,26 @@ class MiddlewareRabbitMQ(Middleware[Lote]):
                     raise error
             raise ErrorCierre("Falló el cierre del middleware; ver registro") from errores[0]
 
-    def _validar_abierta(self):
+    def _validar_comunicacion_abierta(self):
+        """Comprueba que el middleware y su conexión siguen abiertos."""
         if self._cerrada:
             raise MiddlewareCerrado("El middleware ya fue cerrado")
         self._conexion.canal
 
-    def _cerrar_tras_error(self):
+    def _cerrar_sin_ocultar_error_original(self):
+        """Intenta cerrar los recursos y registra los fallos sin reemplazar el error original."""
         try:
             self.cerrar()
         except ErrorCierre:
             REGISTRO.error("Falló la limpieza del middleware; se conserva el error original")
 
     def __enter__(self):
-        self._validar_abierta()
+        self._validar_comunicacion_abierta()
         return self
 
-    def __exit__(self, tipo_error, error, traza):
+    def __exit__(self, tipo_error, _error, _traza):
         if tipo_error is None:
             self.cerrar()
         else:
-            self._cerrar_tras_error()
+            self._cerrar_sin_ocultar_error_original()
         return False

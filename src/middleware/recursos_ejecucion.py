@@ -24,11 +24,7 @@ class RecursosPorEjecucion:
     def registrar(
         self, id_ejecucion: str, nombre: str, liberar: Callable[[], None],
     ) -> None:
-        """Registra una limpieza sin reemplazar un recurso ya registrado.
-
-        Si el registro falla, el llamador conserva la responsabilidad de liberar
-        el recurso adquirido. No se ejecuta la operación durante el registro.
-        """
+        """Registra una limpieza identificada sin reemplazar recursos existentes."""
         self._validar_identificador(id_ejecucion)
         self._validar_identificador(nombre)
         self._validar_disponible()
@@ -40,12 +36,7 @@ class RecursosPorEjecucion:
         self._recursos.setdefault(id_ejecucion, {})[nombre] = liberar
 
     def liberar_ejecucion(self, id_ejecucion: str) -> None:
-        """Ejecuta las limpiezas de una ejecución y elimina los registros exitosos.
-
-        Registra los fallos, intenta las demás limpiezas y eleva
-        ErrorRecursosEjecucion con la primera causa. Conserva los registros fallidos
-        o interrumpidos. Una ejecución sin registros no requiere trabajo.
-        """
+        """Ejecuta las limpiezas de la ejecución y conserva las que fallan para reintentarlas."""
         self._validar_identificador(id_ejecucion)
         self._validar_disponible()
         recursos = self._recursos.get(id_ejecucion)
@@ -76,10 +67,11 @@ class RecursosPorEjecucion:
             ) from primer_error
 
     def _validar_disponible(self):
+        """Rechaza modificaciones mientras se ejecutan limpiezas."""
         if self._liberando:
             raise ErrorRecursosEjecucion("No se puede modificar el registro durante una limpieza")
 
-    def cerrar(self):
+    def liberar_todos_los_recursos(self):
         """Intenta liberar todas las ejecuciones y conserva las limpiezas fallidas."""
         self._validar_disponible()
         errores = []
@@ -93,5 +85,6 @@ class RecursosPorEjecucion:
 
     @staticmethod
     def _validar_identificador(valor):
+        """Exige un nombre no vacío para una ejecución o recurso."""
         if type(valor) is not str or not valor.strip():
             raise ErrorRecursosEjecucion("La ejecución y el recurso deben tener nombres no vacíos")
