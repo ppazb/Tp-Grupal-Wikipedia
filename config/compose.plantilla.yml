@@ -10,6 +10,8 @@ volumes:
   # un volumen por réplica para el WAL de cada worker con estado (el generador crea los de las réplicas)
   wal_q2_filter_bio:
   wal_q3_intersection:
+  wal_q4_frequency:
+  wal_q4_top_n:
   wal_q5_average:
   wal_q5_comparator:
   # estado del gateway para reanudar a los clientes tras una caída
@@ -158,6 +160,8 @@ services:
       dockerfile: src/workers/date_router/Dockerfile
     environment:
       - WIKI_MW_BROKER_HOST=rabbitmq
+      # orden de iteración de sets/dicts igual en todos los procesos (segunda protección)
+      - PYTHONHASHSEED=0
       - WIKI_MW_PROCESO_GRUPO=date_router
       - WIKI_MW_PROCESO_INSTANCIA=0
     deploy:
@@ -170,6 +174,7 @@ services:
       dockerfile: src/workers/word_occurrences/Dockerfile
     environment:
       - WIKI_MW_BROKER_HOST=rabbitmq
+      - PYTHONHASHSEED=0
       - WIKI_MW_PROCESO_GRUPO=word_occurrences
       - WIKI_MW_PROCESO_INSTANCIA=0
     deploy:
@@ -182,6 +187,7 @@ services:
       dockerfile: src/workers/q1/filter_lang/Dockerfile
     environment:
       - WIKI_MW_BROKER_HOST=rabbitmq
+      - PYTHONHASHSEED=0
       - WIKI_MW_PROCESO_GRUPO=q1_filter_lang
       - WIKI_MW_PROCESO_INSTANCIA=0
     deploy:
@@ -194,6 +200,7 @@ services:
       dockerfile: src/workers/q1/formatter/Dockerfile
     environment:
       - WIKI_MW_BROKER_HOST=rabbitmq
+      - PYTHONHASHSEED=0
       - WIKI_MW_PROCESO_GRUPO=q1_formatter
       - WIKI_MW_PROCESO_INSTANCIA=0
     deploy:
@@ -209,6 +216,7 @@ services:
       - wal_q2_filter_bio:/app/data/wal
     environment:
       - WIKI_MW_BROKER_HOST=rabbitmq
+      - PYTHONHASHSEED=0
       - WIKI_MW_PROCESO_GRUPO=q2_filter_bio
       - WIKI_MW_PROCESO_INSTANCIA=0
       - WAL_DIR=/app/data/wal
@@ -222,6 +230,7 @@ services:
       dockerfile: src/workers/q2/image_downloader/Dockerfile
     environment:
       - WIKI_MW_BROKER_HOST=rabbitmq
+      - PYTHONHASHSEED=0
       - WIKI_MW_PROCESO_GRUPO=q2_image_downloader
       - WIKI_MW_PROCESO_INSTANCIA=0
       # Wikimedia limita la concurrencia total a 2 y el ancho de banda total a 25 Mbps (unos 3,1 MB/s);
@@ -244,6 +253,7 @@ services:
       - wal_q3_intersection:/app/data/wal
     environment:
       - WIKI_MW_BROKER_HOST=rabbitmq
+      - PYTHONHASHSEED=0
       - WIKI_MW_PROCESO_GRUPO=q3_intersection
       - WIKI_MW_PROCESO_INSTANCIA=0
       - WAL_DIR=/app/data/wal
@@ -255,10 +265,15 @@ services:
     build:
       context: .
       dockerfile: src/workers/q4/frequency/Dockerfile
+    volumes:
+      - ./config:/app/config:ro
+      - wal_q4_frequency:/app/data/wal
     environment:
       - WIKI_MW_BROKER_HOST=rabbitmq
+      - PYTHONHASHSEED=0
       - WIKI_MW_PROCESO_GRUPO=frecuencias
       - WIKI_MW_PROCESO_INSTANCIA=0
+      - WAL_DIR=/app/data/wal
     deploy:
       replicas: 1
 
@@ -268,10 +283,15 @@ services:
       context: .
       dockerfile: src/workers/q4/top_n/Dockerfile
     command: ["--presupuesto-memoria-bytes", "16777216"]
+    volumes:
+      - ./config:/app/config:ro
+      - wal_q4_top_n:/app/data/wal
     environment:
       - WIKI_MW_BROKER_HOST=rabbitmq
+      - PYTHONHASHSEED=0
       - WIKI_MW_PROCESO_GRUPO=top_n
       - WIKI_MW_PROCESO_INSTANCIA=0
+      - WAL_DIR=/app/data/wal
     deploy:
       replicas: 1
 
@@ -285,6 +305,7 @@ services:
       - wal_q5_average:/app/data/wal
     environment:
       - WIKI_MW_BROKER_HOST=rabbitmq
+      - PYTHONHASHSEED=0
       - WIKI_MW_PROCESO_GRUPO=q5_average
       - WIKI_MW_PROCESO_INSTANCIA=0
       - WAL_DIR=/app/data/wal
@@ -301,6 +322,7 @@ services:
       - wal_q5_comparator:/app/data/wal
     environment:
       - WIKI_MW_BROKER_HOST=rabbitmq
+      - PYTHONHASHSEED=0
       - WIKI_MW_PROCESO_GRUPO=q5_comparator
       - WIKI_MW_PROCESO_INSTANCIA=0
       - WAL_DIR=/app/data/wal

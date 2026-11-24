@@ -32,6 +32,10 @@ class Presupuesto:
         self.usados += 1
         return True
 
+    @property
+    def completo(self):
+        return self.maximo is not None and self.usados >= self.maximo
+
 
 class MiddlewareFalso:
     def __init__(self):

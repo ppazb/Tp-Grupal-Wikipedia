@@ -6,8 +6,6 @@ from typing import Optional
 
 import pika
 
-from ...common.protocol.dto import Entrada
-from ...common.protocol.primitivas import ErrorSerializacion, EscritorBinario
 from .conexion import ConexionBroker
 from ..configuracion.modelos import ConfiguracionComunicacion, ErrorConfiguracion
 from .exchanges import declarar_exchange
@@ -30,9 +28,8 @@ class DestinoPublicacion:
 
 @dataclass(frozen=True)
 class ColasRecepcion:
-    """Nombres de las colas de reparto, afinidad y control de una instancia."""
+    """Nombres de las colas de afinidad y control de una instancia."""
 
-    reparto: str
     afinidad: str
     control: str
 
@@ -77,10 +74,10 @@ class TopologiaGrupos:
         except pika.exceptions.AMQPError as error:
             raise ErrorTopologia(f"No se pudo declarar {recurso}") from error
 
-    def destino_datos(
-        self, grupo: str, entrada: str, instancia: Optional[int] = None,
-    ) -> DestinoPublicacion:
-        """Resuelve la cola de reparto o valida una instancia y resuelve su cola de afinidad."""
+    def destino_datos(self, grupo: str, entrada: str, instancia: int) -> DestinoPublicacion:
+        """Valida la instancia destinataria y resuelve su cola de afinidad."""
+        if instancia is None:
+            raise ErrorConfiguracion("Los datos requieren una instancia destinataria")
         ruta = self._buscar_ruta_de_salida(grupo, entrada)
         self._validar_instancia_destinataria(grupo, instancia)
         return _construir_destino_datos(ruta, instancia)
@@ -90,29 +87,6 @@ class TopologiaGrupos:
         ruta = self._buscar_ruta_de_salida(grupo, entrada)
         self._validar_instancia_destinataria(grupo, instancia)
         return _construir_destino_control(ruta, instancia)
-
-    def instancia_coordinadora(self, grupo: str, entrada: Entrada) -> int:
-        """Asigna la barrera (ejecución, grupo, entrada) a una instancia estable."""
-        cantidad = self._configuracion.obtener_grupo(grupo).instancias
-        if type(entrada) is not Entrada:
-            raise ErrorConfiguracion("Se esperaba una Entrada")
-        escritor = EscritorBinario(self._configuracion.limites.max_bytes_por_mensaje)
-        try:
-            for texto in (entrada.id_ejecucion, grupo, entrada.nombre):
-                if type(texto) is not str or not texto.strip():
-                    raise ErrorConfiguracion("La barrera requiere identificadores no vacíos")
-                escritor.texto(texto)
-        except ErrorSerializacion as error:
-            raise ErrorConfiguracion(str(error)) from error
-        huella = hashlib.sha256(escritor.resultado()).digest()
-        return int.from_bytes(huella, byteorder="big") % cantidad
-
-    def destino_coordinacion(self, entrada: str, instancia=None) -> DestinoPublicacion:
-        """Resuelve un control entre réplicas del grupo local para una entrada configurada."""
-        grupo = self._configuracion.proceso.grupo
-        self._configuracion.productores_entrada(grupo, entrada)
-        self._validar_instancia_destinataria(grupo, instancia)
-        return _construir_destino_coordinacion(grupo, entrada, instancia)
 
     def colas_recepcion(self) -> Optional[ColasRecepcion]:
         """Devuelve las colas locales; una fuente sin rutas entrantes no tiene colas."""
@@ -154,29 +128,22 @@ class TopologiaGrupos:
 
     def _agregar_ruta(self, ruta):
         """Acumula los recursos de la ruta, reutilizando los comunes a su grupo."""
-        reparto = _construir_destino_datos(ruta)
         control = _construir_destino_control(ruta)
-        coordinacion = _construir_destino_coordinacion(ruta.destino, ruta.entrada)
-        self._exchanges.update((reparto.exchange, control.exchange, coordinacion.exchange))
+        self._exchanges.update((_construir_destino_datos(ruta, 0).exchange, control.exchange))
         grupo = self._configuracion.obtener_grupo(ruta.destino)
         for instancia in range(grupo.instancias):
             colas = _construir_colas_instancia(grupo.nombre, instancia)
             afinidad = _construir_destino_datos(ruta, instancia)
             control_individual = _construir_destino_control(ruta, instancia)
-            coordinacion_individual = _construir_destino_coordinacion(grupo.nombre, ruta.entrada, instancia)
-            self._colas.update((colas.reparto, colas.afinidad, colas.control))
-            self._colas_datos.update((colas.reparto, colas.afinidad))
-            self.cola_capacidad(colas.reparto)
+            self._colas.update((colas.afinidad, colas.control))
+            self._colas_datos.add(colas.afinidad)
             self.cola_capacidad(colas.afinidad)
             # Control admite difusión y direccionamiento individual sobre las
             # mismas colas; cada clave individual tiene un único destinatario.
             self._enlaces.update((
-                (colas.reparto, reparto.exchange, reparto.clave),
                 (colas.afinidad, afinidad.exchange, afinidad.clave),
                 (colas.control, control.exchange, control.clave),
                 (colas.control, control_individual.exchange, control_individual.clave),
-                (colas.control, coordinacion.exchange, coordinacion.clave),
-                (colas.control, coordinacion_individual.exchange, coordinacion_individual.clave),
             ))
 
 
@@ -189,24 +156,21 @@ def _construir_nombre_amqp(*partes):
 
 
 def _construir_colas_instancia(grupo, instancia):
-    """Construye los nombres de reparto, afinidad y control de una réplica."""
+    """Construye los nombres de afinidad y control de una réplica."""
     return ColasRecepcion(
-        reparto=_construir_nombre_amqp("cola", grupo, "reparto"),
         afinidad=_construir_nombre_amqp("cola", grupo, "afinidad", instancia),
         control=_construir_nombre_amqp("cola", grupo, "control", instancia),
     )
 
 
-def _construir_destino_datos(ruta, instancia=None):
-    """Construye la dirección de datos hacia reparto o una réplica específica."""
-    modo = ("reparto",) if instancia is None else ("afinidad", instancia)
+def _construir_destino_datos(ruta, instancia):
+    """Construye la dirección de datos hacia la cola de afinidad de una réplica."""
+    if instancia is None:
+        raise ErrorConfiguracion("Los datos requieren una instancia destinataria")
     return DestinoPublicacion(
         exchange=_construir_nombre_amqp("exchange", ruta.origen, "datos"),
-        clave=_construir_nombre_amqp(ruta.destino, ruta.entrada, *modo),
-        cola=(
-            _construir_nombre_amqp("cola", ruta.destino, "reparto") if instancia is None
-            else _construir_nombre_amqp("cola", ruta.destino, "afinidad", instancia)
-        ),
+        clave=_construir_nombre_amqp(ruta.destino, ruta.entrada, "afinidad", instancia),
+        cola=_construir_nombre_amqp("cola", ruta.destino, "afinidad", instancia),
     )
 
 
@@ -216,13 +180,4 @@ def _construir_destino_control(ruta, instancia=None):
     return DestinoPublicacion(
         exchange=_construir_nombre_amqp("exchange", ruta.origen, "control"),
         clave=_construir_nombre_amqp(ruta.destino, ruta.entrada, *sufijo),
-    )
-
-
-def _construir_destino_coordinacion(grupo, entrada, instancia=None):
-    """Construye la dirección de coordinación interna del grupo."""
-    sufijo = () if instancia is None else ("instancia", instancia)
-    return DestinoPublicacion(
-        exchange=_construir_nombre_amqp("exchange", grupo, "coordinacion"),
-        clave=_construir_nombre_amqp(grupo, entrada, *sufijo),
     )

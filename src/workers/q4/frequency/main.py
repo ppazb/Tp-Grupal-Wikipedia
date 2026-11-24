@@ -32,6 +32,7 @@ def ejecutar():
         worker = WorkerFrecuencia(
             middleware, entrada=argumentos.entrada, grupo_salida=argumentos.grupo_salida,
             entrada_salida=argumentos.entrada_salida,
+            ventana_lotes=configuracion.limites.ventana_lotes,
         )
         worker.destinos_errores = destinos_errores(configuracion)
         apagado.registrar_limpieza(worker.cerrar)

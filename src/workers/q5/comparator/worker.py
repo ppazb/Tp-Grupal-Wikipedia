@@ -2,7 +2,7 @@ import logging
 from typing import Dict, Iterable, Tuple
 
 from src.workers.base_worker import WorkerBase
-from src.workers.deduplicacion import DedupDesdeAfinidad, DedupDesdeCompartida
+from src.workers.deduplicacion import DedupPorOrigen
 from src.workers.registro_wal import codificar, decodificar, entrega_de
 from src.workers.wal_ejecuciones import WalsPorEjecucion
 from src.common.protocol.dto import Datos, Entrada
@@ -32,9 +32,9 @@ class ComparatorQ5Worker(WorkerBase):
         # Resumen histórico por ejecución: id_ejecucion -> (suma, articulos)
         self._resumenes: Dict[str, Tuple[int, int]] = {}
         self.registrar_limpieza(self._resumenes.clear)
-        # Los candidatos vienen de word_occurrences (cola compartida) y el resumen de q5_average (afinidad)
-        self._dedup_candidatos = DedupDesdeCompartida()
-        self._dedup_resumen = DedupDesdeAfinidad()
+        k = self.configuracion.limites.ventana_lotes
+        self._dedup_candidatos = DedupPorOrigen(k)
+        self._dedup_resumen = DedupPorOrigen(k)
         self._wals = WalsPorEjecucion(directorio_wal)
         self.registrar_limpieza(self._wals.cerrar)
         self._recuperar()

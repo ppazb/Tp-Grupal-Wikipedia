@@ -1,5 +1,5 @@
 from src.workers.base_worker import WorkerBase
-from src.workers.deduplicacion import DedupDesdeCompartida
+from src.workers.deduplicacion import DedupPorOrigen
 from src.workers.registro_wal import codificar, decodificar, entrega_de
 from src.workers.wal_ejecuciones import WalsPorEjecucion
 from src.common.protocol.dto import Datos, Entrada
@@ -36,8 +36,7 @@ class IntersectionQ3(WorkerBase):
         super().__init__(ruta_configuracion)
         self._estados = {}  # id_ejecucion -> {palabra: combinación de _EN, _FR y _ENVIADA}
         self.registrar_limpieza(self._estados.clear)
-        # Recibe de word_occurrences, que usa cola compartida
-        self._dedup = DedupDesdeCompartida()
+        self._dedup = DedupPorOrigen(self.configuracion.limites.ventana_lotes)
         self._wals = WalsPorEjecucion(directorio_wal)
         self.registrar_limpieza(self._wals.cerrar)
         self._recuperar()

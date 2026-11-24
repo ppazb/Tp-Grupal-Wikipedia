@@ -25,16 +25,17 @@ class AcumuladorFrecuencias:
         frecuencias[aporte.palabra] = frecuencias.get(aporte.palabra, 0) + 1
 
     def iterar_conteos(self, id_ejecucion: str) -> Iterator[ConteoPalabra]:
-        """Recorre los conteos sin copiarlos, ordenarlos ni consumirlos.
+        """Recorre los conteos ordenados por palabra, sin consumirlos.
 
+        El orden no depende del de llegada, así un reproceso genera las mismas salidas.
         Una ejecución sin aportes produce un recorrido vacío. El llamador no debe
         acumular ni liberar esa ejecución mientras recorre sus conteos.
         """
         self._validar_ejecucion(id_ejecucion)
         frecuencias = self._frecuencias.get(id_ejecucion, {})
         return (
-            ConteoPalabra(palabra, cantidad)
-            for palabra, cantidad in frecuencias.items()
+            ConteoPalabra(palabra, frecuencias[palabra])
+            for palabra in sorted(frecuencias)
         )
 
     def contiene_palabra(self, id_ejecucion: str, aporte: Palabra) -> bool:
