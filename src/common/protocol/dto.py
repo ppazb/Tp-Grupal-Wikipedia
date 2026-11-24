@@ -86,30 +86,13 @@ class TipoMensaje(IntEnum):
 
     DATOS = 0x01
     EOF = 0x02
-    PREPARAR_CIERRE = 0x03
-    AVANCE_REPLICA = 0x04
-    FIN_ENTRADA = 0x05
 
 
 @dataclass(frozen=True)
 class CierreProductor:
-    """Cantidad final de lotes publicados por un productor hacia una entrada."""
+    """Cantidad final de lotes que un productor publicó hacia una réplica de la entrada."""
 
     total_lotes: int
-
-
-@dataclass(frozen=True)
-class PrepararCierre:
-    """Total anunciado por todos los productores de la entrada del grupo."""
-
-    total_lotes: int
-
-
-@dataclass(frozen=True)
-class AvanceReplica:
-    """Cantidad acumulada de lotes resueltos por una réplica."""
-
-    lotes_resueltos: int
 
 
 @dataclass(frozen=True)
@@ -117,8 +100,8 @@ class SobreMensaje:
     """Identifica la ejecución, entrada, tipo, origen y contenido de un mensaje.
 
     DATOS transporta un Lote. EOF transporta un CierreProductor e indica
-    que el productor terminó sus aportes para esa entrada. La coordinación usa
-    PrepararCierre, AvanceReplica y contenido nulo para FIN_ENTRADA.
+    que el productor terminó sus aportes hacia la réplica destinataria, con el total de
+    lotes que le envió.
     id_entrada e indice identifican el mensaje y se conservan al codificar o
     recuperar el mismo sobre. Su reconstrucción exige indicar los originales.
     """
@@ -126,7 +109,7 @@ class SobreMensaje:
     entrada: Entrada
     tipo: TipoMensaje
     origen: IdentidadProceso
-    contenido: Union[Lote, CierreProductor, PrepararCierre, AvanceReplica, None]
+    contenido: Union[Lote, CierreProductor]
     id_entrada: str
     indice: int = 0
 

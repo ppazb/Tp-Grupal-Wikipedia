@@ -1,7 +1,9 @@
 import unittest
 
 from src.common.protocol.dto import Entrada, EntregaActual, IdentidadProceso
-from src.workers.deduplicacion import LOTES_RECORDADOS, DedupDesdeAfinidad, DedupDesdeCompartida
+from src.workers.deduplicacion import DedupPorOrigen
+
+K = 4
 
 ORIGEN_A = IdentidadProceso('productores', 0)
 ORIGEN_B = IdentidadProceso('productores', 1)
@@ -12,7 +14,7 @@ def entrega(id_entrada, indice, origen=ORIGEN_A, ejecucion='ej1'):
 
 
 class PruebasComunes:
-    """Lo que deben cumplir ambas deduplicaciones."""
+    """Comportamiento común de la deduplicación por (ejecución, origen)."""
 
     def test_mensaje_nuevo_no_es_duplicado_y_repetido_si(self):
         self.assertFalse(self.dedup.es_duplicado(entrega('L1', 0)))
@@ -49,14 +51,9 @@ class PruebasComunes:
         self.assertFalse(self.dedup.es_duplicado(entrega('L1', 0, ejecucion='ej2')))
 
 
-class TestDedupDesdeCompartida(PruebasComunes, unittest.TestCase):
+class TestDedupPorOrigen(PruebasComunes, unittest.TestCase):
     def setUp(self):
-        self.dedup = DedupDesdeCompartida()
-
-    def test_otro_origen_si_es_duplicado(self):
-        # con cola compartida otra réplica puede reprocesar el mismo lote
-        self.dedup.registrar(entrega('L1', 0, origen=ORIGEN_A))
-        self.assertTrue(self.dedup.es_duplicado(entrega('L1', 0, origen=ORIGEN_B)))
+        self.dedup = DedupPorOrigen(K)
 
     def test_cerrar_ejecucion_olvida_sus_ids(self):
         self.dedup.registrar(entrega('L1', 0, ejecucion='ej1'))
@@ -65,26 +62,21 @@ class TestDedupDesdeCompartida(PruebasComunes, unittest.TestCase):
         self.assertFalse(self.dedup.es_duplicado(entrega('L1', 0, ejecucion='ej1')))
         self.assertTrue(self.dedup.es_duplicado(entrega('L1', 0, ejecucion='ej2')))
 
-
-class TestDedupDesdeAfinidad(PruebasComunes, unittest.TestCase):
-    def setUp(self):
-        self.dedup = DedupDesdeAfinidad()
-
     def test_otro_origen_no_es_duplicado(self):
         self.dedup.registrar(entrega('L1', 0, origen=ORIGEN_A))
         self.assertFalse(self.dedup.es_duplicado(entrega('L1', 0, origen=ORIGEN_B)))
 
-    def test_recuerda_solo_los_ultimos_lotes_por_origen(self):
-        for numero in range(LOTES_RECORDADOS + 1):
+    def test_recuerda_solo_los_ultimos_k_lotes_por_origen(self):
+        for numero in range(K + 1):
             self.dedup.registrar(entrega(f'L{numero}', 0))
         self.assertFalse(self.dedup.es_duplicado(entrega('L0', 0)))  # el más viejo se olvidó
         self.assertTrue(self.dedup.es_duplicado(entrega('L1', 0)))
-        self.assertTrue(self.dedup.es_duplicado(entrega(f'L{LOTES_RECORDADOS}', 0)))
+        self.assertTrue(self.dedup.es_duplicado(entrega(f'L{K}', 0)))
 
     def test_la_ventana_es_por_ejecucion_y_origen(self):
         self.dedup.registrar(entrega('L0', 0, ejecucion='ej1'))
         # otra ejecucion del mismo origen llena su propia ventana: no desplaza a L0 de ej1
-        for numero in range(LOTES_RECORDADOS + 1):
+        for numero in range(K + 1):
             self.dedup.registrar(entrega(f'X{numero}', 0, ejecucion='ej2'))
         self.assertTrue(self.dedup.es_duplicado(entrega('L0', 0, ejecucion='ej1')))
         self.assertFalse(self.dedup.es_duplicado(entrega('X0', 0, ejecucion='ej2')))  # este si se olvido
@@ -99,7 +91,7 @@ class TestDedupDesdeAfinidad(PruebasComunes, unittest.TestCase):
         self.assertTrue(self.dedup.es_duplicado(entrega('L1', 0, ejecucion='ej2')))
 
     def test_actualizar_un_lote_no_ocupa_otro_lugar(self):
-        for numero in range(LOTES_RECORDADOS):
+        for numero in range(K):
             self.dedup.registrar(entrega(f'L{numero}', 0))
         self.dedup.registrar(entrega('L0', 1))  # mismo lote, otro índice
         self.assertTrue(self.dedup.es_duplicado(entrega('L1', 0)))

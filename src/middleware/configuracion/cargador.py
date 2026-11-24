@@ -33,6 +33,8 @@ CAMPOS_POR_SECCION = {
         "mensajes_sin_confirmar", "max_mensajes_por_cola", "max_bytes_por_mensaje",
     ),
 }
+# Campos que pueden omitirse: toman un valor derivado de los demás.
+CAMPOS_OPCIONALES = {"limites": ("ventana_lotes",)}
 CAMPOS_RUTA = ("nombre", "origen", "destino", "entrada", "esquemas")
 
 
@@ -98,14 +100,14 @@ def _leer_json(ruta):
         raise ErrorConfiguracion("Sintaxis JSON inválida") from None
 
 
-def _comprobar_campos(objeto, esperados, contexto):
+def _comprobar_campos(objeto, esperados, contexto, opcionales=()):
     """Exige los campos indicados y rechaza los desconocidos."""
     if type(objeto) is not dict:
         raise ErrorConfiguracion(f"{contexto} debe ser un objeto JSON")
     faltantes = set(esperados) - objeto.keys()
     if faltantes:
         raise ErrorConfiguracion(f"Faltan campos en {contexto}: {', '.join(sorted(faltantes))}")
-    if objeto.keys() - set(esperados):
+    if objeto.keys() - set(esperados) - set(opcionales):
         raise ErrorConfiguracion(f"Hay campos desconocidos en {contexto}")
 
 
@@ -125,7 +127,8 @@ def _aplicar_variables_de_entorno(lector, entorno):
     """Sobrescribe los campos permitidos con las variables WIKI_MW_."""
     destinos = {
         f"{PREFIJO_ENTORNO}{seccion.upper()}_{campo.upper()}": (seccion, campo)
-        for seccion, campos in CAMPOS_POR_SECCION.items() for campo in campos
+        for seccion, campos in CAMPOS_POR_SECCION.items()
+        for campo in (*campos, *CAMPOS_OPCIONALES.get(seccion, ()))
     }
     destinos.update({
         f"{PREFIJO_ENTORNO}GRUPO_{nombre.upper()}_INSTANCIAS": ("grupos", nombre)
@@ -149,7 +152,7 @@ def _aplicar_variables_de_entorno(lector, entorno):
 def _validar_campos_y_nombres_de_ruta(lector):
     """Valida los campos de cada sección y exige nombres de ruta únicos."""
     for seccion, campos in CAMPOS_POR_SECCION.items():
-        _comprobar_campos(lector[seccion], campos, seccion)
+        _comprobar_campos(lector[seccion], campos, seccion, CAMPOS_OPCIONALES.get(seccion, ()))
     nombres = set()
     for ruta in lector["rutas"]:
         _comprobar_campos(ruta, CAMPOS_RUTA, "ruta")
@@ -209,12 +212,20 @@ def _leer_broker(seccion):
 
 def _leer_limites(seccion):
     """Construye los límites validados de entregas, colas y mensajes."""
+    mensajes_sin_confirmar = _leer_entero_acotado(
+        seccion, "mensajes_sin_confirmar", maximo=MAXIMO_ENTERO_CORTO_AMQP
+    )
+    # Por defecto, la ventana de deduplicación es igual al prefetch.
+    ventana_lotes = _leer_entero_acotado(
+        {"ventana_lotes": seccion.get("ventana_lotes", mensajes_sin_confirmar)}, "ventana_lotes",
+    )
+    if ventana_lotes < mensajes_sin_confirmar:
+        raise ErrorConfiguracion("ventana_lotes no puede ser menor que mensajes_sin_confirmar")
     return LimitesComunicacion(
-        mensajes_sin_confirmar=_leer_entero_acotado(
-            seccion, "mensajes_sin_confirmar", maximo=MAXIMO_ENTERO_CORTO_AMQP
-        ),
+        mensajes_sin_confirmar=mensajes_sin_confirmar,
         max_mensajes_por_cola=_leer_entero_acotado(seccion, "max_mensajes_por_cola"),
         max_bytes_por_mensaje=_leer_entero_acotado(seccion, "max_bytes_por_mensaje"),
+        ventana_lotes=ventana_lotes,
     )
 
 

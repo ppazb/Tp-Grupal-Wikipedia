@@ -1,5 +1,5 @@
 from src.workers.base_worker import WorkerBase
-from src.workers.deduplicacion import DedupDesdeCompartida
+from src.workers.deduplicacion import DedupPorOrigen
 from src.workers.registro_wal import codificar, decodificar, entrega_de
 from src.workers.wal_ejecuciones import WalsPorEjecucion
 from src.common.protocol.dto import Datos, Entrada
@@ -31,8 +31,7 @@ class FilterBioQ2(WorkerBase):
 
     def __init__(self, ruta_configuracion: str, directorio_wal: str = None):
         super().__init__(ruta_configuracion)
-        # Recibe de date_router, que usa cola compartida
-        self._dedup = DedupDesdeCompartida()
+        self._dedup = DedupPorOrigen(self.configuracion.limites.ventana_lotes)
         self._wals = WalsPorEjecucion(directorio_wal)
         self.registrar_limpieza(self._wals.cerrar)
         for id_ejecucion, registros in self._wals.recuperar():

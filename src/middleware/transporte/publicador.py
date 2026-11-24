@@ -8,7 +8,6 @@ from pathlib import Path
 import pika
 
 from ...common.protocol.dto import CierreProductor, Datos, EnvioDatos, SobreMensaje, TipoMensaje
-from ...common.protocol.primitivas import EscritorBinario
 from .conexion import ConexionBroker
 from .capacidad import CABECERA_CAPACIDAD, VERSION_CAPACIDAD, CapacidadDatos
 from ..mensajes.codificacion import CodificadorMensajes
@@ -27,10 +26,7 @@ class _EnvioPreparado:
     identidad: tuple
     destino: object
     cuerpo: bytes
-    huella: bytes
-
-
-MAX_BYTES_DIRECCION = 4096  # Presupuesto para codificar exchange, clave y cola en la huella.
+    instancia: int
 
 
 class PublicadorDatos:
@@ -78,45 +74,32 @@ class PublicadorDatos:
         self._publicando = True
         try:
             preparados = [self._preparar_envio_identificado(envio) for envio in envios]
-            identidades = {}
-            for preparado in preparados:
-                clave = (preparado.salida, preparado.identidad)
-                if clave in identidades and identidades[clave] != preparado.huella:
-                    raise ErrorMensaje("La misma identidad tiene dos contenidos o destinos en la publicación")
-                identidades[clave] = preparado.huella
-            for preparado in preparados:
-                grupo, entrada = preparado.salida
-                self._obtener_registro_ejecucion(entrada.id_ejecucion).iniciar_envio(
-                    (grupo, entrada.nombre), preparado.identidad, preparado.huella,
-                )
             self._publicar_envios_pendientes(preparados)
         finally:
             self._publicando = False
 
     def finalizar_entrada(self, grupo, entrada):
-        """Fija el total de lotes y confirma su EOF; admite cero resultados y omite cierres confirmados."""
+        """Envía a cada réplica del grupo su total de lotes; admite cero y omite cierres confirmados."""
         if self._publicando:
             raise ErrorMiddleware("No se puede cerrar una entrada durante una publicación")
         # Codificar primero valida la identidad incluso cuando no hubo datos.
         id_cierre = f"eof:{entrada.id_ejecucion}"
-        sobre = SobreMensaje(entrada, TipoMensaje.EOF, self._configuracion.proceso,
-                             CierreProductor(0), id_cierre, 0)
-        self._codificador.codificar(sobre)
-        instancia = self._topologia.instancia_coordinadora(grupo, entrada)
-        destino = self._topologia.destino_control(grupo, entrada.nombre, instancia)
-        registro = self._obtener_registro_ejecucion(entrada.id_ejecucion)
-        salida = (grupo, entrada.nombre)
-        estado = registro.iniciar_cierre(salida)
-        if estado.cierre_confirmado:
-            return
-        cuerpo = self._codificador.codificar(SobreMensaje(
-            entrada, TipoMensaje.EOF, self._configuracion.proceso, CierreProductor(estado.total),
-            id_cierre, 0,
+        self._codificador.codificar(SobreMensaje(
+            entrada, TipoMensaje.EOF, self._configuracion.proceso, CierreProductor(0), id_cierre, 0,
         ))
+        registro = self._obtener_registro_ejecucion(entrada.id_ejecucion)
+        if registro.cierre_confirmado(grupo, entrada.nombre):
+            return
         self._publicando = True
         try:
-            self._publicar_cuerpo_binario(destino, cuerpo, reservar_capacidad=False)
-            registro.confirmar_cierre(salida)
+            for instancia in range(self._configuracion.obtener_grupo(grupo).instancias):
+                destino = self._topologia.destino_control(grupo, entrada.nombre, instancia)
+                cuerpo = self._codificador.codificar(SobreMensaje(
+                    entrada, TipoMensaje.EOF, self._configuracion.proceso,
+                    CierreProductor(registro.total(grupo, entrada.nombre, instancia)), id_cierre, 0,
+                ))
+                self._publicar_cuerpo_binario(destino, cuerpo, reservar_capacidad=False)
+            registro.confirmar_cierre(grupo, entrada.nombre)
         finally:
             self._publicando = False
 
@@ -129,28 +112,12 @@ class PublicadorDatos:
             registro.validar_liberacion()
 
     def liberar_ejecucion(self, id_ejecucion):
-        """Conserva los cierres finales y retira el detalle de lotes antes de cerrar el archivo."""
+        """Conserva totales y cierres, retira las ventanas de ids y cierra el archivo."""
         self.validar_liberacion(id_ejecucion)
         registro = self._obtener_registro_ejecucion(id_ejecucion)
         registro.retirar_ejecucion()
         registro.cerrar_registro()
         del self._registros[id_ejecucion]
-
-    def publicar_control(self, sobre, instancia=None):
-        """Publica un control identificado sin reservar capacidad ni cambiar su ID."""
-        if not isinstance(sobre, SobreMensaje) or sobre.tipo not in (
-            TipoMensaje.PREPARAR_CIERRE, TipoMensaje.AVANCE_REPLICA, TipoMensaje.FIN_ENTRADA,
-        ):
-            raise ErrorMensaje("El tipo no corresponde a coordinación entre réplicas")
-        if self._publicando:
-            raise ErrorMiddleware("La publicación no admite llamadas reentrantes")
-        cuerpo = self._codificador.codificar(sobre)
-        destino = self._topologia.destino_coordinacion(sobre.entrada.nombre, instancia)
-        self._publicando = True
-        try:
-            self._publicar_cuerpo_binario(destino, cuerpo, reservar_capacidad=False)
-        finally:
-            self._publicando = False
 
     def cerrar_registros(self):
         """Cierra todos los WAL abiertos sin borrar publicaciones ni emitir EOF."""
@@ -173,17 +140,17 @@ class PublicadorDatos:
         return self._registros[id_ejecucion]
 
     def _publicar_envios_pendientes(self, preparados):
-        """Publica intentos pendientes y registra sus confirmaciones de manera individual."""
+        """Publica los lotes no confirmados y registra cada confirmación de manera individual."""
         confirmadas = []
         for preparado in preparados:
             grupo, entrada = preparado.salida
             registro = self._obtener_registro_ejecucion(entrada.id_ejecucion)
-            salida = (grupo, entrada.nombre)
+            destino = (grupo, entrada.nombre, preparado.instancia)
+            id_entrada, indice = preparado.identidad
             try:
-                anterior = registro.validar_envio(salida, preparado.identidad, preparado.huella)
-                if not anterior.confirmada:
+                if not registro.ya_confirmado(destino, id_entrada, indice):
                     self._publicar_cuerpo_binario(preparado.destino, preparado.cuerpo)
-                    registro.confirmar_envio(salida, preparado.identidad)
+                    registro.confirmar_envio(destino, id_entrada, indice)
             except OperacionInterrumpida:
                 raise
             except ErrorMiddleware as error:
@@ -193,7 +160,7 @@ class PublicadorDatos:
             confirmadas.append(preparado.salida)
 
     def _preparar_envio_identificado(self, envio):
-        """Valida y codifica el envío, resuelve su destino y calcula su huella."""
+        """Valida y codifica el envío y resuelve su destino."""
         if not isinstance(envio, EnvioDatos) or not isinstance(envio.datos, Datos):
             raise ErrorMensaje("Cada salida debe ser un EnvioDatos con Datos")
         if type(envio.grupo) is not str or not envio.grupo.strip():
@@ -216,18 +183,14 @@ class PublicadorDatos:
         destino = self._topologia.destino_datos(
             envio.grupo, sobre.entrada.nombre, instancia,
         )
-        direccion = EscritorBinario(MAX_BYTES_DIRECCION)
-        for campo in (destino.exchange, destino.clave, destino.cola):
-            direccion.texto(campo)
-        huella = hashlib.sha256(direccion.resultado() + cuerpo).digest()
         identidad = (envio.id_entrada, envio.indice)
-        self._obtener_registro_ejecucion(sobre.entrada.id_ejecucion).validar_envio(
-            (envio.grupo, sobre.entrada.nombre), identidad, huella,
-        )
-        return _EnvioPreparado((envio.grupo, sobre.entrada), identidad, destino, cuerpo, huella)
+        return _EnvioPreparado((envio.grupo, sobre.entrada), identidad, destino, cuerpo, instancia)
 
     def _seleccionar_instancia_destinataria(self, envio):
-        """Resuelve la instancia explícita o por afinidad; devuelve None para reparto."""
+        """Resuelve la instancia explícita o por afinidad; sin clave, afinidad por id_entrada.
+
+        Así toda copia de un lote (republicación tras una caída) llega a la misma réplica.
+        """
         clave = envio.clave_afinidad
         if envio.instancia is not None:
             # La instancia se elige directamente: no se hashea ni se combina con una clave.
@@ -238,7 +201,7 @@ class PublicadorDatos:
                 raise ErrorMensaje("La instancia destinataria no pertenece al grupo")
             return envio.instancia
         if clave is None:
-            return None
+            clave = envio.id_entrada
         if type(clave) is not str or not clave:
             raise ErrorMensaje("La clave de afinidad debe ser texto no vacío")
         identificador = self._codificador.codificar_afinidad(

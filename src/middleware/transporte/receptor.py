@@ -25,7 +25,7 @@ class ReceptorDatos:
 
     El negocio se ejecuta fuera de los callbacks de Pika para poder esperar
     capacidad de salida. informar_error retorna cuando el aviso fue aceptado.
-    Los controles de coordinación se atienden internamente entre entregas.
+    Los controles EOF se atienden internamente entre entregas.
     Los consumidores del canal pertenecen exclusivamente a esta instancia.
     El callback debe retornar con sus efectos recuperables y salidas completadas;
     una excepción conserva la entrega para reintentar. EOF se persiste antes del ACK.
@@ -33,14 +33,14 @@ class ReceptorDatos:
 
     def __init__(
         self, configuracion: ConfiguracionComunicacion, conexion: ConexionBroker,
-        *, informar_error: Callable[[Datos], None], capacidad=None, topologia=None, coordinacion=None,
+        *, informar_error: Callable[[Datos], None], capacidad=None, topologia=None, cierre=None,
     ):
         if not callable(informar_error):
             raise ErrorConfiguracion("Se requiere un manejador de notificaciones de error")
         self._configuracion = configuracion
         self._conexion = conexion
         self._informar_error = informar_error
-        self._coordinacion = coordinacion
+        self._coordinacion = cierre
         self._codificador = CodificadorMensajes(
             configuracion.limites.max_bytes_por_mensaje,
             comprobar_detencion=conexion.comprobar_apagado,
@@ -101,7 +101,7 @@ class ReceptorDatos:
                     if self._cola_pendiente == self._colas.control:
                         entregado = self._procesar_control(canal, self._entrega, procesar, al_finalizar)
                     else:
-                        self._procesar_datos(canal, self._entrega, procesar)
+                        self._procesar_datos(canal, self._entrega, procesar, al_finalizar)
                         entregado = True
                 self._limpiar_recepcion_interrumpida(canal)
                 if entregado:
@@ -140,9 +140,7 @@ class ReceptorDatos:
             prefetch_count=self._configuracion.limites.mensajes_sin_confirmar,
             global_qos=True,
         )
-        colas = (self._colas.reparto, self._colas.afinidad)
-        if self._coordinacion is not None:
-            colas = (self._colas.control,) + colas
+        colas = (self._colas.control, self._colas.afinidad)
         for cola in colas:
             consumidor = canal.basic_consume(
                 queue=cola, on_message_callback=partial(self._retener_entrega, cola), auto_ack=False,
@@ -161,8 +159,10 @@ class ReceptorDatos:
         # Conserva esta entrega sin ACK y devuelve las prefetched sin procesar.
         self._cancelar_consumidores(canal)
 
-    def _procesar_datos(self, canal, cuerpo, procesar):
-        """Valida el lote, ejecuta el negocio y registra su resolución antes del ACK."""
+    def _procesar_datos(self, canal, cuerpo, procesar, al_finalizar=None):
+        """Valida el lote, ejecuta el negocio y registra su resolución antes del ACK.
+
+        Si el lote completa la entrada, ejecuta también su finalización antes del ACK."""
         contabilizable = False
         try:
             if not self._reservada:
@@ -181,7 +181,7 @@ class ReceptorDatos:
                     self._confirmar_o_rechazar_entrega(canal, rechazar=False)
                     return
                 if self._coordinacion.lote_resuelto(sobre):
-                    self._coordinacion.resolver_lote(sobre)
+                    # Copia de un lote ya registrado: con afinidad vuelve a esta réplica y se descarta.
                     self._confirmar_o_rechazar_entrega(canal, rechazar=False)
                     return
             contabilizable = True
@@ -212,6 +212,10 @@ class ReceptorDatos:
             self.entrega_actual = None
         if self._coordinacion is not None:
             self._coordinacion.resolver_lote(sobre)
+            # Si el EOF llegó antes que el último dato, este lote completa la entrada.
+            pendiente = self._coordinacion.finalizacion_pendiente(sobre.entrada)
+            if pendiente is not None:
+                self._finalizar_negocio(pendiente, procesar, al_finalizar)
         self._confirmar_o_rechazar_entrega(canal, rechazar=False)
 
     def _procesar_control(self, canal, cuerpo, procesar, al_finalizar):

@@ -34,11 +34,14 @@ class LimitesComunicacion:
     mensajes_sin_confirmar limita entregas por canal receptor, no por grupo.
     max_mensajes_por_cola limita las colas de datos y sus permisos; las colas de
     control no tienen ese límite para permitir avanzar a las barreras de cierre.
+    ventana_lotes (K) es la cantidad de lotes recordados por productor para deduplicar;
+    nunca puede ser menor que mensajes_sin_confirmar.
     """
 
     mensajes_sin_confirmar: int
     max_mensajes_por_cola: int
     max_bytes_por_mensaje: int
+    ventana_lotes: int
 
 
 @dataclass(frozen=True)

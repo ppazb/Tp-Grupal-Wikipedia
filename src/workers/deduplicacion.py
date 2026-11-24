@@ -1,94 +1,38 @@
-"""Detección de mensajes duplicados por (id_entrada, indice).
+"""Detección de lotes duplicados por (id_entrada, indice) dentro de cada origen.
 
-Un mensaje es duplicado si su id_entrada ya fue registrado y su indice es menor
-o igual al máximo registrado para ese id_entrada. 
+Todas las rutas entran por afinidad: un lote reentregado o republicado por su
+productor vuelve siempre a la misma réplica, así que alcanza con recordar los
+últimos K lotes de cada (ejecución, origen). K es limites.ventana_lotes, el mismo
+valor que usa el middleware, y la memoria es fija por productor.
 
-El mecanismo depende de comorecibe el grupo PRODUCTOR 
--cola compartida: DedupDesdeCompartida
--afinidad: DedupDesdeAfinidad
-
-Ambas se usan igual: 
-es_duplicado(entrega) consulta sin modificar 
-registrar(entrega) anota el mensaje.
+es_duplicado(entrega) consulta sin modificar; registrar(entrega) anota el lote.
 """
 
-import hashlib
-from collections import deque
-
-# Cantidad de lotes recordados por productor: igual al prefetch (mensajes sin confirmar)
-LOTES_RECORDADOS = 4
+from src.middleware.eof.ventana import VentanaLotes
 
 
-def _clave(id_entrada):
-    """Resume el id_entrada en 16 bytes fijos para acotar la memoria."""
-    return hashlib.blake2b(id_entrada.encode("utf-8"), digest_size=16).digest()
+class DedupPorOrigen:
+    """Una VentanaLotes de K ids por cada (id_ejecucion, origen)."""
 
-
-class DedupDesdeCompartida:
-    """
-    {id_ejecucion: {id_entrada: max_indice}}, sin distinguir el origen.
-
-    Con cola compartida el reproceso puede hacerlo otra replica (otro origen),
-    por eso el origen no forma parte de la clave.
-    """
-
-    def __init__(self):
-        self._vistos = {}
+    def __init__(self, k):
+        self._k = k
+        self._ventanas = {}
 
     def es_duplicado(self, entrega):
-        vistos = self._vistos.get(entrega.entrada.id_ejecucion)
-        if vistos is None:
-            return False
-        maximo = vistos.get(_clave(entrega.id_entrada))
-        return maximo is not None and entrega.indice <= maximo
+        ventana = self._ventanas.get(self._clave(entrega))
+        return ventana is not None and ventana.contiene(entrega.id_entrada, entrega.indice)
 
     def registrar(self, entrega):
-        vistos = self._vistos.setdefault(entrega.entrada.id_ejecucion, {})
-        clave = _clave(entrega.id_entrada)
-        vistos[clave] = max(vistos.get(clave, entrega.indice), entrega.indice)
-
-    def cerrar_ejecucion(self, id_ejecucion):
-        """Olvida los IDs de una ejecución terminada."""
-        self._vistos.pop(id_ejecucion, None)
-
-
-class DedupDesdeAfinidad:
-    """Por cada (ejecución, origen), los últimos LOTES_RECORDADOS (id_entrada, max_indice).
-
-    Con afinidad el reproceso lo hace siempre la misma réplica, y un productor
-    que se reinicia solo puede reprocesar los lotes que tenía sin confirmar.
-    La memoria es fija por ejecución: al llenarse, se olvida el lote más viejo, y al cerrar
-    la ejecución se libera su ventana.
-    """
-
-    def __init__(self):
-        self._recientes = {}
-
-    def es_duplicado(self, entrega):
-        maximo = self._maximo(entrega)
-        return maximo is not None and entrega.indice <= maximo
-
-    def registrar(self, entrega):
-        recientes = self._recientes.setdefault(self._ventana(entrega), deque(maxlen=LOTES_RECORDADOS))
-        clave = _clave(entrega.id_entrada)
-        for posicion, (clave_guardada, maximo) in enumerate(recientes):
-            if clave_guardada == clave:
-                recientes[posicion] = (clave, max(maximo, entrega.indice))
-                return
-        recientes.append((clave, entrega.indice))
+        ventana = self._ventanas.get(self._clave(entrega))
+        if ventana is None:
+            ventana = self._ventanas[self._clave(entrega)] = VentanaLotes(self._k)
+        ventana.registrar(entrega.id_entrada, entrega.indice)
 
     def cerrar_ejecucion(self, id_ejecucion):
         """Libera las ventanas de una ejecución terminada."""
-        for ventana in [v for v in self._recientes if v[0] == id_ejecucion]:
-            del self._recientes[ventana]
-
-    def _maximo(self, entrega):
-        clave = _clave(entrega.id_entrada)
-        for clave_guardada, maximo in self._recientes.get(self._ventana(entrega), ()):
-            if clave_guardada == clave:
-                return maximo
-        return None
+        for clave in [c for c in self._ventanas if c[0] == id_ejecucion]:
+            del self._ventanas[clave]
 
     @staticmethod
-    def _ventana(entrega):
+    def _clave(entrega):
         return (entrega.entrada.id_ejecucion, entrega.origen)

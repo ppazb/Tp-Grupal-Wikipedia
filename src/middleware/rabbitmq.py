@@ -4,12 +4,12 @@ import logging
 import os
 from pathlib import Path
 
-from ..common.protocol.dto import EnvioDatos, SobreMensaje
+from ..common.protocol.dto import EnvioDatos
 from ..common.protocol.registros import Esquema, Lote
 from .transporte.conexion import ConexionBroker
 from .transporte.capacidad import CapacidadDatos
 from .configuracion.modelos import ErrorConfiguracion
-from .eof.coordinacion import CoordinacionCierre
+from .eof.coordinacion import CierreLocal
 from .mensajes.codificacion import CodificadorMensajes
 from .interfaz import (
     Middleware, ErrorCierre, ErrorConexion, ErrorMiddleware, ErrorRecepcion,
@@ -69,18 +69,14 @@ class MiddlewareRabbitMQ(Middleware[Lote]):
                 capacidad=self._capacidad, topologia=topologia,
             )
             if topologia.colas_recepcion() is not None:
-                self._coordinacion = CoordinacionCierre(
-                    configuracion, topologia, self._publicar_control_nuevo,
-                    directorio=directorio,
-                )
+                self._coordinacion = CierreLocal(configuracion, directorio=directorio)
                 for ejecucion in self._coordinacion.ejecuciones_retiradas():
                     self._publicador.liberar_ejecucion(ejecucion)
                 for ejecucion in self._coordinacion.ejecuciones_pendientes_de_retiro():
                     self.liberar_ejecucion(ejecucion)
-                self._coordinacion.reanudar_controles()
                 self._receptor = ReceptorDatos(
                     configuracion, self._conexion, informar_error=notificador,
-                    capacidad=self._capacidad, topologia=topologia, coordinacion=self._coordinacion,
+                    capacidad=self._capacidad, topologia=topologia, cierre=self._coordinacion,
                 )
         except BaseException:
             self._cerrar_sin_ocultar_error_original()
@@ -108,11 +104,6 @@ class MiddlewareRabbitMQ(Middleware[Lote]):
     def esperar(self, segundos):
         """Mantiene la conexión y la detección de SIGTERM durante una pausa del worker."""
         self._conexion.esperar(segundos)
-
-    def _publicar_control_nuevo(self, tipo, entrada, contenido, instancia=None):
-        """Crea el control solicitado por la coordinación y publica su sobre."""
-        sobre = SobreMensaje.nuevo(entrada, tipo, self._identidad, contenido)
-        self._publicador.publicar_control(sobre, instancia)
 
     @property
     def identidad(self):
