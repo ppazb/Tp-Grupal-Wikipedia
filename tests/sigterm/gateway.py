@@ -24,9 +24,11 @@ def ejecutar_gateway(configuracion, eventos, modo):
         archivo.write_text(json.dumps(config))
         entorno = dict(MIDDLEWARE_CONFIG=str(archivo), GATEWAY_GROUP='gateway', GATEWAY_INSTANCE='0',
                        GATEWAY_ERROR_ACK_SECONDS='10', GATEWAY_RESULTS_GROUP='gateway_resultados',
-                       GATEWAY_RESULTS_INSTANCE='0', SERVER_HOST='127.0.0.1', SERVER_PORT='0')
+                       GATEWAY_RESULTS_INSTANCE='0', SERVER_HOST='127.0.0.1', SERVER_PORT='0',
+                       WAL_DIR=str(Path(temporal) / 'wal'), GATEWAY_REANUDACION_SEGUNDOS='60')
         recursos.enter_context(patch.dict(os.environ, entorno))
         gateway = importlib.import_module('src.gateway.src.gateway')
+        ejecuciones = importlib.import_module('src.gateway.src.ejecuciones')
         main = importlib.import_module('src.gateway.main')
         anteriores = {n: signal.getsignal(n) for n in (signal.SIGTERM, signal.SIGINT)}
         conexiones = []
@@ -34,7 +36,7 @@ def ejecutar_gateway(configuracion, eventos, modo):
         lock = threading.Lock()
         iniciar = MiddlewareRabbitMQ.__init__
         escuchar = socket.socket.listen
-        registrar = gateway.RegistroSesiones.registrar
+        adjuntar = ejecuciones.Ejecucion.adjuntar
         aceptar = gateway.ServidorGateway._aceptar
         adquirir = CapacidadDatos.adquirir
         enviar = gateway.SesionCliente.enviar
@@ -61,9 +63,9 @@ def ejecutar_gateway(configuracion, eventos, modo):
             if any(instancia._socket is servidor for instancia in servidores):
                 eventos.put(('puerto', servidor.getsockname()[1]))
 
-        def registrar_observado(registro, ejecucion, sesion):
-            registrar(registro, ejecucion, sesion)
-            eventos.put(('cliente', ejecucion))
+        def adjuntar_observado(ejecucion, sesion):
+            adjuntar(ejecucion, sesion)
+            eventos.put(('cliente', ejecucion.id))
             if modo == 'envio':
                 sesion._socket.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4096)
 
@@ -84,7 +86,7 @@ def ejecutar_gateway(configuracion, eventos, modo):
         for nombre in ('publicar_en_ramas', 'finalizar_entrada', 'recibir', 'cerrar'):
             recursos.enter_context(patch.object(MiddlewareRabbitMQ, nombre, propietario(nombre)))
         recursos.enter_context(patch.object(socket.socket, 'listen', escuchar_observado))
-        recursos.enter_context(patch.object(gateway.RegistroSesiones, 'registrar', registrar_observado))
+        recursos.enter_context(patch.object(ejecuciones.Ejecucion, 'adjuntar', adjuntar_observado))
         recursos.enter_context(patch.object(gateway.ServidorGateway, '_aceptar', aceptar_observado))
         recursos.enter_context(patch.object(gateway.SesionCliente, 'enviar', enviar_observado))
         if modo == 'capacidad':
@@ -99,7 +101,8 @@ def ejecutar_gateway(configuracion, eventos, modo):
             assert aviso._lectura.fileno() == aviso._escritura.fileno() == -1
         for servidor in servidores:
             assert not servidor._clientes
-            assert not servidor._sesiones._sesiones
+            # el estado de las ejecuciones queda en disco: un apagado no abandona nada
+            assert not any(t.is_alive() for t in servidor._temporizadores)
             assert not any(h.is_alive() for h in servidor._hilos)
             assert not servidor._vigilante.is_alive()
     eventos.put('limpio')

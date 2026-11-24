@@ -3,7 +3,7 @@
 import unittest
 
 from src.client.src.message_handler import LoteDemasiadoGrande, ManejadorMensajes, fila_plana
-from src.common.external_protocol import decodificar_filas
+from src.common.external_protocol import decodificar_datos
 
 
 def una_fila(**cambios):
@@ -36,14 +36,15 @@ class TestMessageHandler(unittest.TestCase):
         self.assertEqual(plana["date_modified"], "") # None viaja como texto vacío
 
     def test_lote_serializado_se_puede_decodificar(self):
-        cuerpo = ManejadorMensajes(65536).serializar_lote([una_fila(name="A"), una_fila(name="B")])
-        filas = decodificar_filas(cuerpo)
+        cuerpo = ManejadorMensajes(65536).serializar_lote(7, [una_fila(name="A"), una_fila(name="B")])
+        numero, filas = decodificar_datos(cuerpo)
+        self.assertEqual(numero, 7)
         self.assertEqual([f["name"] for f in filas], ["A", "B"])
         self.assertEqual(filas[0]["sections"], ("Abstract", "History"))
 
     def test_lote_que_no_entra_levanta_lote_demasiado_grande(self):
         with self.assertRaises(LoteDemasiadoGrande):
-            ManejadorMensajes(50).serializar_lote([una_fila()])
+            ManejadorMensajes(50).serializar_lote(1, [una_fila()])
 
     def test_eof_son_8_bytes_con_la_cantidad_de_lotes(self):
         manejador = ManejadorMensajes(65536)

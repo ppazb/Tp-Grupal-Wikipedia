@@ -5,7 +5,7 @@ from pathlib import Path
 import signal
 import socket
 
-from src.common.external_protocol import TipoFrame, codificar_filas, enviar_frame, recibir_frame
+from src.common.external_protocol import TipoFrame, codificar_datos, decodificar_sesion, enviar_frame, recibir_frame
 from src.common.protocol.dto import EnvioDatos, Datos, Entrada
 from src.common.protocol.registros import Esquema, Lote, ResultadoQ1
 from src.middleware.topologia import TopologiaGrupos
@@ -29,18 +29,25 @@ class Gateway(EscenarioRabbitMQ):
         self.assertIn('receptor', avisos)
         self.puerto = next(aviso[1] for aviso in avisos if isinstance(aviso, tuple))
 
-    def cliente(self):
+    def cliente(self, iniciar=True):
+        """Conecta; con iniciar=True pide una ejecución (INICIO) y devuelve su id."""
         cliente = socket.socket()
         self.addCleanup(cliente.close)
         cliente.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
         cliente.settimeout(PLAZO)
         cliente.connect(('127.0.0.1', self.puerto))
+        if not iniciar:
+            return cliente, None
+        enviar_frame(cliente, TipoFrame.INICIO, b'', MAX_BYTES)
         aviso = self.esperar(self.eventos)
         self.assertEqual(aviso[0], 'cliente')
+        tipo, cuerpo = recibir_frame(cliente, MAX_BYTES)
+        self.assertIs(tipo, TipoFrame.SESION)
+        self.assertEqual(decodificar_sesion(cuerpo), aviso[1])
         return cliente, aviso[1]
 
-    def enviar(self, cliente):
-        enviar_frame(cliente, TipoFrame.DATOS, codificar_filas([FILA], MAX_BYTES), MAX_BYTES)
+    def enviar(self, cliente, numero=1):
+        enviar_frame(cliente, TipoFrame.DATOS, codificar_datos(numero, [FILA], MAX_BYTES), MAX_BYTES)
 
     def apagar(self, cierres=None):
         os.kill(self.proceso.pid, signal.SIGTERM)
@@ -66,8 +73,8 @@ class Gateway(EscenarioRabbitMQ):
 
     def test_sigterm_clientes_concurrentes_y_frame_incompleto(self):
         self.iniciar()
-        inactivo, _ = self.cliente()
-        parcial, _ = self.cliente()
+        inactivo, _ = self.cliente(iniciar=False)
+        parcial, _ = self.cliente(iniciar=False)
         parcial.sendall(b'\0\0')
         activo, _ = self.cliente()
         self.enviar(activo)
@@ -115,7 +122,7 @@ class Gateway(EscenarioRabbitMQ):
 
     def test_sigterm_esperando_ack_de_error(self):
         self.iniciar()
-        cliente, _ = self.cliente()
+        cliente, _ = self.cliente(iniciar=False)
         enviar_frame(cliente, TipoFrame.ACK, b'', MAX_BYTES)
         self.assertEqual(recibir_frame(cliente, MAX_BYTES)[0], TipoFrame.ERROR)
         self.apagar()
