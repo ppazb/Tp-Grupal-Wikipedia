@@ -12,7 +12,9 @@ import unittest
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from src.common.external_protocol import TipoFrame, recibir_frame, enviar_frame, codificar_resultado
+from src.common.external_protocol import (
+    TipoFrame, codificar_resultado, codificar_sesion, empaquetar_resultado, enviar_frame, recibir_frame,
+)
 from src.common.protocol.registros import Esquema, FragmentoImagen, Lote
 
 
@@ -71,6 +73,8 @@ class Cliente(unittest.TestCase):
         self.conexion, _ = self.servidor.accept()
         self.addCleanup(self.conexion.close)
         self.conexion.settimeout(PLAZO)
+        self.assertEqual(recibir_frame(self.conexion, MAX_BYTES), (TipoFrame.INICIO, b''))
+        enviar_frame(self.conexion, TipoFrame.SESION, codificar_sesion('ejecucion-de-prueba', MAX_BYTES), MAX_BYTES)
         self.assertEqual(recibir_frame(self.conexion, MAX_BYTES)[0], TipoFrame.DATOS)
 
     def limpiar_proceso(self):
@@ -97,6 +101,10 @@ class Cliente(unittest.TestCase):
             restante = b''
         self.assertEqual(restante, b'', 'Se emitieron datos o EOF después de detenerse')
 
+    @staticmethod
+    def resultado(lote, secuencia=1):
+        return empaquetar_resultado(secuencia, codificar_resultado('resultados_finales_q2', lote, MAX_BYTES - 8))
+
     def confirmar_entrada(self):
         enviar_frame(self.conexion, TipoFrame.ACK, (1).to_bytes(8, 'big'), MAX_BYTES)
         self.assertEqual(recibir_frame(self.conexion, MAX_BYTES)[0], TipoFrame.EOF)
@@ -115,8 +123,7 @@ class Cliente(unittest.TestCase):
         # El ACK que sigue al resultado prueba que el cliente ya guardó el fragmento.
         lote = Lote(Esquema.FRAGMENTO_IMAGEN, (
             FragmentoImagen('pendiente', 'Imagen', 'url', 10, 0, b'abc'),))
-        enviar_frame(self.conexion, TipoFrame.RESULTADO,
-                     codificar_resultado('resultados_finales_q2', lote, MAX_BYTES), MAX_BYTES)
+        enviar_frame(self.conexion, TipoFrame.RESULTADO, self.resultado(lote), MAX_BYTES)
         self.confirmar_entrada()
         self.finalizar(143)
         self.assertEqual(list((self.raiz / 'salida/client_prueba/imagenes').iterdir()), [])
@@ -124,8 +131,7 @@ class Cliente(unittest.TestCase):
     def test_fin_normal_conserva_resultados_completos(self):
         lote = Lote(Esquema.FRAGMENTO_IMAGEN, (
             FragmentoImagen('completa', 'Imagen', 'url', 3, 0, b'abc'),))
-        enviar_frame(self.conexion, TipoFrame.RESULTADO,
-                     codificar_resultado('resultados_finales_q2', lote, MAX_BYTES), MAX_BYTES)
+        enviar_frame(self.conexion, TipoFrame.RESULTADO, self.resultado(lote), MAX_BYTES)
         self.confirmar_entrada()
         enviar_frame(self.conexion, TipoFrame.FIN, b'', MAX_BYTES)
         self.finalizar(0, senal=False)

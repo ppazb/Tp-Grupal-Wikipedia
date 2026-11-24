@@ -61,13 +61,15 @@ class WAL:
         self._archivo = open(self._ruta, 'ab') #append
 
     def agregar(self, datos):
-        """Persiste un registro; al finalizar ya está en disco."""
-        
+        """Persiste un registro; al finalizar ya está en disco. Devuelve su posición en el archivo."""
+        posicion = self._archivo.tell()
+
         escribir_completo(self._archivo, _empaquetar(bytes(datos)))
         
         #me aseguro que llegue a disco
         self._archivo.flush()
         os.fsync(self._archivo.fileno())
+        return posicion
 
     def leer(self):
         """Devuelve la lista de registros guardados, en orden de escritura."""
@@ -80,6 +82,22 @@ class WAL:
         with open(self._ruta, 'rb') as archivo:
             for datos, _ in _leer_registros(archivo):
                 yield datos
+
+    def iterar_con_posiciones(self):
+        """Como iterar(), pero entrega (registro, posicion) para poder releerlo con leer_en()"""
+        with open(self._ruta, 'rb') as archivo:
+            inicio = 0
+            for datos, fin in _leer_registros(archivo):
+                yield datos, inicio
+                inicio = fin
+
+    def leer_en(self, posicion):
+        """Lee un único registro ya persistido, sin recorrer los anteriores"""
+        with open(self._ruta, 'rb') as archivo:
+            archivo.seek(posicion)
+            for datos, _ in _leer_registros(archivo):
+                return datos
+        raise ValueError('No hay un registro válido en la posición indicada')
 
     def cerrar(self):
         self._archivo.close()

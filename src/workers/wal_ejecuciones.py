@@ -47,11 +47,25 @@ class WalsPorEjecucion:
         for id_ejecucion in self._en_curso:
             yield id_ejecucion, self._wal_de(id_ejecucion).iterar()
 
+    def en_curso(self):
+        """Ids de las ejecuciones que tenían WAL en disco al abrir (sin abrir sus archivos)."""
+        return tuple(self._en_curso)
+
     def esta_cerrada(self, id_ejecucion):
         return id_ejecucion in self._cerradas
 
     def agregar(self, id_ejecucion, datos):
-        self._wal_de(id_ejecucion).agregar(datos)
+        """Persiste un registro y devuelve su posición en el WAL de la ejecución."""
+        return self._wal_de(id_ejecucion).agregar(datos)
+
+    def iterar_con_posiciones(self, id_ejecucion):
+        """Como iterar(), pero entrega (registro, posicion) para releer después con leer_en()."""
+        if id_ejecucion not in self._wals and not os.path.exists(self._ruta(id_ejecucion)):
+            return iter(())
+        return self._wal_de(id_ejecucion).iterar_con_posiciones()
+
+    def leer_en(self, id_ejecucion, posicion):
+        return self._wal_de(id_ejecucion).leer_en(posicion)
 
     def iterar(self, id_ejecucion):
         """Registros guardados de una ejecución, en orden."""

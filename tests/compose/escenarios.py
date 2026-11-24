@@ -71,6 +71,12 @@ class EscenariosCompose(unittest.TestCase):
         self.assertEqual(servicios['rabbitmq']['environment']['RABBITMQ_DEFAULT_VHOST'], '/prueba')
         for nombre in ('q2_filter_bio', 'q3_intersection', 'q5_average', 'q5_comparator'):
             self.assertIn('/app/data/wal', [v['target'] for v in servicios[nombre]['volumes']])
+        # el gateway guarda el estado de sus ejecuciones en su propio volumen y el cliente sabe cuánto reconectar
+        wal_gateway = next(v for v in servicios['gateway']['volumes'] if v['target'] == '/app/data/wal')
+        self.assertEqual(wal_gateway['source'], 'wal_gateway')
+        self.assertEqual(servicios['gateway']['environment']['WAL_DIR'], '/app/data/wal')
+        self.assertEqual(servicios['gateway']['environment']['GATEWAY_REANUDACION_SEGUNDOS'], '60')
+        self.assertEqual(servicios['client']['environment']['RECONEXION_MAX_SEGUNDOS'], '60')
 
     def test_clientes_variables_comparten_entrada_y_tienen_identidades_independientes(self):
         for cantidad in (3, 5, 1):
