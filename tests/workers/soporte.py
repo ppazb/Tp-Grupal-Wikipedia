@@ -13,7 +13,7 @@ from src.common.protocol.dto import Datos, Entrada, EntregaActual, IdentidadProc
 from src.common.protocol.registros import Lote
 from src.workers.base_worker import id_de_salidas
 
-CONFIG_BASE = Path(__file__).parents[1] / 'sigterm' / 'config.json'
+CONFIG_BASE = Path(__file__).with_name('config.json')
 ORIGEN = IdentidadProceso('productor', 0)
 
 

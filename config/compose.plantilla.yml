@@ -70,7 +70,7 @@ services:
     build:
       context: .
       dockerfile: src/workers/date_router/Dockerfile
-    entrypoint: ["python3", "-m", "src.middleware.inicializar", "config/config.json"]
+    entrypoint: ["python3", "-m", "src.middleware.transporte.inicializar", "config/config.json"]
     networks:
       - wiki_net
     volumes:
@@ -109,7 +109,7 @@ services:
       - LOG_LEVEL=INFO
     healthcheck:
       test: ["CMD", "python3", "-c", "import socket; socket.create_connection(('localhost', 5555), 2).close()"]
-      # Durante el arranque se sondea cada 2s para que los clientes empiecen en cuanto el gateway 
+      # Durante el arranque se sondea cada 2s para que los clientes empiecen en cuanto el gateway
       #acepta conexiones, después, cada 30 s.
       start_period: 30s
       start_interval: 2s
@@ -143,7 +143,7 @@ services:
       - CONNECT_TIMEOUT_SECONDS=10
       # timeout de envío TCP; SIGTERM despierta las esperas mediante un selector
       - SOCKET_TIMEOUT_SECONDS=1
-      # tiempo total que el cliente reintenta reconectar con el gateway 
+      # tiempo total que el cliente reintenta reconectar con el gateway
       - RECONEXION_MAX_SEGUNDOS=35
       - LOG_LEVEL=INFO
     depends_on:

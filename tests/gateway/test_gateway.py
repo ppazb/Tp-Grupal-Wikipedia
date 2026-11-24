@@ -34,7 +34,7 @@ with patch.dict(os.environ, _entorno_del_gateway_en_el_compose()):
     from src.gateway.src.ejecuciones import RegistroEjecuciones
     from src.gateway.src.gateway import ServidorGateway
     from src.gateway.src.resultados import ReceptorResultados
-from src.middleware.cargador_configuracion import cargar_configuracion
+from src.middleware.configuracion.cargador import cargar_configuracion
 
 MAX_BYTES = 65536
 ENTRADA_RESULTADOS = "resultados_finales_q1"

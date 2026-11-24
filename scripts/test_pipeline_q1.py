@@ -22,7 +22,7 @@ if repo_root not in sys.path:
 
 os.environ.setdefault("WIKI_MW_BROKER_HOST", "localhost")
 
-from src.middleware.cargador_configuracion import cargar_configuracion
+from src.middleware.configuracion.cargador import cargar_configuracion
 from src.middleware.rabbitmq import MiddlewareRabbitMQ
 from src.common.protocol.dto import EnvioDatos, Datos, Entrada, IdentidadProceso
 from src.common.protocol.registros import Articulo, Idioma, Esquema, Lote

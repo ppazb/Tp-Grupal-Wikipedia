@@ -1,6 +1,6 @@
 """Argumentos y validación de rutas para workers con una entrada y una salida."""
 
-from src.middleware.configuracion import ErrorConfiguracion
+from src.middleware.configuracion.modelos import ErrorConfiguracion
 
 
 CONFIGURACION_PREDETERMINADA = 'config/config.json'

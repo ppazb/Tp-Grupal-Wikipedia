@@ -49,7 +49,7 @@ class SesionGateway:
     Ejecución del cliente en el gateway, con una conexión que se restablece sola.
 
     Guarda en memoria (no en disco, porque un cliente que muere se relanza como nuevo) el id de la
-    ejecución, la última secuencia de resultado escrita, el lote DATOS sin confirmar 
+    ejecución, la última secuencia de resultado escrita, el lote DATOS sin confirmar
     y si el EOF quedó sin confirmar.
     
     Ante un corte de la conexión reconecta con backoff, manda REANUDAR y, según lo que el

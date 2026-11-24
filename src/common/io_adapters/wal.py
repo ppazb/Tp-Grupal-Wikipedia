@@ -58,6 +58,10 @@ class WAL:
         # corto si hay registro corrupto
         self._recuperar()
 
+        # El archivo oficial conserva el estado válido si se interrumpió una compactación.
+        if os.path.exists(self._ruta + '.compactando'):
+            os.unlink(self._ruta + '.compactando')
+
         self._archivo = open(self._ruta, 'ab') #append
 
     def agregar(self, datos):
@@ -101,6 +105,32 @@ class WAL:
 
     def cerrar(self):
         self._archivo.close()
+
+    def reemplazar(self, registros):
+        """Reemplaza el log por registros completos mediante un archivo temporal sincronizado.
+
+        El llamador excluye otras escrituras y deja de usar la instancia si falla.
+        Los registros se recorren incrementalmente; el reemplazo ocurre al terminar.
+        """
+        ruta_temporal = None
+        try:
+            ruta_temporal = self._ruta + '.compactando'
+            with open(ruta_temporal, 'wb') as temporal:
+                for datos in registros:
+                    escribir_completo(temporal, _empaquetar(bytes(datos)))
+                temporal.flush()
+                os.fsync(temporal.fileno())
+            os.replace(ruta_temporal, self._ruta)
+            self._archivo.close()
+            self._archivo = open(self._ruta, 'ab')
+            descriptor = os.open(self._directorio, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+        finally:
+            if ruta_temporal is not None and os.path.exists(ruta_temporal):
+                os.unlink(ruta_temporal)
 
     def _recuperar(self):
         """Corta el archivo despues del ultimo registro valido"""
