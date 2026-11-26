@@ -5,8 +5,7 @@ from dataclasses import dataclass, field
 from itertools import groupby
 from functools import cmp_to_key
 from pathlib import Path
-from struct import calcsize
-from sys import getsizeof
+from sys import getsizeof, maxsize
 from tempfile import TemporaryDirectory
 
 from src.common.protocol.primitivas import BYTES_U64, validar_entero
@@ -17,7 +16,8 @@ from .archivos import (
 
 
 # Reserva conservadora para referencias de la lista y espacio auxiliar de sort.
-BYTES_REFERENCIAS_POR_APORTE = 3 * calcsize('P')
+BYTES_PUNTERO = (maxsize.bit_length() + 1) // 8
+BYTES_REFERENCIAS_POR_APORTE = 3 * BYTES_PUNTERO
 BYTES_LISTA_VACIA = getsizeof([])
 
 

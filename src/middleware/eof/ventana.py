@@ -6,12 +6,11 @@ los últimos K ids alcanza para deduplicar, con memoria fija.
 """
 
 import hashlib
-import struct
 from collections import deque
 
 BYTES_CLAVE = 16
-_FORMATO_CANTIDAD = ">I"
-_FORMATO_INDICE = ">Q"
+BYTES_CANTIDAD = 4
+BYTES_INDICE = 8
 
 
 def clave_de(id_entrada):
@@ -55,10 +54,10 @@ class VentanaLotes:
 
     def serializar(self):
         """Foto para el WAL: cantidad y, por entrada, clave de 16 bytes + índice u64."""
-        partes = [struct.pack(_FORMATO_CANTIDAD, len(self._recientes))]
+        partes = [len(self._recientes).to_bytes(BYTES_CANTIDAD, "big")]
         for clave, maximo in self._recientes:
             partes.append(clave)
-            partes.append(struct.pack(_FORMATO_INDICE, maximo))
+            partes.append(maximo.to_bytes(BYTES_INDICE, "big"))
         return b"".join(partes)
 
     @classmethod
@@ -69,16 +68,15 @@ class VentanaLotes:
         return ventana
 
     def _cargar(self, datos):
-        tamano_cantidad = struct.calcsize(_FORMATO_CANTIDAD)
-        tamano_entrada = BYTES_CLAVE + struct.calcsize(_FORMATO_INDICE)
-        if len(datos) < tamano_cantidad:
+        tamano_entrada = BYTES_CLAVE + BYTES_INDICE
+        if len(datos) < BYTES_CANTIDAD:
             raise ValueError("Ventana serializada truncada")
-        (cantidad,) = struct.unpack_from(_FORMATO_CANTIDAD, datos, 0)
-        if len(datos) != tamano_cantidad + cantidad * tamano_entrada:
+        cantidad = int.from_bytes(datos[:BYTES_CANTIDAD], "big")
+        if len(datos) != BYTES_CANTIDAD + cantidad * tamano_entrada:
             raise ValueError("Ventana serializada con largo inconsistente")
-        posicion = tamano_cantidad
+        posicion = BYTES_CANTIDAD
         for _ in range(cantidad):
             clave = bytes(datos[posicion:posicion + BYTES_CLAVE])
-            (maximo,) = struct.unpack_from(_FORMATO_INDICE, datos, posicion + BYTES_CLAVE)
+            maximo = int.from_bytes(datos[posicion + BYTES_CLAVE:posicion + tamano_entrada], "big")
             self._recientes.append((clave, maximo))
             posicion += tamano_entrada
