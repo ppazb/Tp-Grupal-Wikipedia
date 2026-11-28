@@ -130,3 +130,54 @@ El comando devuelve 0 si todos coinciden, 1 si hay diferencias y 2 si no pudo
 completar la verificación. La ausencia de un CSV representa una consulta vacía,
 como en el cliente; ejecutar únicamente después de recibir todos los cierres.
 Para otras rutas u opciones: `bash scripts/comparar_serial.sh --help`.
+
+## Simulación de fallas (Chaos Monkey)
+
+Para probar la tolerancia a fallos se incluye `scripts/chaos_monkey.py`, que envía `SIGKILL`
+a contenedores del despliegue (workers, `gateway`, `health_checker-*` y clientes). Lee los
+servicios directamente desde `docker-compose.yaml`, nunca toca `rabbitmq` ni `inicializador`,
+mantiene siempre al menos un `health_checker` vivo para que el sistema pueda recuperarse y
+aplica un cooldown de 20 s por nodo para no matar siempre el mismo contenedor seguido.
+
+Hay dos formas de usarlo desde el `Makefile`:
+
+- **`make up-chaos`**: genera el compose, limpia volúmenes previos, levanta todo el sistema y
+  corre Chaos Monkey en paralelo hasta que terminan los clientes. Al finalizar detiene el script
+  y valida que los clientes sobrevivientes hayan terminado con código 0 (si derribó algún cliente,
+  descarta su carpeta parcial de `output/`).
+- **`make chaos`**: se ejecuta en una segunda terminal sobre un despliegue **ya levantado**
+  (por ejemplo con `make up`). Se puede frenar en cualquier momento con `Ctrl+C` sin afectar al
+  sistema y volver a lanzar con otros parámetros.
+
+Algunos ejemplos útiles de ejecución:
+
+```bash
+# Modo automático punta a punta (por defecto: 2 clientes, 1 caída cada 12 s)
+make up-chaos
+make up-chaos CLIENTES_CHAOS=3 INTERVALO=15 CANTIDAD=2
+
+# Con el sistema ya levantado, matar 1 nodo random cada 25 s (Ctrl+C para frenar)
+make chaos INTERVALO=25
+
+# Subir la carga de fallas: 2 nodos random cada 10 s
+make chaos INTERVALO=10 CANTIDAD=2
+
+# Fallas puntuales de una sola ronda (--rondas 1)
+make chaos CHAOS_ARGS="--objetivos gateway --rondas 1"          # caída del gateway y reconexión del cliente
+make chaos CHAOS_ARGS="--objetivos health_checker-3 --rondas 1" # caída del líder Bully y reelección
+make chaos CHAOS_ARGS="--objetivos q4_top_n --rondas 1"         # recuperación de worker con WAL
+make chaos CHAOS_ARGS="--objetivos client-1 --rondas 1"         # abandono de consulta y limpieza de recursos
+
+# Matar varias réplicas a la vez usando comodines o categorías (@workers, @health_checkers, @clientes)
+make chaos CANTIDAD=2 CHAOS_ARGS="--objetivos date_router* --rondas 1"
+make chaos CANTIDAD=2 CHAOS_ARGS="--objetivos @health_checkers --rondas 1"
+
+# Reproducir siempre la misma secuencia con semilla fija, o probar sin matar nada
+make chaos INTERVALO=10 CHAOS_ARGS="--semilla 42"
+make chaos CANTIDAD=2 CHAOS_ARGS="--simulacion --rondas 3"
+```
+
+Si después de correr `make up-chaos` se quieren comparar los resultados de los clientes que
+completaron contra la versión serial, ejecutar `make down` y luego
+`bash scripts/comparar_serial.sh --entrada input`. Para ver todas las opciones disponibles:
+`python3 scripts/chaos_monkey.py --help`.

@@ -3,14 +3,13 @@
 from contextlib import ExitStack
 from itertools import groupby
 from heapq import merge
-from struct import Struct
 
 from src.common.io_adapters.archivos import leer_completo, escribir_completo
-from src.common.protocol.primitivas import BYTES_U64, validar_entero
+from src.common.protocol.primitivas import BYTES_U32, BYTES_U64, validar_entero
 from src.common.protocol.registros import ConteoPalabra
 
 
-CABECERA = Struct('!IQ')
+BYTES_CABECERA = BYTES_U32 + BYTES_U64
 BUFFER_ARCHIVO = 64 * 1024
 
 
@@ -28,7 +27,7 @@ def escribir_conteos(ruta, registros, comprobar_detencion=None):
             if comprobar_detencion is not None:
                 comprobar_detencion()
             palabra = registro.palabra.encode('utf-8')
-            escribir_completo(archivo, CABECERA.pack(len(palabra), registro.cantidad))
+            escribir_completo(archivo, len(palabra).to_bytes(BYTES_U32, 'big') + registro.cantidad.to_bytes(BYTES_U64, 'big'))
             escribir_completo(archivo, palabra)
 
 
@@ -38,10 +37,11 @@ def leer_conteos(archivo, max_bytes_palabra, comprobar_detencion=None):
     while True:
         if comprobar_detencion is not None:
             comprobar_detencion()
-        cabecera = leer_completo(archivo, CABECERA.size, admitir_fin=True)
+        cabecera = leer_completo(archivo, BYTES_CABECERA, admitir_fin=True)
         if cabecera is None:
             return
-        longitud, cantidad = CABECERA.unpack(cabecera)
+        longitud = int.from_bytes(cabecera[:BYTES_U32], 'big')
+        cantidad = int.from_bytes(cabecera[BYTES_U32:], 'big')
         if not 0 < longitud <= max_bytes_palabra or cantidad == 0:
             raise ValueError('Longitud o cantidad inválida en un tramo de conteos')
         palabra = leer_completo(archivo, longitud).decode('utf-8')
